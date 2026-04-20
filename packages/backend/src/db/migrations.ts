@@ -60,6 +60,14 @@ const MIGRATIONS: { id: number; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_messages_plan_item ON messages(plan_item_id);
     `,
   },
+  {
+    id: 2,
+    sql: `
+      ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE messages ADD COLUMN pin_title TEXT;
+      CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

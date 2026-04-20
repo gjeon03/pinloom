@@ -21,6 +21,8 @@ interface MessageRow {
   role: string;
   content: string;
   tool_use: string | null;
+  pinned: number;
+  pin_title: string | null;
   created_at: string;
 }
 
@@ -36,7 +38,7 @@ function toSession(row: SessionRow): Session {
   };
 }
 
-function toMessage(row: MessageRow): Message {
+export function toMessage(row: MessageRow): Message {
   return {
     id: row.id,
     sessionId: row.session_id,
@@ -44,8 +46,18 @@ function toMessage(row: MessageRow): Message {
     role: row.role as MessageRole,
     content: row.content,
     toolUse: row.tool_use,
+    pinned: row.pinned === 1,
+    pinTitle: row.pin_title,
     createdAt: row.created_at,
   };
+}
+
+export function summarizeForPin(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return 'Pinned';
+  const firstLine = trimmed.split('\n').find((l) => l.trim().length > 0) ?? trimmed;
+  const stripped = firstLine.replace(/^#+\s*/, '').trim();
+  return stripped.length > 80 ? `${stripped.slice(0, 77)}…` : stripped;
 }
 
 export async function sessionRoutes(app: FastifyInstance) {
@@ -113,4 +125,21 @@ export async function sessionRoutes(app: FastifyInstance) {
       return { ok: true };
     },
   );
+
+  app.patch<{
+    Params: { sessionId: string };
+    Body: { title?: string | null };
+  }>('/api/sessions/:sessionId', async (req) => {
+    const { title } = req.body;
+    const now = new Date().toISOString();
+    db.prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?').run(
+      title ?? null,
+      now,
+      req.params.sessionId,
+    );
+    const row = db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(req.params.sessionId) as SessionRow;
+    return toSession(row);
+  });
 }

@@ -77,4 +77,20 @@ export const api = {
     }),
   deleteSession: (sessionId: string) =>
     request<{ ok: true }>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
+  renameSession: (sessionId: string, title: string | null) =>
+    request<Session>(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+
+  listPins: (sessionId: string) =>
+    request<Message[]>(`/api/sessions/${sessionId}/pins`),
+  updateMessage: (
+    messageId: string,
+    body: { pinned?: boolean; pinTitle?: string | null },
+  ) =>
+    request<Message>(`/api/messages/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
 };

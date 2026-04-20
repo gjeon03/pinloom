@@ -91,6 +91,8 @@ function persistMessage(args: PersistArgs): Message {
     role: args.role,
     content: args.content,
     toolUse: toolUseJson,
+    pinned: false,
+    pinTitle: null,
     createdAt: now,
   };
   broadcast(`session:${args.sessionId}`, { type: 'message', sessionId: args.sessionId, message });

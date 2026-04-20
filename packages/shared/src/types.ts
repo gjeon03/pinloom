@@ -50,6 +50,8 @@ export interface Message {
   role: MessageRole;
   content: string;
   toolUse: string | null;
+  pinned: boolean;
+  pinTitle: string | null;
   createdAt: string;
 }
 
@@ -63,6 +65,7 @@ export interface HealthResponse {
 
 export type WsEvent =
   | { type: 'message'; sessionId: string; message: Message }
+  | { type: 'message_updated'; sessionId: string; message: Message }
   | { type: 'plan_item_updated'; planId: string; item: PlanItem }
   | { type: 'run_log'; sessionId: string; stream: 'stdout' | 'stderr'; chunk: string }
   | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string };

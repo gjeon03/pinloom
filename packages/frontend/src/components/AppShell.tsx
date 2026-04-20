@@ -1,42 +1,134 @@
-import type { ReactNode } from 'react';
-import { NavLink } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import type { Project } from '@planloom/shared';
+import { api } from '../api/client.js';
+import { SettingsModal } from './SettingsModal.js';
 
-export function AppShell({ children }: { children: ReactNode }) {
+interface Props {
+  children: (project: Project | null) => React.ReactNode;
+}
+
+export function AppShell({ children }: Props) {
+  const navigate = useNavigate();
+  const { projectId } = useParams<{ projectId: string }>();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+  const [cwd, setCwd] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.listProjects().then(setProjects).catch((e) => setError(String(e)));
+  }, []);
+
+  const activeProject = projects.find((p) => p.id === projectId) ?? null;
+
+  async function addProject(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      const created = await api.createProject({ name, cwd });
+      setProjects((prev) => [created, ...prev]);
+      setName('');
+      setCwd('');
+      setAdding(false);
+      navigate(`/projects/${created.id}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <div className="flex h-full">
-      <aside className="w-56 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
-        <div className="px-4 py-3 text-sm font-semibold tracking-wide">
-          planloom
-        </div>
-        <nav className="flex flex-col gap-1 px-2 text-sm">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) =>
-              `rounded px-2 py-1.5 ${
-                isActive
-                  ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-                  : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
-              }`
-            }
+      <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
+        <div className="px-3 py-3 flex items-center justify-between">
+          <div className="text-sm font-semibold tracking-wide">planloom</div>
+          <button
+            onClick={() => setAdding((v) => !v)}
+            title="New project"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-lg leading-none px-1"
           >
-            Projects
-          </NavLink>
-          <NavLink
-            to="/settings"
-            className={({ isActive }) =>
-              `rounded px-2 py-1.5 ${
-                isActive
-                  ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-                  : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
-              }`
-            }
+            +
+          </button>
+        </div>
+
+        {adding && (
+          <form
+            onSubmit={addProject}
+            className="px-3 pb-3 flex flex-col gap-1.5 border-b border-[var(--color-border)]"
+          >
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Project name"
+              className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs"
+            />
+            <input
+              value={cwd}
+              onChange={(e) => setCwd(e.target.value)}
+              placeholder="/absolute/path"
+              className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs font-mono"
+            />
+            <div className="flex gap-1">
+              <button
+                type="submit"
+                disabled={!name.trim() || !cwd.trim()}
+                className="flex-1 rounded bg-[var(--color-accent)] text-black px-2 py-1 text-xs disabled:opacity-40"
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdding(false)}
+                className="rounded border border-[var(--color-border)] px-2 py-1 text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+            {error && <p className="text-red-400 text-[11px]">{error}</p>}
+          </form>
+        )}
+
+        <div className="flex-1 overflow-auto py-2 flex flex-col gap-1">
+          {projects.map((p) => {
+            const active = p.id === projectId;
+            return (
+              <button
+                key={p.id}
+                onClick={() => navigate(`/projects/${p.id}`)}
+                className={`mx-2 rounded px-2 py-1.5 text-left text-sm flex flex-col gap-0.5 ${
+                  active
+                    ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                    : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60'
+                }`}
+              >
+                <span className="truncate font-medium">{p.name}</span>
+                <span className="truncate text-[10px] opacity-70 font-mono">{p.cwd}</span>
+              </button>
+            );
+          })}
+          {projects.length === 0 && !adding && (
+            <p className="px-3 text-xs text-[var(--color-ink-muted)]">
+              Click + to add your first project.
+            </p>
+          )}
+        </div>
+
+        <div className="border-t border-[var(--color-border)] p-2">
+          <button
+            onClick={() => setShowSettings(true)}
+            className="w-full rounded px-2 py-1.5 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]"
           >
             Settings
-          </NavLink>
-        </nav>
+          </button>
+        </div>
       </aside>
-      <main className="flex-1 min-w-0">{children}</main>
+
+      <main className="flex-1 min-w-0 flex flex-col">{children(activeProject)}</main>
+
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
