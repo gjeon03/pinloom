@@ -67,4 +67,14 @@ export const api = {
     }),
   listMessages: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/messages`),
+  sendMessage: (
+    sessionId: string,
+    body: { content: string; planItemId?: string | null },
+  ) =>
+    request<Message>(`/api/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteSession: (sessionId: string) =>
+    request<{ ok: true }>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
 };

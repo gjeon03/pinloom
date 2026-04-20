@@ -1,5 +1,7 @@
-import { useState } from 'react';
-import type { Plan, PlanItem, Project } from '@planloom/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Message, Plan, PlanItem, Project, Session } from '@planloom/shared';
+import { api } from '../api/client.js';
+import { useWebSocket } from '../hooks/useWebSocket.js';
 
 interface Props {
   project: Project;
@@ -8,49 +10,159 @@ interface Props {
 }
 
 export function ChatPanel({ project, activePlan, items }: Props) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSession(null);
+    setMessages([]);
+    setError(null);
+
+    api
+      .listSessions(project.id)
+      .then(async (list) => {
+        if (cancelled) return;
+        const matching = activePlan
+          ? list.find((s) => s.planId === activePlan.id)
+          : list[0];
+        if (matching) {
+          setSession(matching);
+          const msgs = await api.listMessages(matching.id);
+          if (!cancelled) setMessages(msgs);
+        } else if (activePlan) {
+          const created = await api.createSession(project.id, {
+            planId: activePlan.id,
+            title: activePlan.title,
+          });
+          if (!cancelled) {
+            setSession(created);
+            setMessages([]);
+          }
+        }
+      })
+      .catch((e) => !cancelled && setError(String(e)));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, activePlan?.id]);
+
+  const channel = useMemo(
+    () => (session ? `session:${session.id}` : null),
+    [session],
+  );
+
+  useWebSocket(channel, (ev) => {
+    if (ev.type === 'message' && session && ev.sessionId === session.id) {
+      setMessages((prev) =>
+        prev.some((m) => m.id === ev.message.id) ? prev : [...prev, ev.message],
+      );
+    }
+    if (ev.type === 'run_status' && session && ev.sessionId === session.id) {
+      if (ev.status === 'started') setRunning(true);
+      if (ev.status === 'finished' || ev.status === 'error') setRunning(false);
+      if (ev.status === 'error' && ev.error) setError(ev.error);
+    }
+  });
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [messages.length, running]);
+
+  async function send(e: React.FormEvent) {
+    e.preventDefault();
+    if (!session || !input.trim()) return;
+    const content = input;
+    setInput('');
+    setError(null);
+    setRunning(true);
+    try {
+      await api.sendMessage(session.id, { content });
+    } catch (err) {
+      setRunning(false);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   return (
     <section className="flex flex-col min-h-0 bg-[var(--color-surface)]">
-      <header className="border-b border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-ink-muted)]">
-        Chat · {activePlan ? activePlan.title : 'no plan selected'}
+      <header className="border-b border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-ink-muted)] flex justify-between">
+        <span>Chat · {activePlan ? activePlan.title : 'no plan selected'}</span>
+        {session && <span className="font-mono opacity-60">{session.id.slice(0, 8)}</span>}
       </header>
 
-      <div className="flex-1 overflow-auto p-4 text-sm text-[var(--color-ink-muted)]">
-        <p>
-          Chat stream and AI runner will land here. Messages will be persisted to the local
-          SQLite DB and tagged to plan items via <code className="text-[var(--color-accent)]">@item-id</code>.
-        </p>
-        {items.length > 0 && (
-          <p className="mt-2 text-xs">
-            Current plan has {items.length} item{items.length === 1 ? '' : 's'}.
+      <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3 text-sm">
+        {messages.length === 0 && (
+          <p className="text-[var(--color-ink-muted)]">
+            {activePlan
+              ? 'Start the conversation. Messages are persisted locally.'
+              : 'Create a plan to begin.'}
           </p>
         )}
-        <p className="mt-2 text-xs">Project cwd: <code className="font-mono">{project.cwd}</code></p>
+        {messages.map((m) => (
+          <MessageBubble key={m.id} message={m} items={items} />
+        ))}
+        {running && (
+          <div className="text-xs text-[var(--color-ink-muted)] italic">…thinking</div>
+        )}
+        {error && <p className="text-red-400 text-xs">{error}</p>}
       </div>
 
-      <form
-        className="border-t border-[var(--color-border)] p-3 flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setInput('');
-        }}
-      >
+      <form onSubmit={send} className="border-t border-[var(--color-border)] p-3 flex gap-2">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={activePlan ? 'Message the plan…' : 'Create a plan first'}
-          disabled={!activePlan}
+          placeholder={
+            session
+              ? running
+                ? 'Running…'
+                : 'Message the plan (use @item-id to tag)…'
+              : 'Create a plan first'
+          }
+          disabled={!session || running}
           className="flex-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm disabled:opacity-50"
         />
         <button
           type="submit"
-          disabled={!activePlan || !input.trim()}
+          disabled={!session || !input.trim() || running}
           className="rounded bg-[var(--color-accent)] text-black px-4 py-2 text-sm disabled:opacity-40"
         >
           Send
         </button>
       </form>
     </section>
+  );
+}
+
+function MessageBubble({ message, items }: { message: Message; items: PlanItem[] }) {
+  const roleStyles: Record<string, string> = {
+    user: 'bg-[var(--color-surface-3)] border-[var(--color-border)]',
+    assistant: 'bg-[var(--color-surface-2)] border-[var(--color-accent)]',
+    system: 'bg-red-500/10 border-red-500/30 text-red-200',
+    tool: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-100 font-mono',
+  };
+
+  const taggedItem = message.planItemId
+    ? items.find((i) => i.id === message.planItemId)
+    : null;
+
+  return (
+    <div className={`rounded border px-3 py-2 ${roleStyles[message.role] ?? ''}`}>
+      <div className="flex justify-between text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+        <span>{message.role}</span>
+        <span>{new Date(message.createdAt).toLocaleTimeString()}</span>
+      </div>
+      {taggedItem && (
+        <div className="text-[10px] text-[var(--color-accent)] mb-1">
+          @ {taggedItem.title}
+        </div>
+      )}
+      <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+    </div>
   );
 }

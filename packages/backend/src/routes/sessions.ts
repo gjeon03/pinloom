@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import type { Message, MessageRole, Session } from '@planloom/shared';
 import { getDb } from '../db/connection.js';
+import { sendUserMessage } from '../services/runner.js';
 
 interface SessionRow {
   id: string;
@@ -86,6 +87,24 @@ export async function sessionRoutes(app: FastifyInstance) {
       return rows.map(toMessage);
     },
   );
+
+  app.post<{
+    Params: { sessionId: string };
+    Body: { content: string; planItemId?: string | null };
+  }>('/api/sessions/:sessionId/messages', async (req, reply) => {
+    const { content, planItemId = null } = req.body;
+    if (!content || content.trim().length === 0) {
+      reply.code(400);
+      return { error: 'content is required' };
+    }
+    try {
+      const msg = await sendUserMessage(req.params.sessionId, content, planItemId);
+      return msg;
+    } catch (err) {
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
 
   app.delete<{ Params: { sessionId: string } }>(
     '/api/sessions/:sessionId',
