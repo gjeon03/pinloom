@@ -1,0 +1,26 @@
+{
+  "name": "planloom",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Plan-first AI workspace. Every task starts with a living plan.",
+  "license": "MIT",
+  "scripts": {
+    "build": "pnpm -r --filter @planloom/shared build && pnpm -r --filter @planloom/backend build && pnpm -r --filter @planloom/frontend build",
+    "dev": "concurrently \"pnpm --filter @planloom/backend dev\" \"pnpm --filter @planloom/frontend dev\"",
+    "dev:backend": "pnpm --filter @planloom/backend dev",
+    "dev:frontend": "pnpm --filter @planloom/frontend dev",
+    "typecheck": "tsc -b",
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}
