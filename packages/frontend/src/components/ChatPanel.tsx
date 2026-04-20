@@ -4,14 +4,16 @@ import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { MentionPicker } from './MentionPicker.js';
 import { MessageContent } from './MessageContent.js';
+import { ToolMessage } from './ToolMessage.js';
 
 interface Props {
   project: Project;
   activePlan: Plan | null;
   items: PlanItem[];
+  onSessionChange?: (session: Session | null) => void;
 }
 
-export function ChatPanel({ project, activePlan, items }: Props) {
+export function ChatPanel({ project, activePlan, items, onSessionChange }: Props) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -36,6 +38,7 @@ export function ChatPanel({ project, activePlan, items }: Props) {
           : list[0];
         if (matching) {
           setSession(matching);
+          onSessionChange?.(matching);
           const msgs = await api.listMessages(matching.id);
           if (!cancelled) setMessages(msgs);
         } else if (activePlan) {
@@ -45,8 +48,11 @@ export function ChatPanel({ project, activePlan, items }: Props) {
           });
           if (!cancelled) {
             setSession(created);
+            onSessionChange?.(created);
             setMessages([]);
           }
+        } else {
+          onSessionChange?.(null);
         }
       })
       .catch((e) => !cancelled && setError(String(e)));
@@ -209,7 +215,11 @@ function MessageBubble({ message, items }: { message: Message; items: PlanItem[]
           tagged → {taggedItem.title}
         </div>
       )}
-      <MessageContent content={message.content} items={items} />
+      {message.role === 'tool' ? (
+        <ToolMessage message={message} />
+      ) : (
+        <MessageContent content={message.content} items={items} />
+      )}
     </div>
   );
 }

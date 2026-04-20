@@ -26,6 +26,42 @@ interface PlanItemLite {
   status: string;
 }
 
+function summarizeToolCall(block: { name?: string; input?: unknown }): string {
+  const name = block.name ?? 'tool';
+  const input = block.input as Record<string, unknown> | undefined;
+  if (!input) return name;
+  if (typeof input.command === 'string') return `${name}: ${input.command}`;
+  if (typeof input.file_path === 'string') {
+    const extra =
+      typeof input.old_string === 'string'
+        ? ' (edit)'
+        : typeof input.content === 'string'
+          ? ' (write)'
+          : '';
+    return `${name}: ${input.file_path}${extra}`;
+  }
+  if (typeof input.pattern === 'string') return `${name}: ${input.pattern}`;
+  return name;
+}
+
+function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (block && typeof block === 'object' && 'text' in block) {
+          const t = (block as { text?: unknown }).text;
+          if (typeof t === 'string') return t;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
 const SYSTEM_PROMPT = `You are the AI assistant embedded in planloom, a plan-first local coding workspace.
 
 Rules:
@@ -114,6 +150,53 @@ function updateClaudeSessionId(sessionId: string, claudeSessionId: string) {
   );
 }
 
+function clearClaudeSessionId(sessionId: string) {
+  const db = getDb();
+  db.prepare('UPDATE sessions SET claude_session_id = NULL, updated_at = ? WHERE id = ?').run(
+    new Date().toISOString(),
+    sessionId,
+  );
+}
+
+interface HistoryMessage {
+  role: string;
+  content: string;
+  created_at: string;
+}
+
+function loadRecentHistory(sessionId: string, excludeId: string, limit = 40): HistoryMessage[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT role, content, created_at
+       FROM messages
+       WHERE session_id = ? AND id != ? AND role IN ('user', 'assistant')
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    )
+    .all(sessionId, excludeId, limit) as HistoryMessage[];
+  return rows.reverse();
+}
+
+function buildFallbackPrompt(history: HistoryMessage[], currentUserMessage: string): string {
+  if (history.length === 0) return currentUserMessage;
+  const lines: string[] = [
+    '## Prior conversation (reconstructed from local history)',
+    '',
+  ];
+  for (const h of history) {
+    const label = h.role === 'assistant' ? 'You (AI)' : 'Human';
+    lines.push(`**${label}**: ${h.content}`);
+    lines.push('');
+  }
+  lines.push('## New message');
+  lines.push('');
+  lines.push(`**Human**: ${currentUserMessage}`);
+  lines.push('');
+  lines.push('Continue the conversation.');
+  return lines.join('\n');
+}
+
 interface AssistantStream {
   session_id?: string;
   message?: { content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> };
@@ -178,16 +261,13 @@ export async function sendUserMessage(
   return userMsg;
 }
 
-async function runAssistant(
+async function runAttempt(
   ctx: SessionContext,
   prompt: string,
   planItemId: string | null,
-  planItems: PlanItemLite[],
-): Promise<void> {
-  broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
-
-  const systemPrompt = SYSTEM_PROMPT + buildPlanContext(planItems);
-
+  systemPrompt: string,
+  useResume: boolean,
+): Promise<string> {
   const options: Record<string, unknown> = {
     cwd: ctx.cwd,
     systemPrompt,
@@ -195,7 +275,7 @@ async function runAssistant(
     permissionMode: 'bypassPermissions',
     allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
   };
-  if (ctx.claudeSessionId) {
+  if (useResume && ctx.claudeSessionId) {
     options.resume = ctx.claudeSessionId;
   }
 
@@ -206,37 +286,116 @@ async function runAssistant(
 
   let finalText = '';
 
-  try {
-    for await (const message of q) {
-      if (message.type === 'assistant') {
-        const msg = message as AssistantStream;
-        if (msg.session_id && msg.session_id !== ctx.claudeSessionId) {
-          updateClaudeSessionId(ctx.id, msg.session_id);
-          ctx.claudeSessionId = msg.session_id;
+  for await (const message of q) {
+    if (message.type === 'assistant') {
+      const msg = message as AssistantStream;
+      if (msg.session_id && msg.session_id !== ctx.claudeSessionId) {
+        updateClaudeSessionId(ctx.id, msg.session_id);
+        ctx.claudeSessionId = msg.session_id;
+      }
+      const content = msg.message?.content ?? [];
+      for (const block of content) {
+        if (block.type === 'text' && block.text) {
+          finalText += block.text;
+        } else if (block.type === 'tool_use') {
+          persistMessage({
+            sessionId: ctx.id,
+            planItemId,
+            role: 'tool',
+            content: summarizeToolCall(block),
+            toolUse: { name: block.name, input: block.input },
+          });
+          broadcast(`session:${ctx.id}`, {
+            type: 'run_log',
+            sessionId: ctx.id,
+            stream: 'stdout',
+            chunk: `$ ${summarizeToolCall(block)}\n`,
+          });
         }
-        const content = msg.message?.content ?? [];
-        for (const block of content) {
-          if (block.type === 'text' && block.text) {
-            finalText += block.text;
-          } else if (block.type === 'tool_use') {
-            persistMessage({
+      }
+    } else if (message.type === 'user') {
+      const msg = message as {
+        message?: {
+          content?: Array<{
+            type: string;
+            content?: unknown;
+            is_error?: boolean;
+          }>;
+        };
+      };
+      const content = msg.message?.content ?? [];
+      for (const block of content) {
+        if (block.type === 'tool_result') {
+          const text = toolResultText(block.content);
+          if (text) {
+            broadcast(`session:${ctx.id}`, {
+              type: 'run_log',
               sessionId: ctx.id,
-              planItemId,
-              role: 'tool',
-              content: `tool: ${block.name ?? 'unknown'}`,
-              toolUse: { name: block.name, input: block.input },
+              stream: block.is_error ? 'stderr' : 'stdout',
+              chunk: text.endsWith('\n') ? text : `${text}\n`,
             });
           }
         }
-      } else if (message.type === 'result') {
-        const result = message as { subtype?: string; result?: string; session_id?: string };
-        if (result.session_id && result.session_id !== ctx.claudeSessionId) {
-          updateClaudeSessionId(ctx.id, result.session_id);
-        }
-        if (result.subtype === 'success' && result.result && result.result.length > finalText.length) {
-          finalText = result.result;
-        }
       }
+    } else if (message.type === 'result') {
+      const result = message as { subtype?: string; result?: string; session_id?: string };
+      if (result.session_id && result.session_id !== ctx.claudeSessionId) {
+        updateClaudeSessionId(ctx.id, result.session_id);
+      }
+      if (result.subtype === 'success' && result.result && result.result.length > finalText.length) {
+        finalText = result.result;
+      }
+    }
+  }
+
+  return finalText;
+}
+
+async function runAssistant(
+  ctx: SessionContext,
+  prompt: string,
+  planItemId: string | null,
+  planItems: PlanItemLite[],
+): Promise<void> {
+  broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
+
+  const systemPrompt = SYSTEM_PROMPT + buildPlanContext(planItems);
+
+  try {
+    let finalText = '';
+
+    if (ctx.claudeSessionId) {
+      try {
+        finalText = await runAttempt(ctx, prompt, planItemId, systemPrompt, true);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        broadcast(`session:${ctx.id}`, {
+          type: 'run_log',
+          sessionId: ctx.id,
+          stream: 'stderr',
+          chunk: `[resume failed, rebuilding context from local history] ${errMsg}\n`,
+        });
+        clearClaudeSessionId(ctx.id);
+        ctx.claudeSessionId = null;
+      }
+    }
+
+    if (!ctx.claudeSessionId) {
+      const userMsgRow = getDb()
+        .prepare(
+          'SELECT id FROM messages WHERE session_id = ? AND role = ? ORDER BY created_at DESC LIMIT 1',
+        )
+        .get(ctx.id, 'user') as { id: string } | undefined;
+      const history = loadRecentHistory(ctx.id, userMsgRow?.id ?? '');
+      const fallbackPrompt =
+        history.length > 0 ? buildFallbackPrompt(history, prompt) : prompt;
+      finalText = await runAttempt(
+        ctx,
+        fallbackPrompt,
+        planItemId,
+        systemPrompt,
+        false,
+      );
     }
 
     if (finalText.trim().length > 0) {

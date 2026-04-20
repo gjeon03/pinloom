@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { Plan, PlanItem, Project } from '@planloom/shared';
+import type { Plan, PlanItem, Project, Session } from '@planloom/shared';
 import { api } from '../api/client.js';
 import { PlanPanel } from '../components/PlanPanel.js';
 import { ChatPanel } from '../components/ChatPanel.js';
@@ -12,6 +12,7 @@ export function ProjectPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [activePlan, setActivePlan] = useState<Plan | null>(null);
   const [items, setItems] = useState<PlanItem[]>([]);
+  const [session, setSession] = useState<Session | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
@@ -63,8 +64,13 @@ export function ProjectPage() {
           onCreatePlan={createPlan}
           onItemsChange={setItems}
         />
-        <ChatPanel project={project} activePlan={activePlan} items={items} />
-        <TerminalPanel project={project} />
+        <ChatPanel
+          project={project}
+          activePlan={activePlan}
+          items={items}
+          onSessionChange={setSession}
+        />
+        <TerminalPanel session={session} />
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Plan, PlanItem, PlanItemStatus } from '@planloom/shared';
 import { PLAN_ITEM_STATUSES } from '@planloom/shared';
 import { api } from '../api/client.js';
@@ -20,6 +20,30 @@ const statusBadge: Record<PlanItemStatus, string> = {
   blocked: 'bg-red-500/20 text-red-300',
 };
 
+interface TreeNode {
+  item: PlanItem;
+  children: TreeNode[];
+}
+
+function buildTree(items: PlanItem[]): TreeNode[] {
+  const byId = new Map<string, TreeNode>();
+  for (const item of items) byId.set(item.id, { item, children: [] });
+  const roots: TreeNode[] = [];
+  for (const node of byId.values()) {
+    if (node.item.parentId && byId.has(node.item.parentId)) {
+      byId.get(node.item.parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  const sort = (nodes: TreeNode[]) => {
+    nodes.sort((a, b) => a.item.orderIndex - b.item.orderIndex);
+    for (const n of nodes) sort(n.children);
+  };
+  sort(roots);
+  return roots;
+}
+
 export function PlanPanel({
   plans,
   activePlan,
@@ -30,18 +54,93 @@ export function PlanPanel({
 }: Props) {
   const [newTitle, setNewTitle] = useState('');
   const [newPlanTitle, setNewPlanTitle] = useState('');
+  const [subInputFor, setSubInputFor] = useState<string | null>(null);
+  const [subTitle, setSubTitle] = useState('');
 
-  async function addItem() {
+  const tree = useMemo(() => buildTree(items), [items]);
+
+  async function addRootItem() {
     if (!activePlan || !newTitle.trim()) return;
     const item = await api.createPlanItem(activePlan.id, { title: newTitle.trim() });
     onItemsChange([...items, item]);
     setNewTitle('');
   }
 
+  async function addSubItem(parentId: string) {
+    if (!activePlan || !subTitle.trim()) return;
+    const item = await api.createPlanItem(activePlan.id, {
+      title: subTitle.trim(),
+      parentId,
+    });
+    onItemsChange([...items, item]);
+    setSubTitle('');
+    setSubInputFor(null);
+  }
+
   async function cycleStatus(item: PlanItem) {
     const next = nextStatus(item.status);
     const updated = await api.updatePlanItem(item.id, { status: next });
     onItemsChange(items.map((i) => (i.id === updated.id ? updated : i)));
+  }
+
+  function renderNode(node: TreeNode, depth: number) {
+    const item = node.item;
+    return (
+      <div key={item.id} className="flex flex-col gap-1">
+        <div
+          className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
+          style={{ marginLeft: depth * 12 }}
+        >
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => cycleStatus(item)}
+              className={`text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 ${statusBadge[item.status]}`}
+            >
+              {item.status}
+            </button>
+            <span className="flex-1">{item.title}</span>
+            <button
+              onClick={() => {
+                setSubInputFor(subInputFor === item.id ? null : item.id);
+                setSubTitle('');
+              }}
+              title="Add subtask"
+              className="text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] px-1"
+            >
+              +
+            </button>
+          </div>
+          {item.body && (
+            <p className="mt-1 text-xs text-[var(--color-ink-muted)] whitespace-pre-wrap">
+              {item.body}
+            </p>
+          )}
+          {subInputFor === item.id && (
+            <div className="mt-2 flex gap-1">
+              <input
+                autoFocus
+                value={subTitle}
+                onChange={(e) => setSubTitle(e.target.value)}
+                placeholder="Subtask title"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') addSubItem(item.id);
+                  if (e.key === 'Escape') setSubInputFor(null);
+                }}
+                className="flex-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-1 text-xs"
+              />
+              <button
+                onClick={() => addSubItem(item.id)}
+                disabled={!subTitle.trim()}
+                className="rounded bg-[var(--color-accent)] text-black px-2 py-1 text-xs disabled:opacity-40"
+              >
+                Add
+              </button>
+            </div>
+          )}
+        </div>
+        {node.children.map((child) => renderNode(child, depth + 1))}
+      </div>
+    );
   }
 
   return (
@@ -83,27 +182,7 @@ export function PlanPanel({
       </div>
 
       <div className="flex-1 overflow-auto p-3 flex flex-col gap-1.5">
-        {items.map((item) => (
-          <div
-            key={item.id}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
-          >
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => cycleStatus(item)}
-                className={`text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 ${statusBadge[item.status]}`}
-              >
-                {item.status}
-              </button>
-              <span className="flex-1">{item.title}</span>
-            </div>
-            {item.body && (
-              <p className="mt-1 text-xs text-[var(--color-ink-muted)] whitespace-pre-wrap">
-                {item.body}
-              </p>
-            )}
-          </div>
-        ))}
+        {tree.map((node) => renderNode(node, 0))}
         {activePlan && items.length === 0 && (
           <p className="text-xs text-[var(--color-ink-muted)]">No plan items yet.</p>
         )}
@@ -115,11 +194,11 @@ export function PlanPanel({
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
             placeholder="Add plan item"
-            onKeyDown={(e) => e.key === 'Enter' && addItem()}
+            onKeyDown={(e) => e.key === 'Enter' && addRootItem()}
             className="flex-1 rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1.5 text-sm"
           />
           <button
-            onClick={addItem}
+            onClick={addRootItem}
             className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
             disabled={!newTitle.trim()}
           >
