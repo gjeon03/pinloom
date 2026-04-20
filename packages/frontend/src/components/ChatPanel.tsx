@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Plan, PlanItem, Project, Session } from '@planloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
+import { MentionPicker } from './MentionPicker.js';
+import { MessageContent } from './MessageContent.js';
 
 interface Props {
   project: Project;
@@ -15,6 +17,8 @@ export function ChatPanel({ project, activePlan, items }: Props) {
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -74,11 +78,42 @@ export function ChatPanel({ project, activePlan, items }: Props) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages.length, running]);
 
+  function handleInputChange(value: string) {
+    setInput(value);
+    const caret = inputRef.current?.selectionStart ?? value.length;
+    const before = value.slice(0, caret);
+    const match = before.match(/@([A-Za-z0-9_-]*)$/);
+    if (match) {
+      setMentionQuery(match[1]);
+    } else {
+      setMentionQuery(null);
+    }
+  }
+
+  function applyMention(item: PlanItem) {
+    const el = inputRef.current;
+    if (!el) return;
+    const caret = el.selectionStart ?? input.length;
+    const before = input.slice(0, caret);
+    const after = input.slice(caret);
+    const atIdx = before.lastIndexOf('@');
+    if (atIdx < 0) return;
+    const next = `${before.slice(0, atIdx)}@${item.id} ${after}`;
+    setInput(next);
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      const cursor = atIdx + item.id.length + 2;
+      el.focus();
+      el.setSelectionRange(cursor, cursor);
+    });
+  }
+
   async function send(e: React.FormEvent) {
     e.preventDefault();
     if (!session || !input.trim()) return;
     const content = input;
     setInput('');
+    setMentionQuery(null);
     setError(null);
     setRunning(true);
     try {
@@ -100,7 +135,7 @@ export function ChatPanel({ project, activePlan, items }: Props) {
         {messages.length === 0 && (
           <p className="text-[var(--color-ink-muted)]">
             {activePlan
-              ? 'Start the conversation. Messages are persisted locally.'
+              ? 'Start the conversation. Type @ to tag a plan item.'
               : 'Create a plan to begin.'}
           </p>
         )}
@@ -113,15 +148,27 @@ export function ChatPanel({ project, activePlan, items }: Props) {
         {error && <p className="text-red-400 text-xs">{error}</p>}
       </div>
 
-      <form onSubmit={send} className="border-t border-[var(--color-border)] p-3 flex gap-2">
+      <form onSubmit={send} className="relative border-t border-[var(--color-border)] p-3 flex gap-2">
+        {mentionQuery !== null && items.length > 0 && (
+          <MentionPicker
+            items={items}
+            query={mentionQuery}
+            onSelect={applyMention}
+            onClose={() => setMentionQuery(null)}
+          />
+        )}
         <input
+          ref={inputRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => handleInputChange(e.target.value)}
+          onKeyUp={(e) => {
+            if (e.key === 'Escape') setMentionQuery(null);
+          }}
           placeholder={
             session
               ? running
                 ? 'Running…'
-                : 'Message the plan (use @item-id to tag)…'
+                : 'Message the plan (type @ to tag an item)…'
               : 'Create a plan first'
           }
           disabled={!session || running}
@@ -159,10 +206,10 @@ function MessageBubble({ message, items }: { message: Message; items: PlanItem[]
       </div>
       {taggedItem && (
         <div className="text-[10px] text-[var(--color-accent)] mb-1">
-          @ {taggedItem.title}
+          tagged → {taggedItem.title}
         </div>
       )}
-      <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+      <MessageContent content={message.content} items={items} />
     </div>
   );
 }

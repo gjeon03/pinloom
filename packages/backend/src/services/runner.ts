@@ -119,6 +119,28 @@ interface AssistantStream {
   message?: { content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> };
 }
 
+const MENTION_PATTERN = /@([A-Za-z0-9_-]{10,})/g;
+
+export function extractMentions(content: string): string[] {
+  const ids: string[] = [];
+  for (const match of content.matchAll(MENTION_PATTERN)) {
+    ids.push(match[1]);
+  }
+  return ids;
+}
+
+function resolveMentionedItem(
+  content: string,
+  planItems: PlanItemLite[],
+): string | null {
+  if (planItems.length === 0) return null;
+  const valid = new Set(planItems.map((i) => i.id));
+  for (const id of extractMentions(content)) {
+    if (valid.has(id)) return id;
+  }
+  return null;
+}
+
 export async function sendUserMessage(
   sessionId: string,
   content: string,
@@ -127,18 +149,21 @@ export async function sendUserMessage(
   const ctx = loadSession(sessionId);
   if (!ctx) throw new Error(`session ${sessionId} not found`);
 
+  const planItems = loadPlanItems(ctx.planId);
+  const resolvedPlanItemId = planItemId ?? resolveMentionedItem(content, planItems);
+
   const userMsg = persistMessage({
     sessionId,
-    planItemId,
+    planItemId: resolvedPlanItemId,
     role: 'user',
     content,
   });
 
-  runAssistant(ctx, content, planItemId).catch((err) => {
+  runAssistant(ctx, content, resolvedPlanItemId, planItems).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     persistMessage({
       sessionId,
-      planItemId,
+      planItemId: resolvedPlanItemId,
       role: 'system',
       content: `[runner error] ${message}`,
     });
@@ -157,10 +182,10 @@ async function runAssistant(
   ctx: SessionContext,
   prompt: string,
   planItemId: string | null,
+  planItems: PlanItemLite[],
 ): Promise<void> {
   broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
 
-  const planItems = loadPlanItems(ctx.planId);
   const systemPrompt = SYSTEM_PROMPT + buildPlanContext(planItems);
 
   const options: Record<string, unknown> = {
