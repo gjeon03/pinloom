@@ -1,7 +1,16 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, ExternalLink, Pin } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Download,
+  ExternalLink,
+  Pin,
+} from 'lucide-react';
 import type { Message } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { copyText, downloadMarkdown, slugify } from '../utils/download.js';
 
 interface Props {
   pins: Message[];
@@ -10,24 +19,55 @@ interface Props {
   showPopOut?: boolean;
 }
 
+function buildBulkMarkdown(pins: Message[]): string {
+  const lines: string[] = [
+    `# pinloom pins`,
+    `Exported ${new Date().toISOString()}`,
+    '',
+  ];
+  for (const pin of pins) {
+    lines.push('---', '');
+    lines.push(`## ${pin.pinTitle ?? '(untitled pin)'}`, '');
+    lines.push(pin.content, '');
+  }
+  return lines.join('\n');
+}
+
 export function PinnedPanel({ pins, onChange, sessionId, showPopOut = true }: Props) {
+  function downloadAll() {
+    if (pins.length === 0) return;
+    const filename = `pinloom-pins-${new Date().toISOString().slice(0, 10)}.md`;
+    downloadMarkdown(filename, buildBulkMarkdown(pins));
+  }
+
   return (
     <aside className="h-full w-full border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col min-h-0">
       <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center justify-between">
         <span className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
           Pinned ({pins.length})
         </span>
-        {showPopOut && sessionId && (
-          <a
-            href={`/pins/${sessionId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Open pins in new tab"
-            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
-          >
-            <ExternalLink size={14} />
-          </a>
-        )}
+        <div className="flex items-center gap-1">
+          {pins.length > 0 && (
+            <button
+              onClick={downloadAll}
+              title="Download all pins as Markdown"
+              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
+            >
+              <Download size={14} />
+            </button>
+          )}
+          {showPopOut && sessionId && (
+            <a
+              href={`/pins/${sessionId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open pins in new tab"
+              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
+            >
+              <ExternalLink size={14} />
+            </a>
+          )}
+        </div>
       </header>
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {pins.map((pin) => (
@@ -42,6 +82,7 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(pin.pinTitle ?? '');
   const [collapsed, setCollapsed] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   async function saveTitle() {
     const next = title.trim() || null;
@@ -53,6 +94,22 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
   async function unpin() {
     const updated = await api.updateMessage(pin.id, { pinned: false });
     onChange(updated);
+  }
+
+  function buildMarkdown(): string {
+    const heading = pin.pinTitle ?? '(untitled pin)';
+    return `# ${heading}\n\n${pin.content}\n`;
+  }
+
+  async function copy() {
+    await copyText(buildMarkdown());
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  function download() {
+    const base = slugify(pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`);
+    downloadMarkdown(`${base}.md`, buildMarkdown());
   }
 
   return (
@@ -91,6 +148,20 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
             {pin.pinTitle ?? '(untitled pin)'}
           </button>
         )}
+        <button
+          onClick={copy}
+          title={copied ? 'Copied!' : 'Copy as Markdown'}
+          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
+        >
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+        </button>
+        <button
+          onClick={download}
+          title="Download as .md"
+          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
+        >
+          <Download size={14} />
+        </button>
         <button
           onClick={unpin}
           title="Unpin"
