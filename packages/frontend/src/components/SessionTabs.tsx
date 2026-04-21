@@ -91,6 +91,27 @@ export function SessionTabs({
   return (
     <div
       className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2 overflow-x-auto"
+      onDragOver={(e) => {
+        if (!draggingId) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
+        const target = dropTarget;
+        setDropTarget(null);
+        setDraggingId(null);
+        if (!sourceId) return;
+        if (target) {
+          void reorderTabs(sourceId, target.id, target.position);
+        } else {
+          const last = sessions[sessions.length - 1];
+          if (last && last.id !== sourceId) {
+            void reorderTabs(sourceId, last.id, 'after');
+          }
+        }
+      }}
       onDragLeave={(e) => {
         if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
         setDropTarget(null);
@@ -153,6 +174,7 @@ export function SessionTabs({
               }}
               onDrop={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
                 const targetId = dropTarget?.id ?? s.id;
                 const position = dropTarget?.position ?? 'before';

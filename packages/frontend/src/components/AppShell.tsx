@@ -101,6 +101,27 @@ export function AppShell({ children }: Props) {
 
         <div
           className="flex-1 overflow-auto py-2 flex flex-col"
+          onDragOver={(e) => {
+            if (!draggingId) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
+            const target = dropTarget;
+            setDropTarget(null);
+            setDraggingId(null);
+            if (!sourceId) return;
+            if (target) {
+              void reorderProjects(sourceId, target.id, target.position);
+            } else {
+              const last = projects[projects.length - 1];
+              if (last && last.id !== sourceId) {
+                void reorderProjects(sourceId, last.id, 'after');
+              }
+            }
+          }}
           onDragLeave={(e) => {
             if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
             setDropTarget(null);
@@ -165,6 +186,7 @@ export function AppShell({ children }: Props) {
                   }}
                   onDrop={(e) => {
                     e.preventDefault();
+                    e.stopPropagation();
                     const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
                     const targetId = dropTarget?.id ?? p.id;
                     const position = dropTarget?.position ?? 'before';
