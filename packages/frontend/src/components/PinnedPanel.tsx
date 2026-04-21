@@ -3,14 +3,17 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Code,
   Copy,
   Download,
   ExternalLink,
+  FileText,
   Pin,
 } from 'lucide-react';
 import type { Message } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { copyText, downloadMarkdown, slugify } from '../utils/download.js';
+import { Markdown } from './Markdown.js';
 
 interface Props {
   pins: Message[];
@@ -83,6 +86,7 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
   const [title, setTitle] = useState(pin.pinTitle ?? '');
   const [collapsed, setCollapsed] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [rawView, setRawView] = useState(false);
 
   async function saveTitle() {
     const next = title.trim() || null;
@@ -149,6 +153,13 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
           </button>
         )}
         <button
+          onClick={() => setRawView((v) => !v)}
+          title={rawView ? 'Show rendered markdown' : 'Show raw text'}
+          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
+        >
+          {rawView ? <FileText size={14} /> : <Code size={14} />}
+        </button>
+        <button
           onClick={copy}
           title={copied ? 'Copied!' : 'Copy as Markdown'}
           className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
@@ -171,8 +182,12 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
         </button>
       </header>
       {!collapsed && (
-        <div className="whitespace-pre-wrap text-sm text-[var(--color-ink)]/90 border-t border-[var(--color-border)] pt-2 mt-1 max-h-96 overflow-auto">
-          {pin.content}
+        <div className="border-t border-[var(--color-border)] pt-2 mt-1 max-h-96 overflow-auto text-[var(--color-ink)]/90">
+          {rawView ? (
+            <div className="whitespace-pre-wrap text-sm font-mono">{pin.content}</div>
+          ) : (
+            <Markdown content={pin.content} />
+          )}
         </div>
       )}
     </article>
