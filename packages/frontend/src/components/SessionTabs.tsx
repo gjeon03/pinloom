@@ -53,7 +53,7 @@ export function SessionTabs({
         return (
           <div
             key={s.id}
-            className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm cursor-pointer border-b-2 ${
+            className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm ${editing ? 'cursor-text' : 'cursor-pointer'} border-b-2 ${
               active
                 ? 'border-[var(--color-accent)] text-[var(--color-ink)] bg-[var(--color-surface-2)]'
                 : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
