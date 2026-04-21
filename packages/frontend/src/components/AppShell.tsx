@@ -28,7 +28,9 @@ export function AppShell({ children }: Props) {
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<
+    { id: string; position: 'before' | 'after' } | null
+  >(null);
 
   useEffect(() => {
     api.listProjects().then(setProjects).catch((e) => setError(String(e)));
@@ -49,23 +51,29 @@ export function AppShell({ children }: Props) {
     }
   }
 
-  async function reorderProjects(sourceId: string, targetId: string) {
+  async function reorderProjects(
+    sourceId: string,
+    targetId: string,
+    position: 'before' | 'after',
+  ) {
     if (sourceId === targetId) return;
-    const currentIds = projects.map((p) => p.id);
-    const sourceIdx = currentIds.indexOf(sourceId);
-    const targetIdx = currentIds.indexOf(targetId);
-    if (sourceIdx === -1 || targetIdx === -1) return;
 
-    const reordered = [...projects];
-    const [moved] = reordered.splice(sourceIdx, 1);
-    reordered.splice(targetIdx, 0, moved);
+    const without = projects.filter((p) => p.id !== sourceId);
+    const targetNewIdx = without.findIndex((p) => p.id === targetId);
+    if (targetNewIdx === -1) return;
+
+    const insertAt = position === 'before' ? targetNewIdx : targetNewIdx + 1;
+    const source = projects.find((p) => p.id === sourceId);
+    if (!source) return;
+
+    const reordered = [...without];
+    reordered.splice(insertAt, 0, source);
 
     setProjects(reordered);
     try {
       await api.reorderProjects(reordered.map((p) => p.id));
     } catch (e) {
       setError(String(e));
-      // Rollback on failure
       const fresh = await api.listProjects();
       setProjects(fresh);
     }
@@ -91,57 +99,81 @@ export function AppShell({ children }: Props) {
           </p>
         )}
 
-        <div className="flex-1 overflow-auto py-2 flex flex-col gap-1">
+        <div
+          className="flex-1 overflow-auto py-2 flex flex-col"
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+            setDropTarget(null);
+          }}
+        >
           {projects.map((p) => {
             const active = p.id === projectId;
             const isDragging = draggingId === p.id;
-            const isDropTarget = dropTargetId === p.id && draggingId !== p.id;
+            const showBefore =
+              dropTarget?.id === p.id &&
+              dropTarget.position === 'before' &&
+              draggingId !== p.id;
+            const showAfter =
+              dropTarget?.id === p.id &&
+              dropTarget.position === 'after' &&
+              draggingId !== p.id;
+
             return (
-              <button
-                key={p.id}
-                draggable
-                onDragStart={(e) => {
-                  setDraggingId(p.id);
-                  e.dataTransfer.effectAllowed = 'move';
-                  e.dataTransfer.setData('text/plain', p.id);
-                }}
-                onDragEnter={() => {
-                  if (draggingId && draggingId !== p.id) setDropTargetId(p.id);
-                }}
-                onDragOver={(e) => {
-                  if (draggingId) {
+              <div key={p.id} className="flex flex-col">
+                <div
+                  className={`mx-2 h-0.5 rounded-full transition-colors ${
+                    showBefore ? 'bg-[var(--color-accent)]' : 'bg-transparent'
+                  }`}
+                />
+                <button
+                  draggable
+                  onDragStart={(e) => {
+                    setDraggingId(p.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', p.id);
+                  }}
+                  onDragOver={(e) => {
+                    if (!draggingId || draggingId === p.id) return;
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'move';
-                  }
-                }}
-                onDragLeave={(e) => {
-                  // only clear if we're leaving the entire button, not a child
-                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-                  if (dropTargetId === p.id) setDropTargetId(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
-                  setDropTargetId(null);
-                  setDraggingId(null);
-                  if (sourceId) void reorderProjects(sourceId, p.id);
-                }}
-                onDragEnd={() => {
-                  setDraggingId(null);
-                  setDropTargetId(null);
-                }}
-                onClick={() => navigate(`/projects/${p.id}`)}
-                className={`mx-2 rounded px-2 py-1.5 text-left text-sm flex flex-col gap-0.5 border transition-colors ${
-                  active
-                    ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)] border-transparent'
-                    : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60 border-transparent'
-                } ${isDragging ? 'opacity-40' : ''} ${
-                  isDropTarget ? '!border-[var(--color-accent)]' : ''
-                }`}
-              >
-                <span className="truncate font-medium">{p.name}</span>
-                <span className="truncate text-[10px] opacity-70 font-mono">{p.cwd}</span>
-              </button>
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const position: 'before' | 'after' =
+                      e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                    if (
+                      dropTarget?.id !== p.id ||
+                      dropTarget.position !== position
+                    ) {
+                      setDropTarget({ id: p.id, position });
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
+                    const position = dropTarget?.position ?? 'before';
+                    setDropTarget(null);
+                    setDraggingId(null);
+                    if (sourceId) void reorderProjects(sourceId, p.id, position);
+                  }}
+                  onDragEnd={() => {
+                    setDraggingId(null);
+                    setDropTarget(null);
+                  }}
+                  onClick={() => navigate(`/projects/${p.id}`)}
+                  className={`mx-2 my-0.5 rounded px-2 py-1.5 text-left text-sm flex flex-col gap-0.5 transition-colors ${
+                    active
+                      ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                      : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60'
+                  } ${isDragging ? 'opacity-40' : ''}`}
+                >
+                  <span className="truncate font-medium">{p.name}</span>
+                  <span className="truncate text-[10px] opacity-70 font-mono">{p.cwd}</span>
+                </button>
+                <div
+                  className={`mx-2 h-0.5 rounded-full transition-colors ${
+                    showAfter ? 'bg-[var(--color-accent)]' : 'bg-transparent'
+                  }`}
+                />
+              </div>
             );
           })}
           {projects.length === 0 && (
