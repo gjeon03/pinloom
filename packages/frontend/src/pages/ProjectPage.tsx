@@ -4,7 +4,7 @@ import { api } from '../api/client.js';
 import { SessionTabs } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
-import { LogsDrawer } from '../components/LogsDrawer.js';
+import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
 import { EditableTitle } from '../components/EditableTitle.js';
 import { SessionPickerModal } from '../components/SessionPickerModal.js';
@@ -137,7 +137,7 @@ export function ProjectPage({
         />
       </div>
 
-      {activeSession && <LogsDrawer session={activeSession} />}
+      {activeSession && <BottomPanel projectId={project.id} session={activeSession} />}
 
       {sendingPin && activeSession && (
         <SessionPickerModal

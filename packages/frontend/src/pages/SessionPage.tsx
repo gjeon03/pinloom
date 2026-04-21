@@ -5,7 +5,7 @@ import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
-import { LogsDrawer } from '../components/LogsDrawer.js';
+import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
 
 export function SessionPage() {
@@ -121,7 +121,7 @@ export function SessionPage() {
         />
       </div>
 
-      <LogsDrawer session={session} />
+      <BottomPanel projectId={project.id} session={session} />
     </div>
   );
 }

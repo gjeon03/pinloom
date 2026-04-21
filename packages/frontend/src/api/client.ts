@@ -5,6 +5,7 @@ import type {
   PlanItem,
   Project,
   Session,
+  Terminal,
 } from '@pinloom/shared';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -131,6 +132,26 @@ export const api = {
     request<{ running: boolean; ai: boolean; exec: boolean }>(
       `/api/sessions/${sessionId}/run-status`,
     ),
+
+  listTerminals: (projectId: string) =>
+    request<Terminal[]>(`/api/projects/${projectId}/terminals`),
+  createTerminal: (projectId: string, title?: string | null) =>
+    request<Terminal>(`/api/projects/${projectId}/terminals`, {
+      method: 'POST',
+      body: JSON.stringify({ title: title ?? null }),
+    }),
+  renameTerminal: (id: string, title: string | null) =>
+    request<Terminal>(`/api/terminals/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  deleteTerminal: (id: string) =>
+    request<{ ok: boolean }>(`/api/terminals/${id}`, { method: 'DELETE' }),
+  reorderTerminals: (projectId: string, ids: string[]) =>
+    request<Terminal[]>(`/api/projects/${projectId}/terminals/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
   deleteSession: (sessionId: string) =>
     request<{ ok: true }>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
   renameSession: (sessionId: string, title: string | null) =>
