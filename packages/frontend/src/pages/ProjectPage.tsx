@@ -5,6 +5,7 @@ import { SessionTabs } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { LogsDrawer } from '../components/LogsDrawer.js';
+import { HSplitter } from '../components/HSplitter.js';
 
 export function ProjectPage({ project }: { project: Project }) {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -89,21 +90,23 @@ export function ProjectPage({ project }: { project: Project }) {
       />
 
       <div className="flex-1 flex min-h-0">
-        {pins.length > 0 && (
-          <PinnedPanel
-            pins={pins}
-            onChange={handlePinsChange}
+        {pins.length > 0 && activeSession ? (
+          <HSplitter
+            storageKey={`planloom:splitter:${project.id}`}
+            minLeft={320}
+            minRight={420}
+            left={<PinnedPanel pins={pins} onChange={handlePinsChange} />}
+            right={<ChatView session={activeSession} onPinChange={handlePinsChange} />}
           />
-        )}
-        <div className="flex-1 min-w-0 flex flex-col">
-          {activeSession ? (
+        ) : activeSession ? (
+          <div className="flex-1 min-w-0 flex flex-col">
             <ChatView session={activeSession} onPinChange={handlePinsChange} />
-          ) : (
-            <div className="p-6 text-sm text-[var(--color-ink-muted)]">
-              No sessions yet. Click + in the tab bar to create one.
-            </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="p-6 text-sm text-[var(--color-ink-muted)]">
+            No sessions yet. Click + in the tab bar to create one.
+          </div>
+        )}
       </div>
 
       {activeSession && <LogsDrawer session={activeSession} />}

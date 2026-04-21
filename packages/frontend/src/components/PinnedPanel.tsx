@@ -9,7 +9,7 @@ interface Props {
 
 export function PinnedPanel({ pins, onChange }: Props) {
   return (
-    <aside className="w-[420px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col min-h-0">
+    <aside className="h-full w-full border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col min-h-0">
       <header className="border-b border-[var(--color-border)] px-4 py-2 text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
         Pinned ({pins.length})
       </header>
