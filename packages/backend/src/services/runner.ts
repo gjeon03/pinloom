@@ -237,6 +237,10 @@ export function cancelAiRun(sessionId: string): boolean {
   return true;
 }
 
+export function isAiRunning(sessionId: string): boolean {
+  return activeAbortControllers.has(sessionId);
+}
+
 function buildFallbackPrompt(history: HistoryMessage[], currentUserMessage: string): string {
   if (history.length === 0) return currentUserMessage;
   const lines: string[] = [

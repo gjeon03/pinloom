@@ -15,6 +15,10 @@ export function cancelExecRun(sessionId: string): boolean {
   return true;
 }
 
+export function isExecRunning(sessionId: string): boolean {
+  return activeChildren.has(sessionId);
+}
+
 interface ExecResult {
   stdout: string;
   stderr: string;

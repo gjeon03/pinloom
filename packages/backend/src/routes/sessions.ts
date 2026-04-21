@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import type { Message, MessageRole, Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
-import { cancelAiRun, sendUserMessage } from '../services/runner.js';
-import { cancelExecRun, execShellCommand } from '../services/exec.js';
+import { cancelAiRun, isAiRunning, sendUserMessage } from '../services/runner.js';
+import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
 
 interface SessionRow {
@@ -148,6 +148,15 @@ export async function sessionRoutes(app: FastifyInstance) {
       const ai = cancelAiRun(req.params.sessionId);
       const exec = cancelExecRun(req.params.sessionId);
       return { cancelled: ai || exec, ai, exec };
+    },
+  );
+
+  app.get<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/run-status',
+    async (req) => {
+      const ai = isAiRunning(req.params.sessionId);
+      const exec = isExecRunning(req.params.sessionId);
+      return { running: ai || exec, ai, exec };
     },
   );
 

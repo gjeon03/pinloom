@@ -22,12 +22,21 @@ export function ChatView({ session, onPinChange }: Props) {
     let cancelled = false;
     setMessages([]);
     setError(null);
+    setRunning(false);
     api
       .listMessages(session.id)
       .then((msgs) => {
         if (!cancelled) setMessages(msgs);
       })
       .catch((e) => !cancelled && setError(String(e)));
+    api
+      .getRunStatus(session.id)
+      .then((s) => {
+        if (!cancelled && s.running) setRunning(true);
+      })
+      .catch(() => {
+        // non-critical, leave running=false
+      });
     return () => {
       cancelled = true;
     };
