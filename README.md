@@ -17,7 +17,7 @@ Most AI coding UIs treat the plan as a throwaway artifact. pinloom treats it as 
 
 ```bash
 pnpm install
-pnpm dev             # backend (3300) + frontend (5273)
+pnpm dev             # backend (4747) + frontend (4748)
 ```
 
 ## Design principles

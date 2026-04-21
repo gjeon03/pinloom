@@ -6,7 +6,7 @@ Plan-first AI workspace. Local open-source tool.
 
 ```bash
 pnpm install
-pnpm dev             # backend (3300) + frontend (5273)
+pnpm dev             # backend (4747) + frontend (4748)
 pnpm dev:backend     # backend only
 pnpm dev:frontend    # frontend only
 ```
