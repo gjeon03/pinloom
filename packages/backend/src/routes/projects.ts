@@ -7,6 +7,7 @@ interface ProjectRow {
   id: string;
   name: string;
   cwd: string;
+  order_index: number;
   created_at: string;
   updated_at: string;
 }
@@ -26,7 +27,7 @@ export async function projectRoutes(app: FastifyInstance) {
 
   app.get('/api/projects', async () => {
     const rows = db
-      .prepare('SELECT * FROM projects ORDER BY created_at DESC')
+      .prepare('SELECT * FROM projects ORDER BY order_index ASC, created_at DESC')
       .all() as ProjectRow[];
     return rows.map(toProject);
   });
@@ -39,11 +40,37 @@ export async function projectRoutes(app: FastifyInstance) {
     }
     const id = nanoid();
     const now = new Date().toISOString();
+    // New projects land at the top (smallest order_index)
+    const minRow = db
+      .prepare('SELECT COALESCE(MIN(order_index), 0) AS min FROM projects')
+      .get() as { min: number };
+    const nextOrder = minRow.min - 1;
     db.prepare(
-      'INSERT INTO projects (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-    ).run(id, name, cwd, now, now);
+      'INSERT INTO projects (id, name, cwd, order_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(id, name, cwd, nextOrder, now, now);
     const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow;
     return toProject(row);
+  });
+
+  app.post<{ Body: { ids: string[] } }>('/api/projects/reorder', async (req, reply) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      reply.code(400);
+      return { error: 'ids array is required' };
+    }
+    const now = new Date().toISOString();
+    const update = db.prepare(
+      'UPDATE projects SET order_index = ?, updated_at = ? WHERE id = ?',
+    );
+    const tx = db.transaction((list: string[]) => {
+      list.forEach((id, i) => update.run(i, now, id));
+    });
+    tx(ids);
+
+    const rows = db
+      .prepare('SELECT * FROM projects ORDER BY order_index ASC, created_at DESC')
+      .all() as ProjectRow[];
+    return rows.map(toProject);
   });
 
   app.patch<{

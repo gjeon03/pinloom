@@ -27,6 +27,8 @@ export function AppShell({ children }: Props) {
   const [picking, setPicking] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
 
   useEffect(() => {
     api.listProjects().then(setProjects).catch((e) => setError(String(e)));
@@ -44,6 +46,28 @@ export function AppShell({ children }: Props) {
       navigate(`/projects/${created.id}`);
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  async function reorderProjects(sourceId: string, targetId: string) {
+    if (sourceId === targetId) return;
+    const currentIds = projects.map((p) => p.id);
+    const sourceIdx = currentIds.indexOf(sourceId);
+    const targetIdx = currentIds.indexOf(targetId);
+    if (sourceIdx === -1 || targetIdx === -1) return;
+
+    const reordered = [...projects];
+    const [moved] = reordered.splice(sourceIdx, 1);
+    reordered.splice(targetIdx, 0, moved);
+
+    setProjects(reordered);
+    try {
+      await api.reorderProjects(reordered.map((p) => p.id));
+    } catch (e) {
+      setError(String(e));
+      // Rollback on failure
+      const fresh = await api.listProjects();
+      setProjects(fresh);
     }
   }
 
@@ -70,14 +94,49 @@ export function AppShell({ children }: Props) {
         <div className="flex-1 overflow-auto py-2 flex flex-col gap-1">
           {projects.map((p) => {
             const active = p.id === projectId;
+            const isDragging = draggingId === p.id;
+            const isDropTarget = dropTargetId === p.id && draggingId !== p.id;
             return (
               <button
                 key={p.id}
+                draggable
+                onDragStart={(e) => {
+                  setDraggingId(p.id);
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', p.id);
+                }}
+                onDragEnter={() => {
+                  if (draggingId && draggingId !== p.id) setDropTargetId(p.id);
+                }}
+                onDragOver={(e) => {
+                  if (draggingId) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                  }
+                }}
+                onDragLeave={(e) => {
+                  // only clear if we're leaving the entire button, not a child
+                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+                  if (dropTargetId === p.id) setDropTargetId(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
+                  setDropTargetId(null);
+                  setDraggingId(null);
+                  if (sourceId) void reorderProjects(sourceId, p.id);
+                }}
+                onDragEnd={() => {
+                  setDraggingId(null);
+                  setDropTargetId(null);
+                }}
                 onClick={() => navigate(`/projects/${p.id}`)}
-                className={`mx-2 rounded px-2 py-1.5 text-left text-sm flex flex-col gap-0.5 ${
+                className={`mx-2 rounded px-2 py-1.5 text-left text-sm flex flex-col gap-0.5 border transition-colors ${
                   active
-                    ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-                    : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60'
+                    ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)] border-transparent'
+                    : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60 border-transparent'
+                } ${isDragging ? 'opacity-40' : ''} ${
+                  isDropTarget ? '!border-[var(--color-accent)]' : ''
                 }`}
               >
                 <span className="truncate font-medium">{p.name}</span>

@@ -61,6 +61,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ name }),
     }),
+  reorderProjects: (ids: string[]) =>
+    request<Project[]>('/api/projects/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
 
   listPlans: (projectId: string) =>
     request<Plan[]>(`/api/projects/${projectId}/plans`),
