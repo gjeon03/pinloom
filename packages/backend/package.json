@@ -15,7 +15,7 @@
     "@fastify/cors": "^10.0.2",
     "@fastify/websocket": "^11.0.2",
     "@pinloom/shared": "workspace:*",
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^12.9.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
     "nanoid": "^5.1.2",

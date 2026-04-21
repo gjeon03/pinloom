@@ -13,11 +13,18 @@ Most AI coding UIs treat the plan as a throwaway artifact. pinloom treats it as 
 - **Frontend**: React 19 + Vite + Tailwind CSS v4
 - **Monorepo**: pnpm workspaces
 
+## Requirements
+
+- **Node.js ≥ 22** (Node 24 LTS recommended). If you use nvm, just `nvm use` — the `.nvmrc` pins it.
+- **pnpm** (enable via `corepack enable` if you don't have it)
+- **Claude Code CLI** installed and authenticated locally (`claude --version` should work)
+
 ## Quick start
 
 ```bash
+nvm use              # picks up .nvmrc (Node 24)
 pnpm install
-pnpm dev             # backend (4748) + frontend (4747)
+pnpm dev             # frontend at http://localhost:4747, backend proxy on 4748
 ```
 
 ## Design principles
