@@ -136,7 +136,7 @@ export function AppShell({ children }: Props) {
                     ghost.style.position = 'absolute';
                     ghost.style.top = '-9999px';
                     ghost.style.left = '-9999px';
-                    ghost.style.opacity = '0.5';
+                    ghost.style.opacity = '0.25';
                     ghost.style.transform = 'scale(0.85)';
                     ghost.style.pointerEvents = 'none';
                     document.body.appendChild(ghost);
