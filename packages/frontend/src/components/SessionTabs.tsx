@@ -109,10 +109,8 @@ export function SessionTabs({
         return (
           <div key={s.id} className="flex items-stretch">
             <div
-              className={`w-[3px] self-stretch transition-colors ${
-                showBefore
-                  ? 'bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)]'
-                  : 'bg-transparent'
+              className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
+                showBefore ? 'bg-[var(--color-accent)]' : 'bg-transparent'
               }`}
             />
             <div
@@ -122,6 +120,17 @@ export function SessionTabs({
                 setDraggingId(s.id);
                 e.dataTransfer.effectAllowed = 'move';
                 e.dataTransfer.setData('text/plain', s.id);
+                const original = e.currentTarget;
+                const ghost = original.cloneNode(true) as HTMLElement;
+                ghost.style.position = 'absolute';
+                ghost.style.top = '-9999px';
+                ghost.style.left = '-9999px';
+                ghost.style.opacity = '0.5';
+                ghost.style.transform = 'scale(0.8)';
+                ghost.style.pointerEvents = 'none';
+                document.body.appendChild(ghost);
+                e.dataTransfer.setDragImage(ghost, 20, 10);
+                setTimeout(() => ghost.remove(), 0);
               }}
               onDragOver={(e) => {
                 if (!draggingId || draggingId === s.id) return;
@@ -207,10 +216,8 @@ export function SessionTabs({
               )}
             </div>
             <div
-              className={`w-[3px] self-stretch transition-colors ${
-                showAfter
-                  ? 'bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)]'
-                  : 'bg-transparent'
+              className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
+                showAfter ? 'bg-[var(--color-accent)]' : 'bg-transparent'
               }`}
             />
           </div>

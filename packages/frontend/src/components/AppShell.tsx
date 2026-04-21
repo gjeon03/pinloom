@@ -131,6 +131,17 @@ export function AppShell({ children }: Props) {
                     setDraggingId(p.id);
                     e.dataTransfer.effectAllowed = 'move';
                     e.dataTransfer.setData('text/plain', p.id);
+                    const original = e.currentTarget;
+                    const ghost = original.cloneNode(true) as HTMLElement;
+                    ghost.style.position = 'absolute';
+                    ghost.style.top = '-9999px';
+                    ghost.style.left = '-9999px';
+                    ghost.style.opacity = '0.5';
+                    ghost.style.transform = 'scale(0.85)';
+                    ghost.style.pointerEvents = 'none';
+                    document.body.appendChild(ghost);
+                    e.dataTransfer.setDragImage(ghost, 20, 10);
+                    setTimeout(() => ghost.remove(), 0);
                   }}
                   onDragOver={(e) => {
                     if (!draggingId || draggingId === p.id) return;
