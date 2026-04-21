@@ -106,16 +106,12 @@ export function AppShell({ children }: Props) {
             setDropTarget(null);
           }}
         >
-          {projects.map((p) => {
+          {projects.map((p, i) => {
             const active = p.id === projectId;
             const isDragging = draggingId === p.id;
             const showBefore =
               dropTarget?.id === p.id &&
               dropTarget.position === 'before' &&
-              draggingId !== p.id;
-            const showAfter =
-              dropTarget?.id === p.id &&
-              dropTarget.position === 'after' &&
               draggingId !== p.id;
 
             return (
@@ -148,22 +144,33 @@ export function AppShell({ children }: Props) {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'move';
                     const rect = e.currentTarget.getBoundingClientRect();
-                    const position: 'before' | 'after' =
-                      e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                    const isTopHalf = e.clientY < rect.top + rect.height / 2;
+                    let next: { id: string; position: 'before' | 'after' };
+                    if (isTopHalf) {
+                      next = { id: p.id, position: 'before' };
+                    } else {
+                      const nextProj = projects[i + 1];
+                      if (nextProj && nextProj.id !== draggingId) {
+                        next = { id: nextProj.id, position: 'before' };
+                      } else {
+                        next = { id: p.id, position: 'after' };
+                      }
+                    }
                     if (
-                      dropTarget?.id !== p.id ||
-                      dropTarget.position !== position
+                      dropTarget?.id !== next.id ||
+                      dropTarget.position !== next.position
                     ) {
-                      setDropTarget({ id: p.id, position });
+                      setDropTarget(next);
                     }
                   }}
                   onDrop={(e) => {
                     e.preventDefault();
                     const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
+                    const targetId = dropTarget?.id ?? p.id;
                     const position = dropTarget?.position ?? 'before';
                     setDropTarget(null);
                     setDraggingId(null);
-                    if (sourceId) void reorderProjects(sourceId, p.id, position);
+                    if (sourceId) void reorderProjects(sourceId, targetId, position);
                   }}
                   onDragEnd={() => {
                     setDraggingId(null);
@@ -179,14 +186,23 @@ export function AppShell({ children }: Props) {
                   <span className="truncate font-medium">{p.name}</span>
                   <span className="truncate text-[10px] opacity-70 font-mono">{p.cwd}</span>
                 </button>
-                <div
-                  className={`mx-2 h-0.5 rounded-full transition-colors ${
-                    showAfter ? 'bg-[var(--color-accent)]' : 'bg-transparent'
-                  }`}
-                />
               </div>
             );
           })}
+          {(() => {
+            const lastId = projects[projects.length - 1]?.id;
+            const showTail =
+              dropTarget?.id === lastId &&
+              dropTarget.position === 'after' &&
+              draggingId !== lastId;
+            return (
+              <div
+                className={`mx-2 h-0.5 rounded-full transition-colors ${
+                  showTail ? 'bg-[var(--color-accent)]' : 'bg-transparent'
+                }`}
+              />
+            );
+          })()}
           {projects.length === 0 && (
             <p className="px-3 text-xs text-[var(--color-ink-muted)]">
               Click + to pick a directory for your first project.

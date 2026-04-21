@@ -96,15 +96,13 @@ export function SessionTabs({
         setDropTarget(null);
       }}
     >
-      {sessions.map((s) => {
+      {sessions.map((s, i) => {
         const active = s.id === activeSessionId;
         const label = s.title ?? `Chat ${s.id.slice(0, 6)}`;
         const editing = editingId === s.id;
         const isDragging = draggingId === s.id;
         const showBefore =
           dropTarget?.id === s.id && dropTarget.position === 'before' && draggingId !== s.id;
-        const showAfter =
-          dropTarget?.id === s.id && dropTarget.position === 'after' && draggingId !== s.id;
 
         return (
           <div key={s.id} className="flex items-stretch">
@@ -137,19 +135,30 @@ export function SessionTabs({
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 const rect = e.currentTarget.getBoundingClientRect();
-                const position: 'before' | 'after' =
-                  e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
-                if (dropTarget?.id !== s.id || dropTarget.position !== position) {
-                  setDropTarget({ id: s.id, position });
+                const isLeftHalf = e.clientX < rect.left + rect.width / 2;
+                let next: { id: string; position: 'before' | 'after' };
+                if (isLeftHalf) {
+                  next = { id: s.id, position: 'before' };
+                } else {
+                  const nextTab = sessions[i + 1];
+                  if (nextTab && nextTab.id !== draggingId) {
+                    next = { id: nextTab.id, position: 'before' };
+                  } else {
+                    next = { id: s.id, position: 'after' };
+                  }
+                }
+                if (dropTarget?.id !== next.id || dropTarget.position !== next.position) {
+                  setDropTarget(next);
                 }
               }}
               onDrop={(e) => {
                 e.preventDefault();
                 const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
+                const targetId = dropTarget?.id ?? s.id;
                 const position = dropTarget?.position ?? 'before';
                 setDropTarget(null);
                 setDraggingId(null);
-                if (sourceId) void reorderTabs(sourceId, s.id, position);
+                if (sourceId) void reorderTabs(sourceId, targetId, position);
               }}
               onDragEnd={() => {
                 setDraggingId(null);
@@ -215,14 +224,23 @@ export function SessionTabs({
                 </button>
               )}
             </div>
-            <div
-              className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
-                showAfter ? 'bg-[var(--color-accent)]' : 'bg-transparent'
-              }`}
-            />
           </div>
         );
       })}
+      {(() => {
+        const lastId = sessions[sessions.length - 1]?.id;
+        const showTail =
+          dropTarget?.id === lastId &&
+          dropTarget.position === 'after' &&
+          draggingId !== lastId;
+        return (
+          <div
+            className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
+              showTail ? 'bg-[var(--color-accent)]' : 'bg-transparent'
+            }`}
+          />
+        );
+      })()}
       <button
         onClick={createTab}
         className="ml-1 p-1.5 rounded text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
