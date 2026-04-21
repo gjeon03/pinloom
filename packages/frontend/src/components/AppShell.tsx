@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Plus, Settings, FolderOpen } from 'lucide-react';
+import { Plus, Settings } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
@@ -14,13 +14,16 @@ interface Props {
   children: (project: Project | null, helpers: ShellHelpers) => React.ReactNode;
 }
 
+function basenameOfPath(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  const parts = trimmed.split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? 'project';
+}
+
 export function AppShell({ children }: Props) {
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId: string }>();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [cwd, setCwd] = useState('');
   const [picking, setPicking] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,15 +34,13 @@ export function AppShell({ children }: Props) {
 
   const activeProject = projects.find((p) => p.id === projectId) ?? null;
 
-  async function addProject(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleDirectoryChosen(cwd: string) {
     setError(null);
     try {
+      const name = basenameOfPath(cwd);
       const created = await api.createProject({ name, cwd });
       setProjects((prev) => [created, ...prev]);
-      setName('');
-      setCwd('');
-      setAdding(false);
+      setPicking(false);
       navigate(`/projects/${created.id}`);
     } catch (e) {
       setError(String(e));
@@ -52,53 +53,18 @@ export function AppShell({ children }: Props) {
         <div className="px-3 py-3 flex items-center justify-between">
           <div className="text-sm font-semibold tracking-wide">pinloom</div>
           <button
-            onClick={() => setAdding((v) => !v)}
-            title="New project"
+            onClick={() => setPicking(true)}
+            title="New project — pick a directory"
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
             <Plus size={16} />
           </button>
         </div>
 
-        {adding && (
-          <form
-            onSubmit={addProject}
-            className="px-3 pb-3 flex flex-col gap-1.5 border-b border-[var(--color-border)]"
-          >
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Project name"
-              className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs"
-            />
-            <button
-              type="button"
-              onClick={() => setPicking(true)}
-              className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs font-mono text-left hover:border-[var(--color-accent)] truncate flex items-center gap-1.5"
-              title={cwd || 'Click to choose'}
-            >
-              <FolderOpen size={12} className="shrink-0 text-[var(--color-ink-muted)]" />
-              <span className="truncate">{cwd || 'Choose directory…'}</span>
-            </button>
-            <div className="flex gap-1">
-              <button
-                type="submit"
-                disabled={!name.trim() || !cwd.trim()}
-                className="flex-1 rounded bg-[var(--color-accent)] text-black px-2 py-1 text-xs disabled:opacity-40"
-              >
-                Add
-              </button>
-              <button
-                type="button"
-                onClick={() => setAdding(false)}
-                className="rounded border border-[var(--color-border)] px-2 py-1 text-xs"
-              >
-                Cancel
-              </button>
-            </div>
-            {error && <p className="text-red-400 text-[11px]">{error}</p>}
-          </form>
+        {error && (
+          <p className="px-3 pb-2 text-[11px] text-red-400 border-b border-[var(--color-border)]">
+            {error}
+          </p>
         )}
 
         <div className="flex-1 overflow-auto py-2 flex flex-col gap-1">
@@ -119,9 +85,9 @@ export function AppShell({ children }: Props) {
               </button>
             );
           })}
-          {projects.length === 0 && !adding && (
+          {projects.length === 0 && (
             <p className="px-3 text-xs text-[var(--color-ink-muted)]">
-              Click + to add your first project.
+              Click + to pick a directory for your first project.
             </p>
           )}
         </div>
@@ -148,11 +114,7 @@ export function AppShell({ children }: Props) {
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       {picking && (
         <DirectoryPicker
-          initialPath={cwd || undefined}
-          onSelect={(p) => {
-            setCwd(p);
-            setPicking(false);
-          }}
+          onSelect={handleDirectoryChosen}
           onClose={() => setPicking(false)}
         />
       )}
