@@ -23,25 +23,42 @@ export function SessionTabs({
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const canDelete = sessions.length > 1;
 
   async function createTab() {
-    const created = await api.createSession(projectId, {
-      title: `New chat ${sessions.length + 1}`,
-    });
-    onCreate(created);
+    try {
+      const created = await api.createSession(projectId, {
+        title: `New chat ${sessions.length + 1}`,
+      });
+      onCreate(created);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function saveRename(session: Session) {
     const next = editValue.trim() || null;
-    const updated = await api.renameSession(session.id, next);
-    onRename(updated);
-    setEditingId(null);
+    try {
+      const updated = await api.renameSession(session.id, next);
+      onRename(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditingId(null);
+    }
   }
 
   async function deleteTab(session: Session) {
+    if (!canDelete) return;
     if (!confirm(`Delete "${session.title ?? 'untitled'}"? This cannot be undone.`)) return;
-    await api.deleteSession(session.id);
-    onDelete(session.id);
+    try {
+      await api.deleteSession(session.id);
+      onDelete(session.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -79,26 +96,38 @@ export function SessionTabs({
             ) : (
               <span className="truncate max-w-[180px]">{label}</span>
             )}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                deleteTab(s);
-              }}
-              className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400 text-xs px-1"
-              title="Delete"
-            >
-              ✕
-            </button>
+            {canDelete && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteTab(s);
+                }}
+                className={`text-xs px-1 rounded transition-opacity ${
+                  active
+                    ? 'text-[var(--color-ink-muted)] hover:text-red-400'
+                    : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400'
+                }`}
+                title="Delete tab"
+              >
+                ✕
+              </button>
+            )}
           </div>
         );
       })}
       <button
         onClick={createTab}
         className="ml-1 rounded px-2 py-1 text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
+        title="New tab"
       >
         +
       </button>
+      {error && (
+        <span className="ml-2 text-xs text-red-400 truncate max-w-[200px]" title={error}>
+          {error}
+        </span>
+      )}
     </div>
   );
 }
