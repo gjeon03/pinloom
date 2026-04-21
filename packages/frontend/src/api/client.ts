@@ -19,8 +19,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface BrowseEntry {
+  name: string;
+  isDir: boolean;
+  hidden: boolean;
+}
+
+export interface BrowseResponse {
+  path: string;
+  parent: string | null;
+  entries: BrowseEntry[];
+}
+
 export const api = {
   health: () => request<HealthResponse>('/api/health'),
+
+  browseDir: (path?: string, showHidden = false) => {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (showHidden) params.set('showHidden', 'true');
+    return request<BrowseResponse>(`/api/fs/browse?${params}`);
+  },
+  homeDir: () => request<{ home: string }>('/api/fs/home'),
 
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (body: { name: string; cwd: string }) =>

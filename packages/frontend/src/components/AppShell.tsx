@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
+import { DirectoryPicker } from './DirectoryPicker.js';
 
 interface Props {
   children: (project: Project | null) => React.ReactNode;
@@ -15,6 +16,7 @@ export function AppShell({ children }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [cwd, setCwd] = useState('');
+  const [picking, setPicking] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,12 +67,14 @@ export function AppShell({ children }: Props) {
               placeholder="Project name"
               className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs"
             />
-            <input
-              value={cwd}
-              onChange={(e) => setCwd(e.target.value)}
-              placeholder="/absolute/path"
-              className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs font-mono"
-            />
+            <button
+              type="button"
+              onClick={() => setPicking(true)}
+              className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs font-mono text-left hover:border-[var(--color-accent)] truncate"
+              title={cwd || 'Click to choose'}
+            >
+              {cwd || 'Choose directory…'}
+            </button>
             <div className="flex gap-1">
               <button
                 type="submit"
@@ -129,6 +133,16 @@ export function AppShell({ children }: Props) {
       <main className="flex-1 min-w-0 flex flex-col">{children(activeProject)}</main>
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {picking && (
+        <DirectoryPicker
+          initialPath={cwd || undefined}
+          onSelect={(p) => {
+            setCwd(p);
+            setPicking(false);
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
     </div>
   );
 }

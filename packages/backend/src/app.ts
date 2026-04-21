@@ -6,6 +6,7 @@ import { projectRoutes } from './routes/projects.js';
 import { planRoutes } from './routes/plans.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { messageRoutes } from './routes/messages.js';
+import { fsRoutes } from './routes/fs.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
 import { checkCli } from './services/cli-check.js';
 
@@ -26,6 +27,7 @@ export async function createApp() {
   await app.register(planRoutes);
   await app.register(sessionRoutes);
   await app.register(messageRoutes);
+  await app.register(fsRoutes);
 
   app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket, request) => {
