@@ -103,26 +103,22 @@ export function SessionPage() {
       </header>
 
       <div className="flex-1 flex min-h-0">
-        {pins.length > 0 ? (
-          <HSplitter
-            storageKey={splitterKey}
-            minLeft={320}
-            minRight={420}
-            left={
+        <HSplitter
+          storageKey={splitterKey}
+          minLeft={320}
+          minRight={420}
+          left={
+            pins.length > 0 ? (
               <PinnedPanel
                 pins={pins}
                 onChange={handlePinsChange}
                 sessionId={session.id}
                 showPopOut={false}
               />
-            }
-            right={<ChatView session={session} onPinChange={handlePinsChange} />}
-          />
-        ) : (
-          <div className="flex-1 min-w-0 flex flex-col">
-            <ChatView session={session} onPinChange={handlePinsChange} />
-          </div>
-        )}
+            ) : null
+          }
+          right={<ChatView session={session} onPinChange={handlePinsChange} />}
+        />
       </div>
 
       <LogsDrawer session={session} />

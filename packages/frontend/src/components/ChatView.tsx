@@ -73,7 +73,12 @@ export function ChatView({ session, onPinChange }: Props) {
   });
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 240) {
+      el.scrollTo({ top: el.scrollHeight });
+    }
   }, [messages.length, running]);
 
   useEffect(() => {

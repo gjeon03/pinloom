@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 interface Props {
-  left: ReactNode;
+  left: ReactNode | null;
   right: ReactNode;
   storageKey?: string;
   minLeft?: number;
@@ -66,32 +66,42 @@ export function HSplitter({
     };
   }, [dragging, minLeft, minRight]);
 
+  const showLeft = left != null && left !== false;
+
   return (
     <div ref={containerRef} className="flex h-full min-h-0 w-full">
-      <div
-        style={{ width: leftWidth ?? '50%' }}
-        className="shrink-0 min-h-0 overflow-hidden"
-      >
-        {left}
-      </div>
-      <div
-        onMouseDown={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        className={`group w-1 shrink-0 cursor-col-resize relative ${
-          dragging ? 'bg-[var(--color-accent)]' : ''
-        }`}
-      >
+      {showLeft && (
         <div
-          className={`absolute inset-y-0 -left-1 w-3 ${
-            dragging
-              ? ''
-              : 'group-hover:bg-[var(--color-accent)]/30 transition-colors'
+          key="left"
+          style={{ width: leftWidth ?? '50%' }}
+          className="shrink-0 min-h-0 overflow-hidden"
+        >
+          {left}
+        </div>
+      )}
+      {showLeft && (
+        <div
+          key="divider"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          className={`group w-1 shrink-0 cursor-col-resize relative ${
+            dragging ? 'bg-[var(--color-accent)]' : ''
           }`}
-        />
+        >
+          <div
+            className={`absolute inset-y-0 -left-1 w-3 ${
+              dragging
+                ? ''
+                : 'group-hover:bg-[var(--color-accent)]/30 transition-colors'
+            }`}
+          />
+        </div>
+      )}
+      <div key="right" className="flex-1 min-w-0 min-h-0 overflow-hidden">
+        {right}
       </div>
-      <div className="flex-1 min-w-0 min-h-0 overflow-hidden">{right}</div>
     </div>
   );
 }

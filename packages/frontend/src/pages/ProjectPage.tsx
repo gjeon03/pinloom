@@ -106,12 +106,12 @@ export function ProjectPage({
       />
 
       <div className="flex-1 flex min-h-0">
-        {pins.length > 0 && activeSession ? (
-          <HSplitter
-            storageKey={`pinloom:splitter:${project.id}`}
-            minLeft={320}
-            minRight={420}
-            left={
+        <HSplitter
+          storageKey={`pinloom:splitter:${project.id}`}
+          minLeft={320}
+          minRight={420}
+          left={
+            pins.length > 0 && activeSession ? (
               <PinnedPanel
                 pins={pins}
                 onChange={handlePinsChange}
@@ -122,18 +122,18 @@ export function ProjectPage({
                 }}
                 onSendPin={(pin) => setSendingPin(pin)}
               />
-            }
-            right={<ChatView session={activeSession} onPinChange={handlePinsChange} />}
-          />
-        ) : activeSession ? (
-          <div className="flex-1 min-w-0 flex flex-col">
-            <ChatView session={activeSession} onPinChange={handlePinsChange} />
-          </div>
-        ) : (
-          <div className="p-6 text-sm text-[var(--color-ink-muted)]">
-            No sessions yet. Click + in the tab bar to create one.
-          </div>
-        )}
+            ) : null
+          }
+          right={
+            activeSession ? (
+              <ChatView session={activeSession} onPinChange={handlePinsChange} />
+            ) : (
+              <div className="p-6 text-sm text-[var(--color-ink-muted)]">
+                No sessions yet. Click + in the tab bar to create one.
+              </div>
+            )
+          }
+        />
       </div>
 
       {activeSession && <LogsDrawer session={activeSession} />}
