@@ -109,7 +109,17 @@ export function ProjectPage({
             storageKey={`pinloom:splitter:${project.id}`}
             minLeft={320}
             minRight={420}
-            left={<PinnedPanel pins={pins} onChange={handlePinsChange} sessionId={activeSession.id} />}
+            left={
+              <PinnedPanel
+                pins={pins}
+                onChange={handlePinsChange}
+                sessionId={activeSession.id}
+                onHandoff={(newSession) => {
+                  setSessions((prev) => [newSession, ...prev]);
+                  setActiveSession(newSession);
+                }}
+              />
+            }
             right={<ChatView session={activeSession} onPinChange={handlePinsChange} />}
           />
         ) : activeSession ? (

@@ -4,6 +4,7 @@ import type { Message, MessageRole, Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { sendUserMessage } from '../services/runner.js';
 import { execShellCommand } from '../services/exec.js';
+import { handoffFromSession } from '../services/handoff.js';
 
 interface SessionRow {
   id: string;
@@ -118,6 +119,19 @@ export async function sessionRoutes(app: FastifyInstance) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
   });
+
+  app.post<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/handoff',
+    async (req, reply) => {
+      try {
+        const newSession = handoffFromSession(req.params.sessionId);
+        return newSession;
+      } catch (err) {
+        reply.code(400);
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
 
   app.post<{
     Params: { sessionId: string };

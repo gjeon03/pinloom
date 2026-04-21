@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
+import { consumeSeedContext } from './handoff.js';
 
 interface PersistArgs {
   sessionId: string;
@@ -361,7 +362,11 @@ async function runAssistant(
 ): Promise<void> {
   broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
 
-  const systemPrompt = SYSTEM_PROMPT + buildPlanContext(planItems);
+  const seed = consumeSeedContext(ctx.id);
+  const systemPrompt =
+    SYSTEM_PROMPT +
+    buildPlanContext(planItems) +
+    (seed ? `\n\n${seed}` : '');
 
   try {
     let finalText = '';

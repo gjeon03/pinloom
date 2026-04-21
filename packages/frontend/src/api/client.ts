@@ -127,6 +127,11 @@ export const api = {
 
   listPins: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/pins`),
+  handoffSession: (sessionId: string) =>
+    request<Session>(`/api/sessions/${sessionId}/handoff`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   updateMessage: (
     messageId: string,
     body: { pinned?: boolean; pinTitle?: string | null },

@@ -9,8 +9,9 @@ import {
   ExternalLink,
   FileText,
   Pin,
+  Split,
 } from 'lucide-react';
-import type { Message } from '@pinloom/shared';
+import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { copyText, downloadMarkdown, slugify } from '../utils/download.js';
 import { Markdown } from './Markdown.js';
@@ -20,6 +21,7 @@ interface Props {
   onChange: (message: Message) => void;
   sessionId?: string;
   showPopOut?: boolean;
+  onHandoff?: (newSession: Session) => void;
 }
 
 function buildBulkMarkdown(pins: Message[]): string {
@@ -36,11 +38,30 @@ function buildBulkMarkdown(pins: Message[]): string {
   return lines.join('\n');
 }
 
-export function PinnedPanel({ pins, onChange, sessionId, showPopOut = true }: Props) {
+export function PinnedPanel({
+  pins,
+  onChange,
+  sessionId,
+  showPopOut = true,
+  onHandoff,
+}: Props) {
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+
   function downloadAll() {
     if (pins.length === 0) return;
     const filename = `pinloom-pins-${new Date().toISOString().slice(0, 10)}.md`;
     downloadMarkdown(filename, buildBulkMarkdown(pins));
+  }
+
+  async function handoff() {
+    if (!sessionId || pins.length === 0) return;
+    setHandoffError(null);
+    try {
+      const created = await api.handoffSession(sessionId);
+      onHandoff?.(created);
+    } catch (err) {
+      setHandoffError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -50,6 +71,15 @@ export function PinnedPanel({ pins, onChange, sessionId, showPopOut = true }: Pr
           Pinned ({pins.length})
         </span>
         <div className="flex items-center gap-1">
+          {onHandoff && pins.length > 0 && sessionId && (
+            <button
+              onClick={handoff}
+              title="Start a new chat seeded with these pins"
+              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
+            >
+              <Split size={14} />
+            </button>
+          )}
           {pins.length > 0 && (
             <button
               onClick={downloadAll}
@@ -72,6 +102,11 @@ export function PinnedPanel({ pins, onChange, sessionId, showPopOut = true }: Pr
           )}
         </div>
       </header>
+      {handoffError && (
+        <p className="text-xs text-red-400 px-4 py-1.5 border-b border-[var(--color-border)]">
+          {handoffError}
+        </p>
+      )}
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {pins.map((pin) => (
           <PinCard key={pin.id} pin={pin} onChange={onChange} />
