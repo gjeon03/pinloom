@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pin, Send, Terminal } from 'lucide-react';
+import { Pin, Send, Square, Terminal } from 'lucide-react';
 import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
@@ -99,6 +99,27 @@ export function ChatView({ session, onPinChange }: Props) {
     }
   }
 
+  async function cancelRun() {
+    if (!running) return;
+    try {
+      await api.cancelRun(session.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  useEffect(() => {
+    if (!running) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelRun();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [running, session.id]);
+
   async function togglePin(message: Message) {
     try {
       const updated = await api.updateMessage(message.id, { pinned: !message.pinned });
@@ -121,7 +142,19 @@ export function ChatView({ session, onPinChange }: Props) {
           <MessageBubble key={m.id} message={m} onTogglePin={togglePin} />
         ))}
         {running && (
-          <div className="text-xs text-[var(--color-ink-muted)] italic">…thinking</div>
+          <div className="flex items-center gap-2 text-xs text-[var(--color-ink-muted)]">
+            <span className="italic">…thinking</span>
+            <button
+              type="button"
+              onClick={cancelRun}
+              title="Cancel (Esc)"
+              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
+            >
+              <Square size={10} fill="currentColor" />
+              <span>Stop</span>
+              <span className="opacity-60 text-[10px]">Esc</span>
+            </button>
+          </div>
         )}
         {error && <p className="text-red-400 text-xs">{error}</p>}
       </div>

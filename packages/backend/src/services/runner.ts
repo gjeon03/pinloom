@@ -213,6 +213,30 @@ function loadRecentHistory(sessionId: string, excludeId: string, limit = 40): Hi
   return rows.reverse();
 }
 
+const activeAbortControllers = new Map<string, AbortController>();
+
+function registerRun(sessionId: string): AbortController {
+  const prior = activeAbortControllers.get(sessionId);
+  if (prior) prior.abort();
+  const controller = new AbortController();
+  activeAbortControllers.set(sessionId, controller);
+  return controller;
+}
+
+function clearRun(sessionId: string, controller: AbortController) {
+  if (activeAbortControllers.get(sessionId) === controller) {
+    activeAbortControllers.delete(sessionId);
+  }
+}
+
+export function cancelAiRun(sessionId: string): boolean {
+  const controller = activeAbortControllers.get(sessionId);
+  if (!controller) return false;
+  controller.abort();
+  activeAbortControllers.delete(sessionId);
+  return true;
+}
+
 function buildFallbackPrompt(history: HistoryMessage[], currentUserMessage: string): string {
   if (history.length === 0) return currentUserMessage;
   const lines: string[] = [
@@ -302,6 +326,7 @@ async function runAttempt(
   planItemId: string | null,
   systemPrompt: string,
   useResume: boolean,
+  abortController: AbortController,
 ): Promise<string> {
   const options: Record<string, unknown> = {
     cwd: ctx.cwd,
@@ -309,6 +334,7 @@ async function runAttempt(
     maxTurns: 20,
     permissionMode: 'bypassPermissions',
     allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
+    abortController,
   };
   if (useResume && ctx.claudeSessionId) {
     options.resume = ctx.claudeSessionId;
@@ -322,6 +348,7 @@ async function runAttempt(
   let finalText = '';
 
   for await (const message of q) {
+    if (abortController.signal.aborted) break;
     if (message.type === 'assistant') {
       const msg = message as AssistantStream;
       if (msg.session_id && msg.session_id !== ctx.claudeSessionId) {
@@ -398,13 +425,16 @@ async function runAssistant(
   const systemPrompt =
     SYSTEM_PROMPT + buildPlanContext(planItems) + (pinsContext ? `\n\n${pinsContext}` : '');
 
+  const abortController = registerRun(ctx.id);
+
   try {
     let finalText = '';
 
     if (ctx.claudeSessionId) {
       try {
-        finalText = await runAttempt(ctx, prompt, planItemId, systemPrompt, true);
+        finalText = await runAttempt(ctx, prompt, planItemId, systemPrompt, true, abortController);
       } catch (err) {
+        if (abortController.signal.aborted) throw err;
         const errMsg = err instanceof Error ? err.message : String(err);
         broadcast(`session:${ctx.id}`, {
           type: 'run_log',
@@ -417,7 +447,7 @@ async function runAssistant(
       }
     }
 
-    if (!ctx.claudeSessionId) {
+    if (!ctx.claudeSessionId && !abortController.signal.aborted) {
       const userMsgRow = getDb()
         .prepare(
           'SELECT id FROM messages WHERE session_id = ? AND role = ? ORDER BY created_at DESC LIMIT 1',
@@ -432,7 +462,24 @@ async function runAssistant(
         planItemId,
         systemPrompt,
         false,
+        abortController,
       );
+    }
+
+    if (abortController.signal.aborted) {
+      persistMessage({
+        sessionId: ctx.id,
+        planItemId,
+        role: 'system',
+        content: '[cancelled by user]',
+      });
+      broadcast(`session:${ctx.id}`, {
+        type: 'run_status',
+        sessionId: ctx.id,
+        status: 'error',
+        error: 'cancelled',
+      });
+      return;
     }
 
     if (finalText.trim().length > 0) {
@@ -450,6 +497,21 @@ async function runAssistant(
       status: 'finished',
     });
   } catch (err) {
+    if (abortController.signal.aborted) {
+      persistMessage({
+        sessionId: ctx.id,
+        planItemId,
+        role: 'system',
+        content: '[cancelled by user]',
+      });
+      broadcast(`session:${ctx.id}`, {
+        type: 'run_status',
+        sessionId: ctx.id,
+        status: 'error',
+        error: 'cancelled',
+      });
+      return;
+    }
     const errorMsg = err instanceof Error ? err.message : String(err);
     persistMessage({
       sessionId: ctx.id,
@@ -463,5 +525,7 @@ async function runAssistant(
       status: 'error',
       error: errorMsg,
     });
+  } finally {
+    clearRun(ctx.id, abortController);
   }
 }

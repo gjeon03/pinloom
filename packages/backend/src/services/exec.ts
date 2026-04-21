@@ -1,8 +1,19 @@
 import { spawn } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { nanoid } from 'nanoid';
 import type { Message } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
+
+const activeChildren = new Map<string, ChildProcessWithoutNullStreams>();
+
+export function cancelExecRun(sessionId: string): boolean {
+  const child = activeChildren.get(sessionId);
+  if (!child) return false;
+  child.kill('SIGTERM');
+  activeChildren.delete(sessionId);
+  return true;
+}
 
 interface ExecResult {
   stdout: string;
@@ -14,12 +25,13 @@ interface ExecResult {
 const EXEC_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 512 * 1024;
 
-function runBash(command: string, cwd: string): Promise<ExecResult> {
+function runBash(command: string, cwd: string, sessionId: string): Promise<ExecResult> {
   return new Promise((resolve) => {
     const child = spawn('bash', ['-lc', command], {
       cwd,
       env: process.env,
     });
+    activeChildren.set(sessionId, child);
 
     let stdout = '';
     let stderr = '';
@@ -48,6 +60,7 @@ function runBash(command: string, cwd: string): Promise<ExecResult> {
 
     child.on('error', (err) => {
       clearTimeout(timer);
+      if (activeChildren.get(sessionId) === child) activeChildren.delete(sessionId);
       resolve({
         stdout,
         stderr: stderr + (stderr ? '\n' : '') + String(err),
@@ -58,6 +71,7 @@ function runBash(command: string, cwd: string): Promise<ExecResult> {
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      if (activeChildren.get(sessionId) === child) activeChildren.delete(sessionId);
       resolve({ stdout, stderr, exitCode: code, signal });
     });
   });
@@ -132,7 +146,7 @@ export async function execShellCommand(
     content: `! ${command}`,
   });
 
-  const result = await runBash(command, cwd);
+  const result = await runBash(command, cwd, sessionId);
 
   const summaryParts: string[] = [];
   if (result.stdout) summaryParts.push(result.stdout);

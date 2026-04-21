@@ -117,6 +117,11 @@ export const api = {
         body: JSON.stringify({ command }),
       },
     ),
+  cancelRun: (sessionId: string) =>
+    request<{ cancelled: boolean; ai: boolean; exec: boolean }>(
+      `/api/sessions/${sessionId}/cancel`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
   deleteSession: (sessionId: string) =>
     request<{ ok: true }>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
   renameSession: (sessionId: string, title: string | null) =>
