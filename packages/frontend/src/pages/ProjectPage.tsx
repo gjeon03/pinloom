@@ -89,7 +89,7 @@ export function ProjectPage({
         activeSessionId={activeSession?.id ?? null}
         onSelect={setActiveSession}
         onCreate={(s) => {
-          setSessions((prev) => [s, ...prev]);
+          setSessions((prev) => [...prev, s]);
           setActiveSession(s);
         }}
         onDelete={(id) => {
@@ -103,6 +103,7 @@ export function ProjectPage({
           setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
           if (activeSession?.id === updated.id) setActiveSession(updated);
         }}
+        onReorder={(reordered) => setSessions(reordered)}
       />
 
       <div className="flex-1 flex min-h-0">
@@ -117,7 +118,7 @@ export function ProjectPage({
                 onChange={handlePinsChange}
                 sessionId={activeSession.id}
                 onHandoff={(newSession) => {
-                  setSessions((prev) => [newSession, ...prev]);
+                  setSessions((prev) => [...prev, newSession]);
                   setActiveSession(newSession);
                 }}
                 onSendPin={(pin) => setSendingPin(pin)}
@@ -145,7 +146,7 @@ export function ProjectPage({
           sessions={sessions}
           currentSessionId={activeSession.id}
           onClose={() => setSendingPin(null)}
-          onNewSessionCreated={(s) => setSessions((prev) => [s, ...prev])}
+          onNewSessionCreated={(s) => setSessions((prev) => [...prev, s])}
         />
       )}
     </div>

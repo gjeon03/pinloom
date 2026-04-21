@@ -101,11 +101,27 @@ export function handoffFromSession(sourceSessionId: string): Session {
   const now = new Date().toISOString();
   const title = source.title ? `${source.title} (handoff)` : 'Handoff';
 
+  const maxOrder = db
+    .prepare(
+      'SELECT COALESCE(MAX(order_index), -1) AS max FROM sessions WHERE project_id = ?',
+    )
+    .get(source.project_id) as { max: number };
+  const nextOrder = maxOrder.max + 1;
+
   db.prepare(
     `INSERT INTO sessions
-       (id, project_id, plan_id, claude_session_id, title, source_session_id, created_at, updated_at)
-     VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
-  ).run(newId, source.project_id, source.plan_id, title, sourceSessionId, now, now);
+       (id, project_id, plan_id, claude_session_id, title, order_index, source_session_id, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
+  ).run(
+    newId,
+    source.project_id,
+    source.plan_id,
+    title,
+    nextOrder,
+    sourceSessionId,
+    now,
+    now,
+  );
 
   for (const pin of pins) {
     const copied = copyPinToSession(db, pin, newId, now);

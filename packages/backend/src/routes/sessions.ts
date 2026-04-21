@@ -71,7 +71,9 @@ export async function sessionRoutes(app: FastifyInstance) {
     '/api/projects/:projectId/sessions',
     async (req) => {
       const rows = db
-        .prepare('SELECT * FROM sessions WHERE project_id = ? ORDER BY updated_at DESC')
+        .prepare(
+          'SELECT * FROM sessions WHERE project_id = ? ORDER BY order_index ASC, created_at ASC',
+        )
         .all(req.params.projectId) as SessionRow[];
       return rows.map(toSession);
     },
@@ -83,13 +85,53 @@ export async function sessionRoutes(app: FastifyInstance) {
   }>('/api/projects/:projectId/sessions', async (req) => {
     const id = nanoid();
     const now = new Date().toISOString();
+    const maxRow = db
+      .prepare(
+        'SELECT COALESCE(MAX(order_index), -1) AS max FROM sessions WHERE project_id = ?',
+      )
+      .get(req.params.projectId) as { max: number };
+    const nextOrder = maxRow.max + 1;
     db.prepare(
       `INSERT INTO sessions
-         (id, project_id, plan_id, claude_session_id, title, created_at, updated_at)
-       VALUES (?, ?, ?, NULL, ?, ?, ?)`,
-    ).run(id, req.params.projectId, req.body.planId ?? null, req.body.title ?? null, now, now);
+         (id, project_id, plan_id, claude_session_id, title, order_index, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      req.params.projectId,
+      req.body.planId ?? null,
+      req.body.title ?? null,
+      nextOrder,
+      now,
+      now,
+    );
     const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as SessionRow;
     return toSession(row);
+  });
+
+  app.post<{
+    Params: { projectId: string };
+    Body: { ids: string[] };
+  }>('/api/projects/:projectId/sessions/reorder', async (req, reply) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      reply.code(400);
+      return { error: 'ids array is required' };
+    }
+    const now = new Date().toISOString();
+    const update = db.prepare(
+      'UPDATE sessions SET order_index = ?, updated_at = ? WHERE id = ? AND project_id = ?',
+    );
+    const tx = db.transaction((list: string[]) => {
+      list.forEach((id, i) => update.run(i, now, id, req.params.projectId));
+    });
+    tx(ids);
+
+    const rows = db
+      .prepare(
+        'SELECT * FROM sessions WHERE project_id = ? ORDER BY order_index ASC, created_at ASC',
+      )
+      .all(req.params.projectId) as SessionRow[];
+    return rows.map(toSession);
   });
 
   app.get<{ Params: { sessionId: string } }>(

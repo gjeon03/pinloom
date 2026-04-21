@@ -93,6 +93,18 @@ const MIGRATIONS: { id: number; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_projects_order ON projects(order_index);
     `,
   },
+  {
+    id: 6,
+    sql: `
+      ALTER TABLE sessions ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0;
+      UPDATE sessions
+         SET order_index = (
+           SELECT COUNT(*) FROM sessions s2
+           WHERE s2.project_id = sessions.project_id AND s2.created_at < sessions.created_at
+         );
+      CREATE INDEX IF NOT EXISTS idx_sessions_order ON sessions(project_id, order_index);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

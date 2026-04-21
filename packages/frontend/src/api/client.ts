@@ -138,6 +138,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ title }),
     }),
+  reorderSessions: (projectId: string, ids: string[]) =>
+    request<Session[]>(`/api/projects/${projectId}/sessions/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
 
   listPins: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/pins`),
