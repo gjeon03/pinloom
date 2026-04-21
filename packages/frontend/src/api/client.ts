@@ -132,6 +132,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({}),
     }),
+  injectPin: (targetSessionId: string, pinMessageId: string) =>
+    request<{ sessionId: string; queuedLength: number }>(
+      `/api/sessions/${targetSessionId}/inject-pin`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ pinMessageId }),
+      },
+    ),
   updateMessage: (
     messageId: string,
     body: { pinned?: boolean; pinTitle?: string | null },

@@ -7,6 +7,7 @@ import { PinnedPanel } from '../components/PinnedPanel.js';
 import { LogsDrawer } from '../components/LogsDrawer.js';
 import { HSplitter } from '../components/HSplitter.js';
 import { EditableTitle } from '../components/EditableTitle.js';
+import { SessionPickerModal } from '../components/SessionPickerModal.js';
 
 export function ProjectPage({
   project,
@@ -18,6 +19,7 @@ export function ProjectPage({
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [pins, setPins] = useState<Message[]>([]);
+  const [sendingPin, setSendingPin] = useState<Message | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,6 +120,7 @@ export function ProjectPage({
                   setSessions((prev) => [newSession, ...prev]);
                   setActiveSession(newSession);
                 }}
+                onSendPin={(pin) => setSendingPin(pin)}
               />
             }
             right={<ChatView session={activeSession} onPinChange={handlePinsChange} />}
@@ -134,6 +137,17 @@ export function ProjectPage({
       </div>
 
       {activeSession && <LogsDrawer session={activeSession} />}
+
+      {sendingPin && activeSession && (
+        <SessionPickerModal
+          pin={sendingPin}
+          projectId={project.id}
+          sessions={sessions}
+          currentSessionId={activeSession.id}
+          onClose={() => setSendingPin(null)}
+          onNewSessionCreated={(s) => setSessions((prev) => [s, ...prev])}
+        />
+      )}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   ExternalLink,
   FileText,
   Pin,
+  Send,
   Split,
 } from 'lucide-react';
 import type { Message, Session } from '@pinloom/shared';
@@ -22,6 +23,7 @@ interface Props {
   sessionId?: string;
   showPopOut?: boolean;
   onHandoff?: (newSession: Session) => void;
+  onSendPin?: (pin: Message) => void;
 }
 
 function buildBulkMarkdown(pins: Message[]): string {
@@ -44,6 +46,7 @@ export function PinnedPanel({
   sessionId,
   showPopOut = true,
   onHandoff,
+  onSendPin,
 }: Props) {
   const [handoffError, setHandoffError] = useState<string | null>(null);
 
@@ -109,14 +112,22 @@ export function PinnedPanel({
       )}
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {pins.map((pin) => (
-          <PinCard key={pin.id} pin={pin} onChange={onChange} />
+          <PinCard key={pin.id} pin={pin} onChange={onChange} onSend={onSendPin} />
         ))}
       </div>
     </aside>
   );
 }
 
-function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => void }) {
+function PinCard({
+  pin,
+  onChange,
+  onSend,
+}: {
+  pin: Message;
+  onChange: (m: Message) => void;
+  onSend?: (pin: Message) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(pin.pinTitle ?? '');
   const [collapsed, setCollapsed] = useState(false);
@@ -208,6 +219,15 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
         >
           <Download size={14} />
         </button>
+        {onSend && (
+          <button
+            onClick={() => onSend(pin)}
+            title="Send this pin to another session"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
+          >
+            <Send size={14} />
+          </button>
+        )}
         <button
           onClick={unpin}
           title="Unpin"
