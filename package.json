@@ -6,13 +6,17 @@
   "description": "Plan-first AI workspace. Every task starts with a living plan.",
   "license": "MIT",
   "scripts": {
-    "build": "pnpm -r --filter @pinloom/shared build && pnpm -r --filter @pinloom/backend build && pnpm -r --filter @pinloom/frontend build",
+    "build:shared": "pnpm --filter @pinloom/shared build",
+    "build": "pnpm build:shared && pnpm -r --filter @pinloom/backend build && pnpm -r --filter @pinloom/frontend build",
+    "predev": "pnpm build:shared",
+    "predev:backend": "pnpm build:shared",
+    "predev:frontend": "pnpm build:shared",
     "dev": "concurrently \"pnpm --filter @pinloom/backend dev\" \"pnpm --filter @pinloom/frontend dev\"",
     "dev:backend": "pnpm --filter @pinloom/backend dev",
     "dev:frontend": "pnpm --filter @pinloom/frontend dev",
     "typecheck": "tsc -b",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
-    "postinstall": "pnpm --filter @pinloom/shared build"
+    "postinstall": "pnpm build:shared"
   },
   "engines": {
     "node": ">=22"
