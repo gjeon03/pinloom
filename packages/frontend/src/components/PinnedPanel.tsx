@@ -5,13 +5,28 @@ import { api } from '../api/client.js';
 interface Props {
   pins: Message[];
   onChange: (message: Message) => void;
+  sessionId?: string;
+  showPopOut?: boolean;
 }
 
-export function PinnedPanel({ pins, onChange }: Props) {
+export function PinnedPanel({ pins, onChange, sessionId, showPopOut = true }: Props) {
   return (
     <aside className="h-full w-full border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col min-h-0">
-      <header className="border-b border-[var(--color-border)] px-4 py-2 text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
-        Pinned ({pins.length})
+      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
+          Pinned ({pins.length})
+        </span>
+        {showPopOut && sessionId && (
+          <a
+            href={`/pins/${sessionId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open pins in new tab"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-sm px-1"
+          >
+            ↗
+          </a>
+        )}
       </header>
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {pins.map((pin) => (
