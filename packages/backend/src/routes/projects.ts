@@ -46,6 +46,34 @@ export async function projectRoutes(app: FastifyInstance) {
     return toProject(row);
   });
 
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string };
+  }>('/api/projects/:id', async (req, reply) => {
+    const existing = db
+      .prepare('SELECT * FROM projects WHERE id = ?')
+      .get(req.params.id) as ProjectRow | undefined;
+    if (!existing) {
+      reply.code(404);
+      return { error: 'project not found' };
+    }
+    const nextName = req.body.name?.trim();
+    if (nextName !== undefined && nextName.length === 0) {
+      reply.code(400);
+      return { error: 'name cannot be empty' };
+    }
+    const now = new Date().toISOString();
+    db.prepare('UPDATE projects SET name = ?, updated_at = ? WHERE id = ?').run(
+      nextName ?? existing.name,
+      now,
+      req.params.id,
+    );
+    const row = db
+      .prepare('SELECT * FROM projects WHERE id = ?')
+      .get(req.params.id) as ProjectRow;
+    return toProject(row);
+  });
+
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req) => {
     db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
     return { ok: true };

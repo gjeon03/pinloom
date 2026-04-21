@@ -11,9 +11,9 @@ export function App() {
         path="/projects/:projectId"
         element={
           <AppShell>
-            {(project) =>
+            {(project, { onProjectRenamed }) =>
               project ? (
-                <ProjectPage project={project} />
+                <ProjectPage project={project} onRenamed={onProjectRenamed} />
               ) : (
                 <div className="p-6 text-sm">Loading…</div>
               )

@@ -56,6 +56,11 @@ export const api = {
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
   deleteProject: (id: string) =>
     request<{ ok: true }>(`/api/projects/${id}`, { method: 'DELETE' }),
+  renameProject: (id: string, name: string) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
 
   listPlans: (projectId: string) =>
     request<Plan[]>(`/api/projects/${projectId}/plans`),

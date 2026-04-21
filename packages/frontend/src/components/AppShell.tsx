@@ -6,8 +6,12 @@ import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
 import { DirectoryPicker } from './DirectoryPicker.js';
 
+interface ShellHelpers {
+  onProjectRenamed: (project: Project) => void;
+}
+
 interface Props {
-  children: (project: Project | null) => React.ReactNode;
+  children: (project: Project | null, helpers: ShellHelpers) => React.ReactNode;
 }
 
 export function AppShell({ children }: Props) {
@@ -133,7 +137,13 @@ export function AppShell({ children }: Props) {
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0 flex flex-col">{children(activeProject)}</main>
+      <main className="flex-1 min-w-0 flex flex-col">
+        {children(activeProject, {
+          onProjectRenamed: (updated) => {
+            setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+          },
+        })}
+      </main>
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       {picking && (

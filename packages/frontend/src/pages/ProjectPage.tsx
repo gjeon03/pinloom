@@ -6,8 +6,15 @@ import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { LogsDrawer } from '../components/LogsDrawer.js';
 import { HSplitter } from '../components/HSplitter.js';
+import { EditableTitle } from '../components/EditableTitle.js';
 
-export function ProjectPage({ project }: { project: Project }) {
+export function ProjectPage({
+  project,
+  onRenamed,
+}: {
+  project: Project;
+  onRenamed?: (project: Project) => void;
+}) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [pins, setPins] = useState<Message[]>([]);
@@ -60,7 +67,14 @@ export function ProjectPage({ project }: { project: Project }) {
     <div className="flex flex-col h-full min-h-0">
       <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3">
         <div>
-          <div className="text-sm font-semibold">{project.name}</div>
+          <EditableTitle
+            value={project.name}
+            onSave={async (next) => {
+              const updated = await api.renameProject(project.id, next);
+              onRenamed?.(updated);
+            }}
+            className="text-sm font-semibold"
+          />
           <div className="text-[10px] text-[var(--color-ink-muted)] font-mono">
             {project.cwd}
           </div>
