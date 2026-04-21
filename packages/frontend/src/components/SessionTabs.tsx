@@ -31,7 +31,7 @@ export function SessionTabs({
   async function createTab() {
     try {
       const created = await api.createSession(projectId, {
-        title: `New chat ${sessions.length + 1}`,
+        title: 'New chat',
       });
       onCreate(created);
     } catch (err) {
