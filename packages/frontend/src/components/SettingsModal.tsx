@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { HealthResponse } from '@planloom/shared';
+import type { HealthResponse } from '@pinloom/shared';
 import { api } from '../api/client.js';
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {

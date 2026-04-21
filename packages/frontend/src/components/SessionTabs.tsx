@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Session } from '@planloom/shared';
+import type { Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 
 interface Props {

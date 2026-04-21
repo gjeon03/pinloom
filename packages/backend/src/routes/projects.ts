@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
-import type { Project } from '@planloom/shared';
+import type { Project } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 
 interface ProjectRow {

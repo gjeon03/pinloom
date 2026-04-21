@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { Project } from '@planloom/shared';
+import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
 
@@ -43,7 +43,7 @@ export function AppShell({ children }: Props) {
     <div className="flex h-full">
       <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
         <div className="px-3 py-3 flex items-center justify-between">
-          <div className="text-sm font-semibold tracking-wide">planloom</div>
+          <div className="text-sm font-semibold tracking-wide">pinloom</div>
           <button
             onClick={() => setAdding((v) => !v)}
             title="New project"

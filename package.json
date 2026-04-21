@@ -1,15 +1,15 @@
 {
-  "name": "planloom",
+  "name": "pinloom",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "description": "Plan-first AI workspace. Every task starts with a living plan.",
   "license": "MIT",
   "scripts": {
-    "build": "pnpm -r --filter @planloom/shared build && pnpm -r --filter @planloom/backend build && pnpm -r --filter @planloom/frontend build",
-    "dev": "concurrently \"pnpm --filter @planloom/backend dev\" \"pnpm --filter @planloom/frontend dev\"",
-    "dev:backend": "pnpm --filter @planloom/backend dev",
-    "dev:frontend": "pnpm --filter @planloom/frontend dev",
+    "build": "pnpm -r --filter @pinloom/shared build && pnpm -r --filter @pinloom/backend build && pnpm -r --filter @pinloom/frontend build",
+    "dev": "concurrently \"pnpm --filter @pinloom/backend dev\" \"pnpm --filter @pinloom/frontend dev\"",
+    "dev:backend": "pnpm --filter @pinloom/backend dev",
+    "dev:frontend": "pnpm --filter @pinloom/frontend dev",
     "typecheck": "tsc -b",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo"
   },

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Message } from '@planloom/shared';
+import type { Message } from '@pinloom/shared';
 import { api } from '../api/client.js';
 
 interface Props {

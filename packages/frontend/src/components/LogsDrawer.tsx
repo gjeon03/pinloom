@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Session } from '@planloom/shared';
+import type { Session } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 
 interface LogLine {

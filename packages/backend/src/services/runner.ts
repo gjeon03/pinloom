@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { nanoid } from 'nanoid';
-import type { Message, MessageRole } from '@planloom/shared';
+import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 
@@ -62,7 +62,7 @@ function toolResultText(content: unknown): string {
   return '';
 }
 
-const SYSTEM_PROMPT = `You are the AI assistant embedded in planloom, a plan-first local coding workspace.
+const SYSTEM_PROMPT = `You are the AI assistant embedded in pinloom, a plan-first local coding workspace.
 
 Rules:
 - You are scoped to ONE project on disk (cwd is set for you). Operate on files there.

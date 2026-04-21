@@ -1,5 +1,5 @@
 {
-  "name": "@planloom/frontend",
+  "name": "@pinloom/frontend",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@planloom/shared": "workspace:*",
+    "@pinloom/shared": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.1.3"

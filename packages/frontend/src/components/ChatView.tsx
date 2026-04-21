@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Message, Session } from '@planloom/shared';
+import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';

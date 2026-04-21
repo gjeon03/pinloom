@@ -5,7 +5,7 @@ import type {
   PlanItem,
   Project,
   Session,
-} from '@planloom/shared';
+} from '@pinloom/shared';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {

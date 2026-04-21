@@ -3,9 +3,9 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runMigrations } from './migrations.js';
 
-const DB_PATH = process.env.PLANLOOM_DB_PATH
-  ? resolve(process.env.PLANLOOM_DB_PATH)
-  : resolve(process.cwd(), '../../data/planloom.sqlite');
+const DB_PATH = process.env.PINLOOM_DB_PATH
+  ? resolve(process.env.PINLOOM_DB_PATH)
+  : resolve(process.cwd(), '../../data/pinloom.sqlite');
 
 let db: Database.Database | null = null;
 

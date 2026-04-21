@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Message, Project, Session } from '@planloom/shared';
+import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { SessionTabs } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
@@ -92,7 +92,7 @@ export function ProjectPage({ project }: { project: Project }) {
       <div className="flex-1 flex min-h-0">
         {pins.length > 0 && activeSession ? (
           <HSplitter
-            storageKey={`planloom:splitter:${project.id}`}
+            storageKey={`pinloom:splitter:${project.id}`}
             minLeft={320}
             minRight={420}
             left={<PinnedPanel pins={pins} onChange={handlePinsChange} />}

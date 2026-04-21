@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { WsEvent } from '@planloom/shared';
+import type { WsEvent } from '@pinloom/shared';
 
 const channels = new Map<string, Set<WebSocket>>();
 

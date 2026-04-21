@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
-import type { Plan, PlanItem, PlanItemStatus, PlanStatus } from '@planloom/shared';
+import type { Plan, PlanItem, PlanItemStatus, PlanStatus } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 

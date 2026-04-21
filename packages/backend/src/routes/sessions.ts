@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
-import type { Message, MessageRole, Session } from '@planloom/shared';
+import type { Message, MessageRole, Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { sendUserMessage } from '../services/runner.js';
 

@@ -1,4 +1,4 @@
-# planloom
+# pinloom
 
 Plan-first AI workspace. Local open-source tool.
 
@@ -24,12 +24,12 @@ pnpm dev:frontend    # frontend only
 - **Plan**: a structured, hierarchical document of plan items. First-class object.
 - **PlanItem**: one node in the plan (title, body, status). Chat messages and runs attach here.
 - **Session**: a conversation with the AI scoped to a project (optionally pinned to a plan item).
-- **Message**: stored in planloom's SQLite. Mirrors what the SDK streams. Survives `~/.claude/` resets.
+- **Message**: stored in pinloom's SQLite. Mirrors what the SDK streams. Survives `~/.claude/` resets.
 
 ## Design rules
 
 1. Plan is the source of truth. Diffs/logs/chat hang off plan items.
-2. planloom's SQLite owns the conversation history. Do not depend on `~/.claude/projects/*.jsonl`.
+2. pinloom's SQLite owns the conversation history. Do not depend on `~/.claude/projects/*.jsonl`.
 3. No auto-deletion. Sessions/plans/messages only go away via explicit user action.
 4. Local-only. No auth, no multi-user, no cloud sync in MVP.
 
@@ -45,4 +45,4 @@ pnpm typecheck       # tsc -b
 - TypeScript strict mode, ESM only
 - Named exports (React components too)
 - 2-space indent (JS/TS/JSON/YAML)
-- DB: SQLite WAL mode, `data/planloom.sqlite`
+- DB: SQLite WAL mode, `data/pinloom.sqlite`

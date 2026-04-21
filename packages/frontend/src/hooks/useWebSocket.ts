@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { WsEvent } from '@planloom/shared';
+import type { WsEvent } from '@pinloom/shared';
 
 export function useWebSocket(channel: string | null, onEvent: (ev: WsEvent) => void) {
   const handlerRef = useRef(onEvent);

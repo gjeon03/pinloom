@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { Message } from '@planloom/shared';
+import type { Message } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { summarizeForPin, toMessage } from './sessions.js';

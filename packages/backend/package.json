@@ -1,5 +1,5 @@
 {
-  "name": "@planloom/backend",
+  "name": "@pinloom/backend",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.96",
     "@fastify/cors": "^10.0.2",
     "@fastify/websocket": "^11.0.2",
-    "@planloom/shared": "workspace:*",
+    "@pinloom/shared": "workspace:*",
     "better-sqlite3": "^11.8.1",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
