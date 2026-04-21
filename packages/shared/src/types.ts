@@ -37,6 +37,7 @@ export interface Session {
   planId: string | null;
   claudeSessionId: string | null;
   title: string | null;
+  hasPendingContext: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,4 +69,5 @@ export type WsEvent =
   | { type: 'message_updated'; sessionId: string; message: Message }
   | { type: 'plan_item_updated'; planId: string; item: PlanItem }
   | { type: 'run_log'; sessionId: string; stream: 'stdout' | 'stderr'; chunk: string }
-  | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string };
+  | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string }
+  | { type: 'session_updated'; sessionId: string; session: Session };

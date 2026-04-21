@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { useWebSocket } from '../hooks/useWebSocket.js';
 import { SessionTabs } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
@@ -20,6 +21,15 @@ export function ProjectPage({
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [pins, setPins] = useState<Message[]>([]);
   const [sendingPin, setSendingPin] = useState<Message | null>(null);
+
+  useWebSocket(`project:${project.id}`, (ev) => {
+    if (ev.type === 'session_updated' && ev.session.projectId === project.id) {
+      setSessions((prev) => prev.map((s) => (s.id === ev.session.id ? ev.session : s)));
+      if (activeSession?.id === ev.session.id) {
+        setActiveSession(ev.session);
+      }
+    }
+  });
 
   useEffect(() => {
     let cancelled = false;

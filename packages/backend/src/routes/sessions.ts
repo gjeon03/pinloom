@@ -12,6 +12,7 @@ interface SessionRow {
   plan_id: string | null;
   claude_session_id: string | null;
   title: string | null;
+  seed_context: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -28,13 +29,14 @@ interface MessageRow {
   created_at: string;
 }
 
-function toSession(row: SessionRow): Session {
+export function toSession(row: SessionRow): Session {
   return {
     id: row.id,
     projectId: row.project_id,
     planId: row.plan_id,
     claudeSessionId: row.claude_session_id,
     title: row.title,
+    hasPendingContext: !!row.seed_context && row.seed_context.length > 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid';
 import type { Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
+import { broadcast } from '../ws/hub.js';
 
 interface SessionRow {
   id: string;
@@ -8,6 +9,7 @@ interface SessionRow {
   plan_id: string | null;
   claude_session_id: string | null;
   title: string | null;
+  seed_context: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -19,9 +21,21 @@ function toSession(row: SessionRow): Session {
     planId: row.plan_id,
     claudeSessionId: row.claude_session_id,
     title: row.title,
+    hasPendingContext: !!row.seed_context && row.seed_context.length > 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function broadcastSessionUpdate(sessionId: string) {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as
+    | SessionRow
+    | undefined;
+  if (!row) return;
+  const session = toSession(row);
+  broadcast(`session:${sessionId}`, { type: 'session_updated', sessionId, session });
+  broadcast(`project:${row.project_id}`, { type: 'session_updated', sessionId, session });
 }
 
 interface PinRow {
@@ -100,6 +114,7 @@ export function consumeSeedContext(sessionId: string): string | null {
   if (!row?.seed_context) return null;
 
   db.prepare('UPDATE sessions SET seed_context = NULL WHERE id = ?').run(sessionId);
+  broadcastSessionUpdate(sessionId);
   return row.seed_context;
 }
 
@@ -164,6 +179,8 @@ export function injectPinIntoSession(
     new Date().toISOString(),
     targetSessionId,
   );
+
+  broadcastSessionUpdate(targetSessionId);
 
   return { sessionId: targetSessionId, queuedLength: nextContext.length };
 }

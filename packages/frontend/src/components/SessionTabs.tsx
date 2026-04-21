@@ -95,7 +95,15 @@ export function SessionTabs({
                 className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-1 text-sm w-32"
               />
             ) : (
-              <span className="truncate max-w-[180px]">{label}</span>
+              <>
+                <span className="truncate max-w-[180px]">{label}</span>
+                {s.hasPendingContext && (
+                  <span
+                    title="Pinned context queued for the next message"
+                    className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
+                  />
+                )}
+              </>
             )}
             <a
               href={`/s/${s.id}`}
