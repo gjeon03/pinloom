@@ -230,8 +230,9 @@ export function SessionTabs({
       {(() => {
         const lastId = sessions[sessions.length - 1]?.id;
         const showTail =
+          !!lastId &&
           dropTarget?.id === lastId &&
-          dropTarget.position === 'after' &&
+          dropTarget?.position === 'after' &&
           draggingId !== lastId;
         return (
           <div

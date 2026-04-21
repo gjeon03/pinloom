@@ -192,8 +192,9 @@ export function AppShell({ children }: Props) {
           {(() => {
             const lastId = projects[projects.length - 1]?.id;
             const showTail =
+              !!lastId &&
               dropTarget?.id === lastId &&
-              dropTarget.position === 'after' &&
+              dropTarget?.position === 'after' &&
               draggingId !== lastId;
             return (
               <div
