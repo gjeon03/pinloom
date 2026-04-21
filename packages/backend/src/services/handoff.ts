@@ -88,16 +88,6 @@ export function handoffFromSession(sourceSessionId: string): Session {
     now,
   );
 
-  const insertPin = db.prepare(
-    `INSERT INTO messages
-       (id, session_id, plan_item_id, role, content, tool_use, pinned, pin_title, created_at)
-     VALUES (?, ?, NULL, 'assistant', ?, NULL, 1, ?, ?)`,
-  );
-
-  for (const pin of pins) {
-    insertPin.run(nanoid(), newId, pin.content, pin.pin_title, now);
-  }
-
   const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(newId) as SessionRow;
   return toSession(row);
 }
