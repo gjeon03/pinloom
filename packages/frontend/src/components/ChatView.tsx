@@ -52,7 +52,9 @@ export function ChatView({ session, onPinChange }: Props) {
       if (ev.status === 'started') setRunning(true);
       else {
         setRunning(false);
-        if (ev.status === 'error' && ev.error) setError(ev.error);
+        if (ev.status === 'error' && ev.error && ev.error !== 'cancelled') {
+          setError(ev.error);
+        }
       }
     }
   });
