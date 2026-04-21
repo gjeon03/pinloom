@@ -35,6 +35,11 @@ export function ChatView({ session, onPinChange }: Props) {
 
   useWebSocket(`session:${session.id}`, (ev) => {
     if (ev.type === 'message' && ev.sessionId === session.id) {
+      // Copied pins (sourceMessageId set) go only to the pinned panel, not chat.
+      if (ev.message.sourceMessageId) {
+        onPinChange(ev.message);
+        return;
+      }
       setMessages((prev) =>
         prev.some((m) => m.id === ev.message.id) ? prev : [...prev, ev.message],
       );
@@ -42,6 +47,7 @@ export function ChatView({ session, onPinChange }: Props) {
       setMessages((prev) =>
         prev.map((m) => (m.id === ev.message.id ? ev.message : m)),
       );
+      onPinChange(ev.message);
     } else if (ev.type === 'run_status' && ev.sessionId === session.id) {
       if (ev.status === 'started') setRunning(true);
       else {
@@ -105,14 +111,6 @@ export function ChatView({ session, onPinChange }: Props) {
 
   return (
     <div className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full">
-      {session.hasPendingContext && (
-        <div className="border-b border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 px-4 py-1.5 text-xs flex items-center gap-2">
-          <Pin size={12} fill="currentColor" className="text-[var(--color-accent)]" />
-          <span className="text-[var(--color-ink)]/80">
-            Pinned context queued — will be included with your next message.
-          </span>
-        </div>
-      )}
       <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3 text-sm">
         {messages.length === 0 && (
           <p className="text-[var(--color-ink-muted)]">

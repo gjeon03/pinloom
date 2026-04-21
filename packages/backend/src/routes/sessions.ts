@@ -12,7 +12,6 @@ interface SessionRow {
   plan_id: string | null;
   claude_session_id: string | null;
   title: string | null;
-  seed_context: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -26,6 +25,7 @@ interface MessageRow {
   tool_use: string | null;
   pinned: number;
   pin_title: string | null;
+  source_message_id: string | null;
   created_at: string;
 }
 
@@ -36,7 +36,6 @@ export function toSession(row: SessionRow): Session {
     planId: row.plan_id,
     claudeSessionId: row.claude_session_id,
     title: row.title,
-    hasPendingContext: !!row.seed_context && row.seed_context.length > 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -52,6 +51,7 @@ export function toMessage(row: MessageRow): Message {
     toolUse: row.tool_use,
     pinned: row.pinned === 1,
     pinTitle: row.pin_title,
+    sourceMessageId: row.source_message_id,
     createdAt: row.created_at,
   };
 }
@@ -97,7 +97,9 @@ export async function sessionRoutes(app: FastifyInstance) {
     async (req) => {
       const rows = db
         .prepare(
-          'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC',
+          `SELECT * FROM messages
+           WHERE session_id = ? AND source_message_id IS NULL
+           ORDER BY created_at ASC`,
         )
         .all(req.params.sessionId) as MessageRow[];
       return rows.map(toMessage);
@@ -132,7 +134,8 @@ export async function sessionRoutes(app: FastifyInstance) {
       return { error: 'pinMessageId is required' };
     }
     try {
-      return injectPinIntoSession(req.params.sessionId, pinMessageId);
+      const message = injectPinIntoSession(req.params.sessionId, pinMessageId);
+      return { sessionId: req.params.sessionId, message };
     } catch (err) {
       reply.code(400);
       return { error: err instanceof Error ? err.message : String(err) };

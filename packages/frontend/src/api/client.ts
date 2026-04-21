@@ -133,7 +133,7 @@ export const api = {
       body: JSON.stringify({}),
     }),
   injectPin: (targetSessionId: string, pinMessageId: string) =>
-    request<{ sessionId: string; queuedLength: number }>(
+    request<{ sessionId: string; message: Message }>(
       `/api/sessions/${targetSessionId}/inject-pin`,
       {
         method: 'POST',

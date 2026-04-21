@@ -75,6 +75,13 @@ const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE sessions ADD COLUMN source_session_id TEXT;
     `,
   },
+  {
+    id: 4,
+    sql: `
+      ALTER TABLE messages ADD COLUMN source_message_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_messages_source ON messages(source_message_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

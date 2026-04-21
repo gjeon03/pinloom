@@ -13,6 +13,7 @@ interface MessageRow {
   tool_use: string | null;
   pinned: number;
   pin_title: string | null;
+  source_message_id: string | null;
   created_at: string;
 }
 

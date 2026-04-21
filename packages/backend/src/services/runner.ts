@@ -3,7 +3,6 @@ import { nanoid } from 'nanoid';
 import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
-import { consumeSeedContext } from './handoff.js';
 
 interface PersistArgs {
   sessionId: string;
@@ -94,6 +93,7 @@ function persistMessage(args: PersistArgs): Message {
     toolUse: toolUseJson,
     pinned: false,
     pinTitle: null,
+    sourceMessageId: null,
     createdAt: now,
   };
   broadcast(`session:${args.sessionId}`, { type: 'message', sessionId: args.sessionId, message });
@@ -142,6 +142,38 @@ function buildPlanContext(items: PlanItemLite[]): string {
   if (items.length === 0) return '';
   const lines = items.map((i) => `- [${i.status}] (${i.id}) ${i.title}`);
   return `\n\n## Current plan items\n${lines.join('\n')}\n\nReference by @<id> if you want to tie a change to a specific item.`;
+}
+
+interface PinRow {
+  id: string;
+  pin_title: string | null;
+  content: string;
+}
+
+function buildPinsContext(sessionId: string): string {
+  const db = getDb();
+  const pins = db
+    .prepare(
+      `SELECT id, pin_title, content
+       FROM messages
+       WHERE session_id = ? AND pinned = 1
+       ORDER BY created_at ASC`,
+    )
+    .all(sessionId) as PinRow[];
+  if (pins.length === 0) return '';
+
+  const blocks = pins.map((p) => {
+    const heading = p.pin_title?.trim() || '(untitled pin)';
+    return `### ${heading}\n\n${p.content.trim()}`;
+  });
+
+  return [
+    '## Pinned notes',
+    '',
+    'The user has pinned the following notes to this session. Treat them as authoritative context you already agreed on. They persist across turns.',
+    '',
+    blocks.join('\n\n'),
+  ].join('\n');
 }
 
 function updateClaudeSessionId(sessionId: string, claudeSessionId: string) {
@@ -362,11 +394,9 @@ async function runAssistant(
 ): Promise<void> {
   broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
 
-  const seed = consumeSeedContext(ctx.id);
+  const pinsContext = buildPinsContext(ctx.id);
   const systemPrompt =
-    SYSTEM_PROMPT +
-    buildPlanContext(planItems) +
-    (seed ? `\n\n${seed}` : '');
+    SYSTEM_PROMPT + buildPlanContext(planItems) + (pinsContext ? `\n\n${pinsContext}` : '');
 
   try {
     let finalText = '';

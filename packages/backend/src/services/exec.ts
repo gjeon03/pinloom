@@ -108,6 +108,7 @@ function persistMessage(args: {
     toolUse: toolUseJson,
     pinned: false,
     pinTitle: null,
+    sourceMessageId: null,
     createdAt: now,
   };
   broadcast(`session:${args.sessionId}`, {
