@@ -109,8 +109,10 @@ export function SessionTabs({
         return (
           <div key={s.id} className="flex items-stretch">
             <div
-              className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
-                showBefore ? 'bg-[var(--color-accent)]' : 'bg-transparent'
+              className={`w-[3px] self-stretch transition-colors ${
+                showBefore
+                  ? 'bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)]'
+                  : 'bg-transparent'
               }`}
             />
             <div
@@ -205,8 +207,10 @@ export function SessionTabs({
               )}
             </div>
             <div
-              className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
-                showAfter ? 'bg-[var(--color-accent)]' : 'bg-transparent'
+              className={`w-[3px] self-stretch transition-colors ${
+                showAfter
+                  ? 'bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)]'
+                  : 'bg-transparent'
               }`}
             />
           </div>
