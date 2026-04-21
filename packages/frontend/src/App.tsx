@@ -2,11 +2,13 @@ import { Routes, Route } from 'react-router-dom';
 import { AppShell } from './components/AppShell.js';
 import { ProjectPage } from './pages/ProjectPage.js';
 import { PinsPage } from './pages/PinsPage.js';
+import { SessionPage } from './pages/SessionPage.js';
 
 export function App() {
   return (
     <Routes>
       <Route path="/pins/:sessionId" element={<PinsPage />} />
+      <Route path="/s/:sessionId" element={<SessionPage />} />
       <Route
         path="/projects/:projectId"
         element={

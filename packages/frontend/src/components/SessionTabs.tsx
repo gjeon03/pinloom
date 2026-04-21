@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { ExternalLink, Plus, X } from 'lucide-react';
 import type { Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 
@@ -97,6 +97,20 @@ export function SessionTabs({
             ) : (
               <span className="truncate max-w-[180px]">{label}</span>
             )}
+            <a
+              href={`/s/${s.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title="Open session in new tab"
+              className={`p-0.5 rounded transition-opacity ${
+                active
+                  ? 'text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
+                  : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
+              }`}
+            >
+              <ExternalLink size={12} />
+            </a>
             {canDelete && (
               <button
                 type="button"
