@@ -4,6 +4,12 @@ import type { Message } from '@pinloom/shared';
 interface ToolUsePayload {
   name?: string;
   input?: Record<string, unknown>;
+  output?: {
+    stdout?: string;
+    stderr?: string;
+    exitCode?: number | null;
+    signal?: string | null;
+  };
 }
 
 function parseToolUse(raw: string | null): ToolUsePayload | null {
@@ -16,8 +22,9 @@ function parseToolUse(raw: string | null): ToolUsePayload | null {
 }
 
 export function ToolMessage({ message }: { message: Message }) {
-  const [expanded, setExpanded] = useState(false);
   const payload = parseToolUse(message.toolUse);
+  const isShell = payload?.name === 'shell';
+  const [expanded, setExpanded] = useState(isShell);
 
   if (!payload) {
     return <span className="whitespace-pre-wrap">{message.content}</span>;
@@ -25,6 +32,10 @@ export function ToolMessage({ message }: { message: Message }) {
 
   const name = payload.name ?? 'tool';
   const input = payload.input ?? {};
+
+  if (isShell) {
+    return <ShellDetail input={input} output={payload.output} />;
+  }
 
   return (
     <div>
@@ -40,6 +51,54 @@ export function ToolMessage({ message }: { message: Message }) {
         </span>
       </button>
       {expanded && <div className="mt-2">{renderDetail(name, input)}</div>}
+    </div>
+  );
+}
+
+function ShellDetail({
+  input,
+  output,
+}: {
+  input: Record<string, unknown>;
+  output: ToolUsePayload['output'];
+}) {
+  const command = typeof input.command === 'string' ? input.command : '';
+  const stdout = output?.stdout ?? '';
+  const stderr = output?.stderr ?? '';
+  const exitCode = output?.exitCode;
+  const signal = output?.signal;
+
+  const exitLabel =
+    signal != null
+      ? `signal ${signal}`
+      : exitCode == null
+        ? 'unknown'
+        : String(exitCode);
+  const failed = (exitCode != null && exitCode !== 0) || signal != null;
+
+  return (
+    <div className="space-y-1 font-mono">
+      <div className="text-[11px] text-[var(--color-accent)]">$ {command}</div>
+      {stdout && (
+        <pre className="rounded bg-black/40 border border-[var(--color-border)] p-2 text-[11px] overflow-auto whitespace-pre-wrap text-[var(--color-ink)]/90">
+          {stdout}
+        </pre>
+      )}
+      {stderr && (
+        <pre className="rounded bg-red-500/10 border border-red-500/30 p-2 text-[11px] overflow-auto whitespace-pre-wrap text-red-200">
+          {stderr}
+        </pre>
+      )}
+      {!stdout && !stderr && (
+        <div className="text-[11px] text-[var(--color-ink-muted)] italic">(no output)</div>
+      )}
+      <div
+        className={`text-[10px] uppercase tracking-wide ${
+          failed ? 'text-red-300' : 'text-[var(--color-ink-muted)]'
+        }`}
+      >
+        exit {exitLabel}
+      </div>
     </div>
   );
 }

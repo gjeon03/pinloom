@@ -104,6 +104,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  execShell: (sessionId: string, command: string) =>
+    request<{ userMessage: Message; toolMessage: Message }>(
+      `/api/sessions/${sessionId}/exec`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ command }),
+      },
+    ),
   deleteSession: (sessionId: string) =>
     request<{ ok: true }>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
   renameSession: (sessionId: string, title: string | null) =>

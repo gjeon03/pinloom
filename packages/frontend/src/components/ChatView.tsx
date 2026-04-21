@@ -61,11 +61,28 @@ export function ChatView({ session, onPinChange }: Props) {
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
   }, [input]);
 
+  const isShellMode = input.trimStart().startsWith('!');
+
   async function send() {
     if (!input.trim() || running) return;
     const content = input;
     setInput('');
     setError(null);
+
+    if (content.trimStart().startsWith('!')) {
+      const command = content.trimStart().slice(1).trim();
+      if (!command) return;
+      setRunning(true);
+      try {
+        await api.execShell(session.id, command);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setRunning(false);
+      }
+      return;
+    }
+
     setRunning(true);
     try {
       await api.sendMessage(session.id, { content });
@@ -119,17 +136,29 @@ export function ChatView({ session, onPinChange }: Props) {
               send();
             }
           }}
-          placeholder={running ? 'Running…' : 'Message the AI (Shift+Enter for newline)'}
+          placeholder={
+            running
+              ? 'Running…'
+              : 'Message the AI (Shift+Enter for newline · start with ! to run a shell command)'
+          }
           disabled={running}
           rows={1}
-          className="flex-1 resize-none rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm disabled:opacity-50 leading-snug"
+          className={`flex-1 resize-none rounded border px-3 py-2 text-sm disabled:opacity-50 leading-snug ${
+            isShellMode
+              ? 'bg-yellow-500/10 border-yellow-500/40 font-mono text-yellow-100'
+              : 'bg-[var(--color-surface-2)] border-[var(--color-border)]'
+          }`}
         />
         <button
           type="submit"
           disabled={!input.trim() || running}
-          className="rounded bg-[var(--color-accent)] text-black px-4 py-2 text-sm disabled:opacity-40"
+          className={`rounded px-4 py-2 text-sm disabled:opacity-40 font-medium ${
+            isShellMode
+              ? 'bg-yellow-400 text-black'
+              : 'bg-[var(--color-accent)] text-black'
+          }`}
         >
-          Send
+          {isShellMode ? 'Run' : 'Send'}
         </button>
       </form>
     </div>

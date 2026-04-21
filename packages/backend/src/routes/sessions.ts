@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import type { Message, MessageRole, Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { sendUserMessage } from '../services/runner.js';
+import { execShellCommand } from '../services/exec.js';
 
 interface SessionRow {
   id: string;
@@ -112,6 +113,24 @@ export async function sessionRoutes(app: FastifyInstance) {
     try {
       const msg = await sendUserMessage(req.params.sessionId, content, planItemId);
       return msg;
+    } catch (err) {
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  app.post<{
+    Params: { sessionId: string };
+    Body: { command: string };
+  }>('/api/sessions/:sessionId/exec', async (req, reply) => {
+    const { command } = req.body;
+    if (!command || command.trim().length === 0) {
+      reply.code(400);
+      return { error: 'command is required' };
+    }
+    try {
+      const result = await execShellCommand(req.params.sessionId, command);
+      return result;
     } catch (err) {
       reply.code(500);
       return { error: err instanceof Error ? err.message : String(err) };
