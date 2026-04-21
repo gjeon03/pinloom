@@ -49,11 +49,15 @@ export function ChatView({ session, onPinChange }: Props) {
       );
       onPinChange(ev.message);
     } else if (ev.type === 'run_status' && ev.sessionId === session.id) {
-      if (ev.status === 'started') setRunning(true);
-      else {
+      if (ev.status === 'started') {
+        setRunning(true);
+        setError(null);
+      } else {
         setRunning(false);
         if (ev.status === 'error' && ev.error && ev.error !== 'cancelled') {
           setError(ev.error);
+        } else {
+          setError(null);
         }
       }
     }
@@ -103,6 +107,7 @@ export function ChatView({ session, onPinChange }: Props) {
 
   async function cancelRun() {
     if (!running) return;
+    setError(null);
     try {
       await api.cancelRun(session.id);
     } catch (err) {
