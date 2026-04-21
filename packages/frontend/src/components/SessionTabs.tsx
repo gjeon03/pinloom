@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Plus, X } from 'lucide-react';
 import type { Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 
@@ -103,14 +104,14 @@ export function SessionTabs({
                   e.stopPropagation();
                   deleteTab(s);
                 }}
-                className={`text-xs px-1 rounded transition-opacity ${
+                className={`p-0.5 rounded transition-opacity ${
                   active
                     ? 'text-[var(--color-ink-muted)] hover:text-red-400'
                     : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400'
                 }`}
                 title="Delete tab"
               >
-                ✕
+                <X size={12} />
               </button>
             )}
           </div>
@@ -118,10 +119,10 @@ export function SessionTabs({
       })}
       <button
         onClick={createTab}
-        className="ml-1 rounded px-2 py-1 text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
+        className="ml-1 p-1.5 rounded text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
         title="New tab"
       >
-        +
+        <Plus size={14} />
       </button>
       {error && (
         <span className="ml-2 text-xs text-red-400 truncate max-w-[200px]" title={error}>

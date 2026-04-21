@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { Session } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 
@@ -68,7 +69,7 @@ export function LogsDrawer({ session }: { session: Session }) {
         className="flex items-center justify-between px-4 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
       >
         <span className="flex items-center gap-2">
-          <span>{open ? '▾' : '▸'}</span>
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <span>Run logs</span>
           {unread > 0 && !open && (
             <span className="rounded bg-[var(--color-accent)] text-black px-1.5 text-[10px]">

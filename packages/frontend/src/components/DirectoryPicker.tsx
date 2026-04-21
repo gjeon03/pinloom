@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { X, CornerLeftUp, Folder } from 'lucide-react';
 import type { BrowseResponse } from '../api/client.js';
 import { api } from '../api/client.js';
 
@@ -110,8 +111,8 @@ export function DirectoryPicker({ initialPath, onSelect, onClose }: Props) {
       >
         <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
           <h2 className="text-sm font-semibold">Choose a directory</h2>
-          <button onClick={onClose} className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]">
-            ✕
+          <button onClick={onClose} className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-1 rounded hover:bg-[var(--color-surface-3)]">
+            <X size={16} />
           </button>
         </div>
 
@@ -170,7 +171,7 @@ export function DirectoryPicker({ initialPath, onSelect, onClose }: Props) {
               onClick={() => navigate(browse.parent!)}
               className="w-full flex items-center gap-2 px-4 py-1.5 text-sm text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]"
             >
-              <span className="w-4">↑</span>
+              <CornerLeftUp size={14} className="shrink-0" />
               <span>.. (parent)</span>
             </button>
           )}
@@ -187,7 +188,7 @@ export function DirectoryPicker({ initialPath, onSelect, onClose }: Props) {
                   active ? 'bg-[var(--color-surface-3)]' : 'hover:bg-[var(--color-surface-3)]/60'
                 }`}
               >
-                <span className="w-4">📁</span>
+                <Folder size={14} className="shrink-0 text-[var(--color-accent)]" />
                 <span className={entry.hidden ? 'opacity-60' : ''}>{entry.name}</span>
               </button>
             );

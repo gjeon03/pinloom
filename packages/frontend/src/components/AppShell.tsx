@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { Plus, Settings, FolderOpen } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
@@ -49,9 +50,9 @@ export function AppShell({ children }: Props) {
           <button
             onClick={() => setAdding((v) => !v)}
             title="New project"
-            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-lg leading-none px-1"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
-            +
+            <Plus size={16} />
           </button>
         </div>
 
@@ -70,10 +71,11 @@ export function AppShell({ children }: Props) {
             <button
               type="button"
               onClick={() => setPicking(true)}
-              className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs font-mono text-left hover:border-[var(--color-accent)] truncate"
+              className="rounded bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-1 text-xs font-mono text-left hover:border-[var(--color-accent)] truncate flex items-center gap-1.5"
               title={cwd || 'Click to choose'}
             >
-              {cwd || 'Choose directory…'}
+              <FolderOpen size={12} className="shrink-0 text-[var(--color-ink-muted)]" />
+              <span className="truncate">{cwd || 'Choose directory…'}</span>
             </button>
             <div className="flex gap-1">
               <button
@@ -123,8 +125,9 @@ export function AppShell({ children }: Props) {
         <div className="border-t border-[var(--color-border)] p-2">
           <button
             onClick={() => setShowSettings(true)}
-            className="w-full rounded px-2 py-1.5 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]"
+            className="w-full rounded px-2 py-1.5 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] flex items-center gap-1.5"
           >
+            <Settings size={12} />
             Settings
           </button>
         </div>

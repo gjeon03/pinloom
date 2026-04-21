@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { Message } from '@pinloom/shared';
 
 interface ToolUsePayload {
@@ -44,7 +45,7 @@ export function ToolMessage({ message }: { message: Message }) {
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-2 text-left"
       >
-        <span className="text-[10px] uppercase tracking-wide opacity-70">{expanded ? '▾' : '▸'}</span>
+        {expanded ? <ChevronDown size={12} className="opacity-70 shrink-0" /> : <ChevronRight size={12} className="opacity-70 shrink-0" />}
         <span className="font-semibold">{name}</span>
         <span className="flex-1 truncate text-[var(--color-ink-muted)]">
           {summarize(name, input)}

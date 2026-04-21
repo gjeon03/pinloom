@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChevronDown, ChevronRight, ExternalLink, Pin } from 'lucide-react';
 import type { Message } from '@pinloom/shared';
 import { api } from '../api/client.js';
 
@@ -22,9 +23,9 @@ export function PinnedPanel({ pins, onChange, sessionId, showPopOut = true }: Pr
             target="_blank"
             rel="noopener noreferrer"
             title="Open pins in new tab"
-            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-sm px-1"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
-            ↗
+            <ExternalLink size={14} />
           </a>
         )}
       </header>
@@ -59,9 +60,9 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
       <header className="flex items-center gap-2 mb-1">
         <button
           onClick={() => setCollapsed((v) => !v)}
-          className="text-[10px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-0.5"
         >
-          {collapsed ? '▸' : '▾'}
+          {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         </button>
         {editing ? (
           <input
@@ -93,9 +94,9 @@ function PinCard({ pin, onChange }: { pin: Message; onChange: (m: Message) => vo
         <button
           onClick={unpin}
           title="Unpin"
-          className="text-[var(--color-accent)] hover:text-red-400"
+          className="text-[var(--color-accent)] hover:text-red-400 p-0.5"
         >
-          📌
+          <Pin size={14} fill="currentColor" />
         </button>
       </header>
       {!collapsed && (

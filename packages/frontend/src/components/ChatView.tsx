@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Pin, Send, Terminal } from 'lucide-react';
 import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
@@ -152,13 +153,14 @@ export function ChatView({ session, onPinChange }: Props) {
         <button
           type="submit"
           disabled={!input.trim() || running}
-          className={`rounded px-4 py-2 text-sm disabled:opacity-40 font-medium ${
+          className={`rounded px-3 py-2 text-sm disabled:opacity-40 font-medium flex items-center gap-1.5 ${
             isShellMode
               ? 'bg-yellow-400 text-black'
               : 'bg-[var(--color-accent)] text-black'
           }`}
         >
-          {isShellMode ? 'Run' : 'Send'}
+          {isShellMode ? <Terminal size={14} /> : <Send size={14} />}
+          <span>{isShellMode ? 'Run' : 'Send'}</span>
         </button>
       </form>
     </div>
@@ -191,13 +193,13 @@ function MessageBubble({
             <button
               onClick={() => onTogglePin(message)}
               title={message.pinned ? 'Unpin' : 'Pin'}
-              className={`${
+              className={`p-0.5 rounded transition-opacity ${
                 message.pinned
                   ? 'text-[var(--color-accent)]'
                   : 'opacity-0 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
-              } transition-opacity`}
+              }`}
             >
-              📌
+              <Pin size={12} fill={message.pinned ? 'currentColor' : 'none'} />
             </button>
           )}
         </div>

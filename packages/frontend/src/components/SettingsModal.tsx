@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import type { HealthResponse } from '@pinloom/shared';
 import { api } from '../api/client.js';
 
@@ -23,9 +24,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <h2 className="text-base font-semibold">Settings</h2>
           <button
             onClick={onClose}
-            className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
-            ✕
+            <X size={16} />
           </button>
         </div>
 
