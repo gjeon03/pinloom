@@ -8,14 +8,23 @@ import type {
 } from '@pinloom/shared';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const hasBody = init?.body != null;
   const res = await fetch(path, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       ...(init?.headers ?? {}),
     },
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = await res.text();
+    } catch {
+      // ignore
+    }
+    throw new Error(`${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`);
+  }
   return res.json() as Promise<T>;
 }
 
