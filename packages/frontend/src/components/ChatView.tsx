@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Pin, Send, Square, Terminal } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowDown, ChevronRight, Pin, Send, Square, Terminal, X } from 'lucide-react';
 import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
@@ -10,11 +10,16 @@ interface Props {
   onPinChange: (message: Message) => void;
 }
 
+const BOTTOM_STICKY_PX = 60; // within this distance from bottom → auto-scroll
+
 export function ChatView({ session, onPinChange }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [queued, setQueued] = useState<string | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [unseenCount, setUnseenCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -23,6 +28,9 @@ export function ChatView({ session, onPinChange }: Props) {
     setMessages([]);
     setError(null);
     setRunning(false);
+    setQueued(null);
+    setUnseenCount(0);
+    setAtBottom(true);
     api
       .listMessages(session.id)
       .then((msgs) => {
@@ -35,7 +43,7 @@ export function ChatView({ session, onPinChange }: Props) {
         if (!cancelled && s.running) setRunning(true);
       })
       .catch(() => {
-        // non-critical, leave running=false
+        // non-critical
       });
     return () => {
       cancelled = true;
@@ -44,7 +52,6 @@ export function ChatView({ session, onPinChange }: Props) {
 
   useWebSocket(`session:${session.id}`, (ev) => {
     if (ev.type === 'message' && ev.sessionId === session.id) {
-      // Copied pins (sourceMessageId set) go only to the pinned panel, not chat.
       if (ev.message.sourceMessageId) {
         onPinChange(ev.message);
         return;
@@ -52,6 +59,7 @@ export function ChatView({ session, onPinChange }: Props) {
       setMessages((prev) =>
         prev.some((m) => m.id === ev.message.id) ? prev : [...prev, ev.message],
       );
+      if (!atBottom) setUnseenCount((c) => c + 1);
     } else if (ev.type === 'message_updated' && ev.sessionId === session.id) {
       setMessages((prev) =>
         prev.map((m) => (m.id === ev.message.id ? ev.message : m)),
@@ -72,15 +80,33 @@ export function ChatView({ session, onPinChange }: Props) {
     }
   });
 
+  // Track bottom-ness
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const next = distance < BOTTOM_STICKY_PX;
+    setAtBottom(next);
+    if (next) setUnseenCount(0);
+  }, []);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom < 240) {
+    // initial position
+    handleScroll();
+  }, [handleScroll, session.id]);
+
+  // Auto-scroll only when user is already near bottom
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (atBottom) {
       el.scrollTo({ top: el.scrollHeight });
     }
-  }, [messages.length, running]);
+  }, [messages.length, running, atBottom]);
 
+  // Textarea auto-grow
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -90,12 +116,8 @@ export function ChatView({ session, onPinChange }: Props) {
 
   const isShellMode = input.trimStart().startsWith('!');
 
-  async function send() {
-    if (!input.trim() || running) return;
-    const content = input;
-    setInput('');
+  async function runMessage(content: string) {
     setError(null);
-
     if (content.trimStart().startsWith('!')) {
       const command = content.trimStart().slice(1).trim();
       if (!command) return;
@@ -109,7 +131,6 @@ export function ChatView({ session, onPinChange }: Props) {
       }
       return;
     }
-
     setRunning(true);
     try {
       await api.sendMessage(session.id, { content });
@@ -118,6 +139,31 @@ export function ChatView({ session, onPinChange }: Props) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
+
+  function send() {
+    const content = input.trim();
+    if (!content) return;
+    if (running) {
+      // Queue for after current run
+      setQueued(content);
+      setInput('');
+      return;
+    }
+    setInput('');
+    void runMessage(content);
+  }
+
+  // Auto-send queued message when run ends successfully (not on cancel)
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    const wasRunning = prevRunning.current;
+    prevRunning.current = running;
+    if (wasRunning && !running && queued) {
+      const next = queued;
+      setQueued(null);
+      void runMessage(next);
+    }
+  }, [running, queued]);
 
   async function cancelRun() {
     if (!running) return;
@@ -151,12 +197,24 @@ export function ChatView({ session, onPinChange }: Props) {
     }
   }
 
+  function scrollToBottom() {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    setUnseenCount(0);
+    setAtBottom(true);
+  }
+
   return (
-    <div className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full">
-      <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3 text-sm">
+    <div className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full relative">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-auto p-4 space-y-3 text-sm"
+      >
         {messages.length === 0 && (
           <p className="text-[var(--color-ink-muted)]">
-            Start the conversation. AI answers can be pinned 📌 so they stay visible.
+            Start the conversation. AI answers can be pinned so they stay visible.
           </p>
         )}
         {messages.map((m) => (
@@ -180,6 +238,49 @@ export function ChatView({ session, onPinChange }: Props) {
         {error && <p className="text-red-400 text-xs">{error}</p>}
       </div>
 
+      {!atBottom && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="absolute left-1/2 -translate-x-1/2 bottom-28 z-10 rounded-full bg-[var(--color-surface-3)] border border-[var(--color-border)] shadow-lg px-3 py-1.5 text-xs flex items-center gap-1.5 hover:border-[var(--color-accent)]"
+        >
+          <ArrowDown size={12} />
+          {unseenCount > 0 ? (
+            <span>
+              {unseenCount} new
+            </span>
+          ) : (
+            <span>Jump to latest</span>
+          )}
+        </button>
+      )}
+
+      {queued && (
+        <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-2)]/80 px-3 py-1.5 text-xs flex items-center gap-2">
+          <ChevronRight size={12} className="text-[var(--color-accent)] shrink-0" />
+          <span className="text-[var(--color-ink-muted)] shrink-0">Queued:</span>
+          <span className="flex-1 truncate text-[var(--color-ink)]/90">{queued}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setInput(queued);
+              setQueued(null);
+            }}
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-[11px]"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setQueued(null)}
+            title="Cancel queued message"
+            className="text-[var(--color-ink-muted)] hover:text-red-400 p-0.5"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -199,12 +300,11 @@ export function ChatView({ session, onPinChange }: Props) {
           }}
           placeholder={
             running
-              ? 'Running…'
+              ? 'Type to queue — will send after the current response…'
               : 'Message the AI (Shift+Enter for newline · start with ! to run a shell command)'
           }
-          disabled={running}
           rows={1}
-          className={`flex-1 resize-none rounded border px-3 py-2 text-sm disabled:opacity-50 leading-snug ${
+          className={`flex-1 resize-none rounded border px-3 py-2 text-sm leading-snug ${
             isShellMode
               ? 'bg-yellow-500/10 border-yellow-500/40 font-mono text-yellow-100'
               : 'bg-[var(--color-surface-2)] border-[var(--color-border)]'
@@ -212,7 +312,7 @@ export function ChatView({ session, onPinChange }: Props) {
         />
         <button
           type="submit"
-          disabled={!input.trim() || running}
+          disabled={!input.trim()}
           className={`rounded px-3 py-2 text-sm disabled:opacity-40 font-medium flex items-center gap-1.5 ${
             isShellMode
               ? 'bg-yellow-400 text-black'
@@ -220,7 +320,7 @@ export function ChatView({ session, onPinChange }: Props) {
           }`}
         >
           {isShellMode ? <Terminal size={14} /> : <Send size={14} />}
-          <span>{isShellMode ? 'Run' : 'Send'}</span>
+          <span>{running ? 'Queue' : isShellMode ? 'Run' : 'Send'}</span>
         </button>
       </form>
     </div>

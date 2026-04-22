@@ -27,11 +27,15 @@ export function ProjectPage({
     setActiveSession(null);
     setPins([]);
 
+    const lastKey = `pinloom:lastSession:${project.id}`;
+    const lastId = localStorage.getItem(lastKey);
+
     api.listSessions(project.id).then(async (list) => {
       if (cancelled) return;
       if (list.length > 0) {
         setSessions(list);
-        setActiveSession(list[0]);
+        const remembered = lastId ? list.find((s) => s.id === lastId) : null;
+        setActiveSession(remembered ?? list[0]);
       } else {
         const created = await api.createSession(project.id, { title: 'New chat' });
         if (cancelled) return;
@@ -44,6 +48,15 @@ export function ProjectPage({
       cancelled = true;
     };
   }, [project.id]);
+
+  // Remember last active session per project
+  useEffect(() => {
+    if (!activeSession) return;
+    localStorage.setItem(
+      `pinloom:lastSession:${project.id}`,
+      activeSession.id,
+    );
+  }, [project.id, activeSession?.id]);
 
   useEffect(() => {
     if (!activeSession) {
