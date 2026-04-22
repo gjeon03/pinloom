@@ -64,14 +64,6 @@ export interface HealthResponse {
   };
 }
 
-export interface Terminal {
-  id: string;
-  projectId: string;
-  title: string | null;
-  orderIndex: number;
-  createdAt: string;
-  updatedAt: string;
-}
 
 export type WsEvent =
   | { type: 'message'; sessionId: string; message: Message }
