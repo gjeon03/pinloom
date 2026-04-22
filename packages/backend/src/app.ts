@@ -45,6 +45,7 @@ export async function createApp() {
 
     fastify.get('/ws/terminal', { websocket: true }, (socket, request) => {
       const terminalId = (request.query as { terminalId?: string }).terminalId;
+      console.log('[ws/terminal] connect', terminalId);
       if (!terminalId) {
         socket.close(4000, 'terminalId query parameter required');
         return;
@@ -52,6 +53,7 @@ export async function createApp() {
 
       const pty = attachOrSpawnPty(terminalId);
       if (!pty) {
+        console.log('[ws/terminal] pty null, closing');
         socket.close(4004, 'terminal not found');
         return;
       }
@@ -79,10 +81,11 @@ export async function createApp() {
         if (!msg || typeof msg !== 'object') return;
         const m = msg as { type?: string; data?: string; cols?: number; rows?: number };
         if (m.type === 'input' && typeof m.data === 'string') {
+          console.log('[ws/terminal] input', JSON.stringify(m.data));
           try {
             pty.write(m.data);
-          } catch {
-            // ignore
+          } catch (err) {
+            console.error('[ws/terminal] write failed', err);
           }
         } else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           resizePty(terminalId, m.cols, m.rows);
@@ -90,6 +93,7 @@ export async function createApp() {
       });
 
       socket.on('close', () => {
+        console.log('[ws/terminal] close', terminalId);
         ptyDataSub.dispose();
         ptyExitSub.dispose();
         // NOTE: keep PTY alive so user can reconnect. It's killed on terminal delete.

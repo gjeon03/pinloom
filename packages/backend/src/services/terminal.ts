@@ -116,28 +116,42 @@ function loadContext(terminalId: string): TerminalContext | null {
 
 export function attachOrSpawnPty(terminalId: string): IPty | null {
   const existing = activePtys.get(terminalId);
-  if (existing) return existing;
+  if (existing) {
+    console.log('[pty] reusing existing', terminalId, 'pid=', existing.pid);
+    return existing;
+  }
   const ctx = loadContext(terminalId);
-  if (!ctx) return null;
+  if (!ctx) {
+    console.log('[pty] context not found for', terminalId);
+    return null;
+  }
 
   const shell = process.env.SHELL || '/bin/zsh';
-  const child = pty.spawn(shell, [], {
-    name: 'xterm-256color',
-    cols: 80,
-    rows: 24,
-    cwd: ctx.cwd,
-    env: { ...process.env, TERM: 'xterm-256color' },
-  });
+  console.log('[pty] spawning', shell, 'in', ctx.cwd);
+  try {
+    const child = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: ctx.cwd,
+      env: { ...process.env, TERM: 'xterm-256color' },
+    });
+    console.log('[pty] spawned pid=', child.pid);
 
-  activePtys.set(terminalId, child);
+    activePtys.set(terminalId, child);
 
-  child.onExit(() => {
-    if (activePtys.get(terminalId) === child) {
-      activePtys.delete(terminalId);
-    }
-  });
+    child.onExit(({ exitCode, signal }) => {
+      console.log('[pty] exit', terminalId, 'code=', exitCode, 'signal=', signal);
+      if (activePtys.get(terminalId) === child) {
+        activePtys.delete(terminalId);
+      }
+    });
 
-  return child;
+    return child;
+  } catch (err) {
+    console.error('[pty] spawn failed:', err);
+    return null;
+  }
 }
 
 export function resizePty(terminalId: string, cols: number, rows: number) {

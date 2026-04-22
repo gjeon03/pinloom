@@ -50,6 +50,7 @@ export function TerminalPane({ terminalId }: Props) {
     let wsReady = false;
 
     ws.addEventListener('open', () => {
+      console.log('[terminal] ws open', terminalId);
       wsReady = true;
       const { cols, rows } = term;
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
@@ -58,6 +59,10 @@ export function TerminalPane({ terminalId }: Props) {
     ws.addEventListener('error', (e) => {
       console.error('[terminal] ws error', e);
       term.write('\r\n\x1b[31m[websocket error — check backend]\x1b[0m\r\n');
+    });
+
+    ws.addEventListener('close', (e) => {
+      console.log('[terminal] ws close', e.code, e.reason);
     });
 
     ws.addEventListener('message', (ev) => {
@@ -84,6 +89,7 @@ export function TerminalPane({ terminalId }: Props) {
     });
 
     const dataSub = term.onData((data) => {
+      console.log('[terminal] onData', JSON.stringify(data), 'wsReady=', wsReady);
       if (wsReady) {
         ws.send(JSON.stringify({ type: 'input', data }));
       }

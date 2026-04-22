@@ -11,9 +11,15 @@ export default defineConfig({
     strictPort: false,
     proxy: {
       '/api': `http://localhost:${API_PORT}`,
+      '/ws/terminal': {
+        target: `ws://localhost:${API_PORT}`,
+        ws: true,
+        rewriteWsOrigin: true,
+      },
       '/ws': {
         target: `ws://localhost:${API_PORT}`,
         ws: true,
+        rewriteWsOrigin: true,
       },
     },
   },
