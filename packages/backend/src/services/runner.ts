@@ -339,6 +339,7 @@ async function runAttempt(
     permissionMode: 'bypassPermissions',
     allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
     abortController,
+    includePartialMessages: true,
   };
   if (useResume && ctx.claudeSessionId) {
     options.resume = ctx.claudeSessionId;
@@ -381,17 +382,64 @@ async function runAttempt(
     return created.id;
   }
 
+  // Track which assistant message ids we've already fully consumed via partial
+  // stream events — so when the final 'assistant' event arrives with the same
+  // id and full content, we don't double-append it.
+  const streamedViaPartial = new Set<string>();
+
   for await (const message of q) {
     if (abortController.signal.aborted) break;
-    if (message.type === 'assistant') {
-      const msg = message as AssistantStream;
-      if (msg.session_id && msg.session_id !== ctx.claudeSessionId) {
-        updateClaudeSessionId(ctx.id, msg.session_id);
-        ctx.claudeSessionId = msg.session_id;
+    const anyMsg = message as unknown as {
+      type: string;
+      event?: {
+        type: string;
+        index?: number;
+        delta?: { type?: string; text?: string; partial_json?: string };
+        content_block?: { type?: string; text?: string; name?: string; input?: unknown };
+      };
+      message?: { id?: string; content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> };
+      session_id?: string;
+    };
+
+    if (anyMsg.type === 'stream_event') {
+      // Partial message events emitted when `includePartialMessages: true`.
+      const ev = anyMsg.event;
+      if (!ev) continue;
+      if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+        const delta = ev.delta.text ?? '';
+        if (!delta) continue;
+        const id = ensureStream();
+        streamContent += delta;
+        totalText += delta;
+        broadcast(`session:${ctx.id}`, {
+          type: 'stream_chunk',
+          sessionId: ctx.id,
+          messageId: id,
+          chunk: delta,
+        });
+      } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+        closeStream();
+        // tool_use block just started — we'll get the full tool via the
+        // regular 'assistant' event later, so don't persist now.
+      } else if (ev.type === 'message_stop') {
+        closeStream();
       }
-      const content = msg.message?.content ?? [];
+      continue;
+    }
+
+    if (anyMsg.type === 'assistant') {
+      if (anyMsg.session_id && anyMsg.session_id !== ctx.claudeSessionId) {
+        updateClaudeSessionId(ctx.id, anyMsg.session_id);
+        ctx.claudeSessionId = anyMsg.session_id;
+      }
+      const assistantId = anyMsg.message?.id;
+      // If we streamed this message's text via partials, skip text blocks but
+      // still handle tool_use blocks (partials don't give full tool args).
+      const alreadyStreamed = assistantId ? streamedViaPartial.has(assistantId) : false;
+      const content = anyMsg.message?.content ?? [];
       for (const block of content) {
         if (block.type === 'text' && block.text) {
+          if (alreadyStreamed) continue;
           const id = ensureStream();
           streamContent += block.text;
           totalText += block.text;
@@ -418,7 +466,9 @@ async function runAttempt(
           });
         }
       }
-    } else if (message.type === 'user') {
+      // Mark so future duplicate 'assistant' frames won't re-add text.
+      if (assistantId) streamedViaPartial.add(assistantId);
+    } else if (anyMsg.type === 'user') {
       const msg = message as {
         message?: {
           content?: Array<{
@@ -442,8 +492,8 @@ async function runAttempt(
           }
         }
       }
-    } else if (message.type === 'result') {
-      const result = message as { subtype?: string; result?: string; session_id?: string };
+    } else if (anyMsg.type === 'result') {
+      const result = message as unknown as { subtype?: string; result?: string; session_id?: string };
       if (result.session_id && result.session_id !== ctx.claudeSessionId) {
         updateClaudeSessionId(ctx.id, result.session_id);
       }
