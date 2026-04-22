@@ -17,7 +17,7 @@ export function ChatView({ session, onPinChange }: Props) {
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [queued, setQueued] = useState<string | null>(null);
+  const [queue, setQueue] = useState<string[]>([]);
   const [atBottom, setAtBottom] = useState(true);
   const [unseenCount, setUnseenCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -28,7 +28,7 @@ export function ChatView({ session, onPinChange }: Props) {
     setMessages([]);
     setError(null);
     setRunning(false);
-    setQueued(null);
+    setQueue([]);
     setUnseenCount(0);
     setAtBottom(true);
     api
@@ -143,9 +143,9 @@ export function ChatView({ session, onPinChange }: Props) {
   function send() {
     const content = input.trim();
     if (!content) return;
-    if (running) {
-      // Queue for after current run
-      setQueued(content);
+    if (running || queue.length > 0) {
+      // Append to queue — will be sent in order after current run finishes
+      setQueue((q) => [...q, content]);
       setInput('');
       return;
     }
@@ -153,17 +153,14 @@ export function ChatView({ session, onPinChange }: Props) {
     void runMessage(content);
   }
 
-  // Auto-send queued message when run ends successfully (not on cancel)
-  const prevRunning = useRef(running);
+  // Drain queue: whenever not running and queue has items, pop the first and send
   useEffect(() => {
-    const wasRunning = prevRunning.current;
-    prevRunning.current = running;
-    if (wasRunning && !running && queued) {
-      const next = queued;
-      setQueued(null);
-      void runMessage(next);
-    }
-  }, [running, queued]);
+    if (running) return;
+    if (queue.length === 0) return;
+    const [next, ...rest] = queue;
+    setQueue(rest);
+    void runMessage(next);
+  }, [running, queue]);
 
   async function cancelRun() {
     if (!running) return;
@@ -255,29 +252,50 @@ export function ChatView({ session, onPinChange }: Props) {
         </button>
       )}
 
-      {queued && (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-2)]/80 px-3 py-1.5 text-xs flex items-center gap-2">
-          <ChevronRight size={12} className="text-[var(--color-accent)] shrink-0" />
-          <span className="text-[var(--color-ink-muted)] shrink-0">Queued:</span>
-          <span className="flex-1 truncate text-[var(--color-ink)]/90">{queued}</span>
-          <button
-            type="button"
-            onClick={() => {
-              setInput(queued);
-              setQueued(null);
-            }}
-            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-[11px]"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={() => setQueued(null)}
-            title="Cancel queued message"
-            className="text-[var(--color-ink-muted)] hover:text-red-400 p-0.5"
-          >
-            <X size={12} />
-          </button>
+      {queue.length > 0 && (
+        <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-2)]/80">
+          <div className="px-3 py-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+            <span>Queued ({queue.length})</span>
+            {queue.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setQueue([])}
+                className="hover:text-red-400"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+          <ul className="max-h-32 overflow-auto">
+            {queue.map((msg, i) => (
+              <li
+                key={i}
+                className="px-3 py-1 text-xs flex items-center gap-2 border-t border-[var(--color-border)]/60"
+              >
+                <ChevronRight size={12} className="text-[var(--color-accent)] shrink-0" />
+                <span className="flex-1 truncate text-[var(--color-ink)]/90">{msg}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInput(msg);
+                    setQueue((q) => q.filter((_, j) => j !== i));
+                  }}
+                  className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-[11px]"
+                  title="Move back to input to edit"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQueue((q) => q.filter((_, j) => j !== i))}
+                  title="Remove from queue"
+                  className="text-[var(--color-ink-muted)] hover:text-red-400 p-0.5"
+                >
+                  <X size={12} />
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
