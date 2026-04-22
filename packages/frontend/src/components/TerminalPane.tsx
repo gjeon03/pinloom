@@ -32,7 +32,15 @@ export function TerminalPane({ terminalId }: Props) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    fit.fit();
+
+    requestAnimationFrame(() => {
+      try {
+        fit.fit();
+      } catch {
+        // ignore transient layout errors
+      }
+      term.focus();
+    });
 
     const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(
@@ -45,6 +53,11 @@ export function TerminalPane({ terminalId }: Props) {
       wsReady = true;
       const { cols, rows } = term;
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    });
+
+    ws.addEventListener('error', (e) => {
+      console.error('[terminal] ws error', e);
+      term.write('\r\n\x1b[31m[websocket error — check backend]\x1b[0m\r\n');
     });
 
     ws.addEventListener('message', (ev) => {
@@ -104,5 +117,17 @@ export function TerminalPane({ terminalId }: Props) {
     };
   }, [terminalId]);
 
-  return <div ref={hostRef} className="w-full h-full" />;
+  return (
+    <div
+      ref={hostRef}
+      onClick={(e) => {
+        // Click anywhere in the host refocuses the terminal so typing works
+        // after switching tabs / clicking elsewhere on the page.
+        const host = e.currentTarget;
+        const textarea = host.querySelector('textarea.xterm-helper-textarea');
+        (textarea as HTMLTextAreaElement | null)?.focus();
+      }}
+      className="w-full h-full"
+    />
+  );
 }

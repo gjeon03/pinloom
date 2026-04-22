@@ -44,15 +44,22 @@ export function BottomPanel({ projectId, session }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listTerminals(projectId)
-      .then((list) => {
+    (async () => {
+      try {
+        let list = await api.listTerminals(projectId);
+        if (list.length === 0) {
+          // Always keep at least one terminal ready for the project
+          const created = await api.createTerminal(projectId);
+          list = [created];
+        }
         if (!cancelled) {
           setTerminals(list);
           setTerminalsLoaded(true);
         }
-      })
-      .catch(() => !cancelled && setTerminalsLoaded(true));
+      } catch {
+        if (!cancelled) setTerminalsLoaded(true);
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -105,12 +112,20 @@ export function BottomPanel({ projectId, session }: Props) {
   }
 
   async function removeTerminal(id: string) {
+    if (terminals.length <= 1) {
+      alert('At least one terminal must stay open.');
+      return;
+    }
     if (!confirm('Close this terminal? The shell process will be killed.')) return;
     await api.deleteTerminal(id);
-    setTerminals((prev) => prev.filter((t) => t.id !== id));
-    if (active.kind === 'terminal' && active.id === id) {
-      setActive({ kind: 'logs' });
-    }
+    setTerminals((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      if (active.kind === 'terminal' && active.id === id) {
+        const fallback = next[0];
+        setActive(fallback ? { kind: 'terminal', id: fallback.id } : { kind: 'logs' });
+      }
+      return next;
+    });
   }
 
   const activeTerminalId =
