@@ -108,7 +108,11 @@ export const api = {
     request<Message[]>(`/api/sessions/${sessionId}/messages`),
   sendMessage: (
     sessionId: string,
-    body: { content: string; planItemId?: string | null },
+    body: {
+      content: string;
+      planItemId?: string | null;
+      images?: Array<{ mimeType: string; base64: string }>;
+    },
   ) =>
     request<Message>(`/api/sessions/${sessionId}/messages`, {
       method: 'POST',

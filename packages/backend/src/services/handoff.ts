@@ -9,6 +9,7 @@ interface SessionRow {
   plan_id: string | null;
   claude_session_id: string | null;
   title: string | null;
+  next_image_number: number;
   created_at: string;
   updated_at: string;
 }
@@ -34,6 +35,7 @@ function toSession(row: SessionRow): Session {
     planId: row.plan_id,
     claudeSessionId: row.claude_session_id,
     title: row.title,
+    nextImageNumber: row.next_image_number,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

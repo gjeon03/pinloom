@@ -129,6 +129,12 @@ const MIGRATIONS: { id: number; sql: string }[] = [
         ON messages(session_id, pinned_at);
     `,
   },
+  {
+    id: 9,
+    sql: `
+      ALTER TABLE sessions ADD COLUMN next_image_number INTEGER NOT NULL DEFAULT 1;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

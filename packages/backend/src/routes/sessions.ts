@@ -2,9 +2,44 @@ import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import type { Message, MessageRole, Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
+import type { ImageInput, ImageMediaType } from '../services/runner.js';
 import { cancelAiRun, isAiRunning, sendUserMessage } from '../services/runner.js';
 import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
+
+const ALLOWED_IMAGE_MIME: ReadonlySet<ImageMediaType> = new Set<ImageMediaType>([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+]);
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function parseImages(raw: unknown): ImageInput[] | { error: string } {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return { error: 'images must be an array' };
+  const parsed: ImageInput[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') {
+      return { error: 'each image must be an object' };
+    }
+    const mime = (item as { mimeType?: unknown }).mimeType;
+    const base64 = (item as { base64?: unknown }).base64;
+    if (typeof mime !== 'string' || typeof base64 !== 'string') {
+      return { error: 'image.mimeType and image.base64 are required strings' };
+    }
+    if (!ALLOWED_IMAGE_MIME.has(mime as ImageMediaType)) {
+      return { error: `unsupported image mime type: ${mime}` };
+    }
+    const approxBytes = Math.floor((base64.length * 3) / 4);
+    if (approxBytes > MAX_IMAGE_BYTES) {
+      return { error: `image exceeds ${MAX_IMAGE_BYTES} bytes` };
+    }
+    parsed.push({ mimeType: mime as ImageMediaType, base64 });
+  }
+  return parsed;
+}
 
 interface SessionRow {
   id: string;
@@ -12,6 +47,7 @@ interface SessionRow {
   plan_id: string | null;
   claude_session_id: string | null;
   title: string | null;
+  next_image_number: number;
   created_at: string;
   updated_at: string;
 }
@@ -37,6 +73,7 @@ export function toSession(row: SessionRow): Session {
     planId: row.plan_id,
     claudeSessionId: row.claude_session_id,
     title: row.title,
+    nextImageNumber: row.next_image_number,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -152,21 +189,40 @@ export async function sessionRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { sessionId: string };
-    Body: { content: string; planItemId?: string | null };
-  }>('/api/sessions/:sessionId/messages', async (req, reply) => {
-    const { content, planItemId = null } = req.body;
-    if (!content || content.trim().length === 0) {
-      reply.code(400);
-      return { error: 'content is required' };
-    }
-    try {
-      const msg = await sendUserMessage(req.params.sessionId, content, planItemId);
-      return msg;
-    } catch (err) {
-      reply.code(500);
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
-  });
+    Body: {
+      content: string;
+      planItemId?: string | null;
+      images?: Array<{ mimeType: string; base64: string }>;
+    };
+  }>(
+    '/api/sessions/:sessionId/messages',
+    { bodyLimit: 30 * 1024 * 1024 },
+    async (req, reply) => {
+      const { content, planItemId = null, images: imagesRaw } = req.body;
+      const imagesParsed = parseImages(imagesRaw);
+      if ('error' in imagesParsed) {
+        reply.code(400);
+        return { error: imagesParsed.error };
+      }
+      const hasContent = !!content && content.trim().length > 0;
+      if (!hasContent && imagesParsed.length === 0) {
+        reply.code(400);
+        return { error: 'content or images is required' };
+      }
+      try {
+        const msg = await sendUserMessage(
+          req.params.sessionId,
+          content ?? '',
+          planItemId,
+          imagesParsed,
+        );
+        return msg;
+      } catch (err) {
+        reply.code(500);
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
 
   app.post<{
     Params: { sessionId: string };

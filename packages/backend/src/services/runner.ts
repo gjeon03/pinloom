@@ -4,6 +4,46 @@ import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 
+export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+
+export interface ImageInput {
+  mimeType: ImageMediaType;
+  base64: string;
+}
+
+interface PromptTextBlock {
+  type: 'text';
+  text: string;
+}
+interface PromptImageBlock {
+  type: 'image';
+  source: { type: 'base64'; media_type: ImageMediaType; data: string };
+}
+type PromptContentBlock = PromptTextBlock | PromptImageBlock;
+
+function buildContentBlocks(text: string, images: ImageInput[]): PromptContentBlock[] {
+  const blocks: PromptContentBlock[] = [];
+  if (text.length > 0) blocks.push({ type: 'text', text });
+  for (const img of images) {
+    blocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+    });
+  }
+  return blocks;
+}
+
+async function* buildPromptIterable(
+  text: string,
+  images: ImageInput[],
+): AsyncGenerator<{ type: 'user'; message: { role: 'user'; content: PromptContentBlock[] }; parent_tool_use_id: null }> {
+  yield {
+    type: 'user',
+    message: { role: 'user', content: buildContentBlocks(text, images) },
+    parent_tool_use_id: null,
+  };
+}
+
 interface PersistArgs {
   sessionId: string;
   planItemId: string | null;
@@ -292,6 +332,7 @@ export async function sendUserMessage(
   sessionId: string,
   content: string,
   planItemId: string | null = null,
+  images: ImageInput[] = [],
 ): Promise<Message> {
   const ctx = loadSession(sessionId);
   if (!ctx) throw new Error(`session ${sessionId} not found`);
@@ -306,7 +347,15 @@ export async function sendUserMessage(
     content,
   });
 
-  runAssistant(ctx, content, resolvedPlanItemId, planItems).catch((err) => {
+  if (images.length > 0) {
+    getDb()
+      .prepare(
+        'UPDATE sessions SET next_image_number = next_image_number + ? WHERE id = ?',
+      )
+      .run(images.length, sessionId);
+  }
+
+  runAssistant(ctx, content, resolvedPlanItemId, planItems, images).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     persistMessage({
       sessionId,
@@ -328,6 +377,7 @@ export async function sendUserMessage(
 async function runAttempt(
   ctx: SessionContext,
   prompt: string,
+  images: ImageInput[],
   planItemId: string | null,
   systemPrompt: string,
   useResume: boolean,
@@ -346,8 +396,11 @@ async function runAttempt(
     options.resume = ctx.claudeSessionId;
   }
 
+  const promptValue =
+    images.length > 0 ? buildPromptIterable(prompt, images) : prompt;
+
   const q = query({
-    prompt,
+    prompt: promptValue as Parameters<typeof query>[0]['prompt'],
     options: options as Parameters<typeof query>[0]['options'],
   });
 
@@ -528,6 +581,7 @@ async function runAssistant(
   prompt: string,
   planItemId: string | null,
   planItems: PlanItemLite[],
+  images: ImageInput[] = [],
 ): Promise<void> {
   broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
 
@@ -542,7 +596,15 @@ async function runAssistant(
 
     if (ctx.claudeSessionId) {
       try {
-        finalText = await runAttempt(ctx, prompt, planItemId, systemPrompt, true, abortController);
+        finalText = await runAttempt(
+          ctx,
+          prompt,
+          images,
+          planItemId,
+          systemPrompt,
+          true,
+          abortController,
+        );
       } catch (err) {
         if (abortController.signal.aborted) throw err;
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -569,6 +631,7 @@ async function runAssistant(
       finalText = await runAttempt(
         ctx,
         fallbackPrompt,
+        images,
         planItemId,
         systemPrompt,
         false,

@@ -37,6 +37,7 @@ export interface Session {
   planId: string | null;
   claudeSessionId: string | null;
   title: string | null;
+  nextImageNumber: number;
   createdAt: string;
   updatedAt: string;
 }
