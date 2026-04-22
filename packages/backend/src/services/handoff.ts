@@ -22,6 +22,7 @@ interface MessageRow {
   tool_use: string | null;
   pinned: number;
   pin_title: string | null;
+  pinned_at: string | null;
   source_message_id: string | null;
   created_at: string;
 }
@@ -48,6 +49,7 @@ function toMessage(row: MessageRow): Message {
     toolUse: row.tool_use,
     pinned: row.pinned === 1,
     pinTitle: row.pin_title,
+    pinnedAt: row.pinned_at,
     sourceMessageId: row.source_message_id,
     createdAt: row.created_at,
   };
@@ -68,9 +70,9 @@ function copyPinToSession(
   const newId = nanoid();
   db.prepare(
     `INSERT INTO messages
-       (id, session_id, plan_item_id, role, content, tool_use, pinned, pin_title, source_message_id, created_at)
-     VALUES (?, ?, NULL, 'assistant', ?, NULL, 1, ?, ?, ?)`,
-  ).run(newId, targetSessionId, pin.content, pin.pin_title, pin.id, createdAt);
+       (id, session_id, plan_item_id, role, content, tool_use, pinned, pin_title, pinned_at, source_message_id, created_at)
+     VALUES (?, ?, NULL, 'assistant', ?, NULL, 1, ?, ?, ?, ?)`,
+  ).run(newId, targetSessionId, pin.content, pin.pin_title, createdAt, pin.id, createdAt);
 
   const row = db.prepare('SELECT * FROM messages WHERE id = ?').get(newId) as MessageRow;
   return toMessage(row);

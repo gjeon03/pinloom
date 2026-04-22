@@ -52,6 +52,7 @@ export interface Message {
   toolUse: string | null;
   pinned: boolean;
   pinTitle: string | null;
+  pinnedAt: string | null;
   sourceMessageId: string | null;
   createdAt: string;
 }

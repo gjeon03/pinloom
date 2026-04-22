@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { Message, Session } from '@pinloom/shared';
+import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
@@ -8,6 +8,7 @@ import { PinnedPanel } from '../components/PinnedPanel.js';
 export function PinsPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [session, setSession] = useState<Session | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
   const [pins, setPins] = useState<Message[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,15 +22,16 @@ export function PinsPage() {
         for (const p of projects) {
           const list = await api.listSessions(p.id);
           const found = list.find((s) => s.id === sessionId);
-          if (found) return found;
+          if (found) return { session: found, project: p };
         }
         return null;
       }),
     ])
-      .then(([pinList, sess]) => {
+      .then(([pinList, ctx]) => {
         if (cancelled) return;
         setPins(pinList);
-        setSession(sess);
+        setSession(ctx?.session ?? null);
+        setProject(ctx?.project ?? null);
       })
       .catch((e) => !cancelled && setError(String(e)));
 
@@ -104,6 +106,7 @@ export function PinsPage() {
           pins={pins}
           onChange={handlePinsChange}
           sessionId={sessionId}
+          projectName={project?.name}
           showPopOut={false}
         />
       </div>

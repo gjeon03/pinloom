@@ -8,6 +8,7 @@ import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
 import { EditableTitle } from '../components/EditableTitle.js';
 import { SessionPickerModal } from '../components/SessionPickerModal.js';
+import { applyPinChange } from '../utils/pins.js';
 
 export function ProjectPage({
   project,
@@ -67,15 +68,7 @@ export function ProjectPage({
   }, [activeSession?.id]);
 
   function handlePinsChange(updated: Message) {
-    setPins((prev) => {
-      const exists = prev.some((p) => p.id === updated.id);
-      if (updated.pinned) {
-        return exists
-          ? prev.map((p) => (p.id === updated.id ? updated : p))
-          : [...prev, updated];
-      }
-      return prev.filter((p) => p.id !== updated.id);
-    });
+    setPins((prev) => applyPinChange(prev, updated));
   }
 
   return (
@@ -130,6 +123,7 @@ export function ProjectPage({
                 pins={pins}
                 onChange={handlePinsChange}
                 sessionId={activeSession.id}
+                projectName={project.name}
                 onHandoff={(newSession) => {
                   setSessions((prev) => [...prev, newSession]);
                   setActiveSession(newSession);

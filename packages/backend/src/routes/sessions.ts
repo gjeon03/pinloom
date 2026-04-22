@@ -25,6 +25,7 @@ interface MessageRow {
   tool_use: string | null;
   pinned: number;
   pin_title: string | null;
+  pinned_at: string | null;
   source_message_id: string | null;
   created_at: string;
 }
@@ -51,6 +52,7 @@ export function toMessage(row: MessageRow): Message {
     toolUse: row.tool_use,
     pinned: row.pinned === 1,
     pinTitle: row.pin_title,
+    pinnedAt: row.pinned_at,
     sourceMessageId: row.source_message_id,
     createdAt: row.created_at,
   };

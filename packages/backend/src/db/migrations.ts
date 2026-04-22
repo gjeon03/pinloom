@@ -120,6 +120,15 @@ const MIGRATIONS: { id: number; sql: string }[] = [
         ON terminals(project_id, order_index);
     `,
   },
+  {
+    id: 8,
+    sql: `
+      ALTER TABLE messages ADD COLUMN pinned_at TEXT;
+      UPDATE messages SET pinned_at = created_at WHERE pinned = 1;
+      CREATE INDEX IF NOT EXISTS idx_messages_pinned_at
+        ON messages(session_id, pinned_at);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

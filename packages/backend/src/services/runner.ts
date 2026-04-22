@@ -93,6 +93,7 @@ function persistMessage(args: PersistArgs): Message {
     toolUse: toolUseJson,
     pinned: false,
     pinTitle: null,
+    pinnedAt: null,
     sourceMessageId: null,
     createdAt: now,
   };

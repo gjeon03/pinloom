@@ -7,6 +7,7 @@ import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
+import { applyPinChange } from '../utils/pins.js';
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -49,34 +50,16 @@ export function SessionPage() {
   useWebSocket(sessionId ? `session:${sessionId}` : null, (ev) => {
     if (!sessionId) return;
     if (ev.type === 'message_updated' && ev.sessionId === sessionId) {
-      setPins((prev) => {
-        const exists = prev.some((p) => p.id === ev.message.id);
-        if (ev.message.pinned) {
-          return exists
-            ? prev.map((p) => (p.id === ev.message.id ? ev.message : p))
-            : [...prev, ev.message];
-        }
-        return prev.filter((p) => p.id !== ev.message.id);
-      });
+      setPins((prev) => applyPinChange(prev, ev.message));
     } else if (ev.type === 'message' && ev.sessionId === sessionId) {
       if (ev.message.pinned) {
-        setPins((prev) =>
-          prev.some((p) => p.id === ev.message.id) ? prev : [...prev, ev.message],
-        );
+        setPins((prev) => applyPinChange(prev, ev.message));
       }
     }
   });
 
   function handlePinsChange(updated: Message) {
-    setPins((prev) => {
-      const exists = prev.some((p) => p.id === updated.id);
-      if (updated.pinned) {
-        return exists
-          ? prev.map((p) => (p.id === updated.id ? updated : p))
-          : [...prev, updated];
-      }
-      return prev.filter((p) => p.id !== updated.id);
-    });
+    setPins((prev) => applyPinChange(prev, updated));
   }
 
   const splitterKey = useMemo(
@@ -113,6 +96,7 @@ export function SessionPage() {
                 pins={pins}
                 onChange={handlePinsChange}
                 sessionId={session.id}
+                projectName={project.name}
                 showPopOut={false}
               />
             ) : null

@@ -16,30 +16,22 @@ import {
 } from 'lucide-react';
 import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
-import { copyText, downloadMarkdown, slugify } from '../utils/download.js';
+import {
+  copyText,
+  downloadManyAsZip,
+  downloadMarkdown,
+  slugify,
+} from '../utils/download.js';
 import { Markdown } from './Markdown.js';
 
 interface Props {
   pins: Message[];
   onChange: (message: Message) => void;
   sessionId?: string;
+  projectName?: string;
   showPopOut?: boolean;
   onHandoff?: (newSession: Session) => void;
   onSendPin?: (pin: Message) => void;
-}
-
-function buildBulkMarkdown(pins: Message[]): string {
-  const lines: string[] = [
-    `# pinloom pins`,
-    `Exported ${new Date().toISOString()}`,
-    '',
-  ];
-  for (const pin of pins) {
-    lines.push('---', '');
-    lines.push(`## ${pin.pinTitle ?? '(untitled pin)'}`, '');
-    lines.push(pin.content, '');
-  }
-  return lines.join('\n');
 }
 
 function buildPinMarkdown(pin: Message): string {
@@ -47,10 +39,16 @@ function buildPinMarkdown(pin: Message): string {
   return `# ${heading}\n\n${pin.content}\n`;
 }
 
+function pinFilename(pin: Message, idx: number): string {
+  const base = slugify(pin.pinTitle ?? `pin-${String(idx + 1).padStart(2, '0')}`);
+  return `${base}.md`;
+}
+
 export function PinnedPanel({
   pins,
   onChange,
   sessionId,
+  projectName,
   showPopOut = true,
   onHandoff,
   onSendPin,
@@ -79,10 +77,15 @@ export function PinnedPanel({
     return () => window.removeEventListener('keydown', onKey);
   }, [focusedPinId]);
 
-  function downloadAll() {
+  async function downloadAll() {
     if (pins.length === 0) return;
-    const filename = `pinloom-pins-${new Date().toISOString().slice(0, 10)}.md`;
-    downloadMarkdown(filename, buildBulkMarkdown(pins));
+    const files = pins.map((pin, i) => ({
+      filename: pinFilename(pin, i),
+      content: buildPinMarkdown(pin),
+    }));
+    const baseName = projectName ? slugify(projectName, 'pinloom') : 'pinloom-pins';
+    const zipName = `${baseName}-${new Date().toISOString().slice(0, 10)}`;
+    await downloadManyAsZip(files, zipName);
   }
 
   async function handoff() {
@@ -139,7 +142,7 @@ export function PinnedPanel({
           {pins.length > 0 && (
             <button
               onClick={downloadAll}
-              title="Download all pins as Markdown"
+              title="Download all pins as ZIP"
               className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
             >
               <Download size={14} />
@@ -213,14 +216,14 @@ function PinCard({
     setTimeout(() => setCopied(false), 1500);
   }
 
-  function download() {
+  async function download() {
     const base = slugify(pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`);
-    downloadMarkdown(`${base}.md`, buildPinMarkdown(pin));
+    await downloadMarkdown(`${base}.md`, buildPinMarkdown(pin));
   }
 
   return (
-    <article className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-      <header className="flex items-center gap-2 mb-1">
+    <article className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] overflow-auto max-h-96">
+      <header className="flex items-center gap-2 px-3 py-2 sticky top-0 z-10 bg-[var(--color-surface)]/95 backdrop-blur-sm border-b border-[var(--color-border)]/60">
         <button
           onClick={() => setCollapsed((v) => !v)}
           className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-0.5"
@@ -300,7 +303,7 @@ function PinCard({
         </button>
       </header>
       {!collapsed && (
-        <div className="border-t border-[var(--color-border)] pt-2 mt-1 max-h-96 overflow-auto text-[var(--color-ink)]/90">
+        <div className="px-3 py-2 text-[var(--color-ink)]/90">
           {rawView ? (
             <div className="whitespace-pre-wrap text-sm font-mono">{pin.content}</div>
           ) : (
@@ -348,9 +351,9 @@ function FocusedPinView({
     setTimeout(() => setCopied(false), 1500);
   }
 
-  function download() {
+  async function download() {
     const base = slugify(pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`);
-    downloadMarkdown(`${base}.md`, buildPinMarkdown(pin));
+    await downloadMarkdown(`${base}.md`, buildPinMarkdown(pin));
   }
 
   return (

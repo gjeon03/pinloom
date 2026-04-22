@@ -13,6 +13,7 @@ interface MessageRow {
   tool_use: string | null;
   pinned: number;
   pin_title: string | null;
+  pinned_at: string | null;
   source_message_id: string | null;
   created_at: string;
 }
@@ -35,7 +36,7 @@ export async function messageRoutes(app: FastifyInstance) {
         .prepare(
           `SELECT * FROM messages
            WHERE session_id = ? AND pinned = 1
-           ORDER BY created_at ASC`,
+           ORDER BY COALESCE(pinned_at, created_at) ASC`,
         )
         .all(req.params.sessionId) as MessageRow[];
       return rows.map(toMessage);
@@ -56,14 +57,17 @@ export async function messageRoutes(app: FastifyInstance) {
 
     let nextPinned = existing.pinned;
     let nextTitle = existing.pin_title;
+    let nextPinnedAt = existing.pinned_at;
 
     if (typeof req.body.pinned === 'boolean') {
-      nextPinned = req.body.pinned ? 1 : 0;
-      if (req.body.pinned && !nextTitle) {
-        nextTitle = summarizeForPin(existing.content);
-      }
-      if (!req.body.pinned) {
+      const willPin = req.body.pinned;
+      nextPinned = willPin ? 1 : 0;
+      if (willPin) {
+        if (!nextTitle) nextTitle = summarizeForPin(existing.content);
+        if (!nextPinnedAt) nextPinnedAt = new Date().toISOString();
+      } else {
         nextTitle = null;
+        nextPinnedAt = null;
       }
     }
 
@@ -71,11 +75,9 @@ export async function messageRoutes(app: FastifyInstance) {
       nextTitle = req.body.pinTitle;
     }
 
-    db.prepare('UPDATE messages SET pinned = ?, pin_title = ? WHERE id = ?').run(
-      nextPinned,
-      nextTitle,
-      req.params.id,
-    );
+    db.prepare(
+      'UPDATE messages SET pinned = ?, pin_title = ?, pinned_at = ? WHERE id = ?',
+    ).run(nextPinned, nextTitle, nextPinnedAt, req.params.id);
 
     const row = db
       .prepare('SELECT * FROM messages WHERE id = ?')
