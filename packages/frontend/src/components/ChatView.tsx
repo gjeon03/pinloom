@@ -20,6 +20,7 @@ export function ChatView({ session, onPinChange }: Props) {
   const [queue, setQueue] = useState<string[]>([]);
   const [atBottom, setAtBottom] = useState(true);
   const [unseenCount, setUnseenCount] = useState(0);
+  const [streamingIds, setStreamingIds] = useState<Set<string>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -31,6 +32,7 @@ export function ChatView({ session, onPinChange }: Props) {
     setQueue([]);
     setUnseenCount(0);
     setAtBottom(true);
+    setStreamingIds(new Set());
     api
       .listMessages(session.id)
       .then((msgs) => {
@@ -59,18 +61,47 @@ export function ChatView({ session, onPinChange }: Props) {
       setMessages((prev) =>
         prev.some((m) => m.id === ev.message.id) ? prev : [...prev, ev.message],
       );
+      // Empty assistant messages coming in during a run are streaming placeholders
+      if (ev.message.role === 'assistant' && ev.message.content === '') {
+        setStreamingIds((prev) => {
+          const next = new Set(prev);
+          next.add(ev.message.id);
+          return next;
+        });
+      }
       if (!atBottom) setUnseenCount((c) => c + 1);
     } else if (ev.type === 'message_updated' && ev.sessionId === session.id) {
       setMessages((prev) =>
         prev.map((m) => (m.id === ev.message.id ? ev.message : m)),
       );
       onPinChange(ev.message);
+    } else if (ev.type === 'stream_chunk' && ev.sessionId === session.id) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === ev.messageId ? { ...m, content: m.content + ev.chunk } : m,
+        ),
+      );
+      setStreamingIds((prev) => {
+        if (prev.has(ev.messageId)) return prev;
+        const next = new Set(prev);
+        next.add(ev.messageId);
+        return next;
+      });
+    } else if (ev.type === 'stream_end' && ev.sessionId === session.id) {
+      setStreamingIds((prev) => {
+        if (!prev.has(ev.messageId)) return prev;
+        const next = new Set(prev);
+        next.delete(ev.messageId);
+        return next;
+      });
     } else if (ev.type === 'run_status' && ev.sessionId === session.id) {
       if (ev.status === 'started') {
         setRunning(true);
         setError(null);
       } else {
         setRunning(false);
+        // Any stragglers — clear streaming state on run end
+        setStreamingIds(new Set());
         if (ev.status === 'error' && ev.error && ev.error !== 'cancelled') {
           setError(ev.error);
         } else {
@@ -215,7 +246,12 @@ export function ChatView({ session, onPinChange }: Props) {
           </p>
         )}
         {messages.map((m) => (
-          <MessageBubble key={m.id} message={m} onTogglePin={togglePin} />
+          <MessageBubble
+            key={m.id}
+            message={m}
+            onTogglePin={togglePin}
+            streaming={streamingIds.has(m.id)}
+          />
         ))}
         {running && (
           <div className="flex items-center gap-2 text-xs text-[var(--color-ink-muted)]">
@@ -348,9 +384,11 @@ export function ChatView({ session, onPinChange }: Props) {
 function MessageBubble({
   message,
   onTogglePin,
+  streaming,
 }: {
   message: Message;
   onTogglePin: (m: Message) => void;
+  streaming: boolean;
 }) {
   const roleStyles: Record<string, string> = {
     user: 'bg-[var(--color-surface-3)] border-[var(--color-border)]',
@@ -359,7 +397,7 @@ function MessageBubble({
     tool: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-100 font-mono',
   };
 
-  const canPin = message.role === 'assistant' || message.role === 'user';
+  const canPin = (message.role === 'assistant' || message.role === 'user') && !streaming;
 
   return (
     <div className={`group rounded border px-3 py-2 ${roleStyles[message.role] ?? ''}`}>
@@ -385,7 +423,12 @@ function MessageBubble({
       {message.role === 'tool' ? (
         <ToolMessage message={message} />
       ) : (
-        <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+        <div className="whitespace-pre-wrap text-sm">
+          {message.content}
+          {streaming && (
+            <span className="inline-block w-1.5 h-3.5 ml-0.5 align-middle bg-[var(--color-ink-muted)] animate-pulse" />
+          )}
+        </div>
       )}
     </div>
   );

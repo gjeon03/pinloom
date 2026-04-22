@@ -68,6 +68,8 @@ export interface HealthResponse {
 export type WsEvent =
   | { type: 'message'; sessionId: string; message: Message }
   | { type: 'message_updated'; sessionId: string; message: Message }
+  | { type: 'stream_chunk'; sessionId: string; messageId: string; chunk: string }
+  | { type: 'stream_end'; sessionId: string; messageId: string }
   | { type: 'plan_item_updated'; planId: string; item: PlanItem }
   | { type: 'run_log'; sessionId: string; stream: 'stdout' | 'stderr'; chunk: string }
   | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string };

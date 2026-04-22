@@ -349,7 +349,37 @@ async function runAttempt(
     options: options as Parameters<typeof query>[0]['options'],
   });
 
-  let finalText = '';
+  let totalText = '';
+  let streamMsgId: string | null = null;
+  let streamContent = '';
+
+  function closeStream() {
+    if (!streamMsgId) return;
+    // Persist final content to DB + signal end to clients
+    getDb()
+      .prepare('UPDATE messages SET content = ? WHERE id = ?')
+      .run(streamContent, streamMsgId);
+    broadcast(`session:${ctx.id}`, {
+      type: 'stream_end',
+      sessionId: ctx.id,
+      messageId: streamMsgId,
+    });
+    streamMsgId = null;
+    streamContent = '';
+  }
+
+  function ensureStream(): string {
+    if (streamMsgId) return streamMsgId;
+    const created = persistMessage({
+      sessionId: ctx.id,
+      planItemId,
+      role: 'assistant',
+      content: '',
+    });
+    streamMsgId = created.id;
+    streamContent = '';
+    return created.id;
+  }
 
   for await (const message of q) {
     if (abortController.signal.aborted) break;
@@ -362,8 +392,17 @@ async function runAttempt(
       const content = msg.message?.content ?? [];
       for (const block of content) {
         if (block.type === 'text' && block.text) {
-          finalText += block.text;
+          const id = ensureStream();
+          streamContent += block.text;
+          totalText += block.text;
+          broadcast(`session:${ctx.id}`, {
+            type: 'stream_chunk',
+            sessionId: ctx.id,
+            messageId: id,
+            chunk: block.text,
+          });
         } else if (block.type === 'tool_use') {
+          closeStream();
           persistMessage({
             sessionId: ctx.id,
             planItemId,
@@ -408,13 +447,29 @@ async function runAttempt(
       if (result.session_id && result.session_id !== ctx.claudeSessionId) {
         updateClaudeSessionId(ctx.id, result.session_id);
       }
-      if (result.subtype === 'success' && result.result && result.result.length > finalText.length) {
-        finalText = result.result;
+      // If the result contains more text than we streamed (rare edge case),
+      // append the delta to the current stream so the final message is complete.
+      if (
+        result.subtype === 'success' &&
+        result.result &&
+        result.result.length > totalText.length
+      ) {
+        const delta = result.result.slice(totalText.length);
+        const id = ensureStream();
+        streamContent += delta;
+        totalText += delta;
+        broadcast(`session:${ctx.id}`, {
+          type: 'stream_chunk',
+          sessionId: ctx.id,
+          messageId: id,
+          chunk: delta,
+        });
       }
     }
   }
 
-  return finalText;
+  closeStream();
+  return totalText;
 }
 
 async function runAssistant(
@@ -486,14 +541,9 @@ async function runAssistant(
       return;
     }
 
-    if (finalText.trim().length > 0) {
-      persistMessage({
-        sessionId: ctx.id,
-        planItemId,
-        role: 'assistant',
-        content: finalText,
-      });
-    }
+    // Streaming already persisted the assistant message in runAttempt.
+    // finalText is retained for possible callers but no extra persist here.
+    void finalText;
 
     broadcast(`session:${ctx.id}`, {
       type: 'run_status',
