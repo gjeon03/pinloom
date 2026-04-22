@@ -128,14 +128,16 @@ export function ChatView({ session, onPinChange }: Props) {
     handleScroll();
   }, [handleScroll, session.id]);
 
-  // Auto-scroll only when user is already near bottom
+  // Auto-scroll only when user is already near bottom.
+  // Depends on full `messages` array so streaming content growth (same
+  // length, content changes) also triggers the scroll.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     if (atBottom) {
       el.scrollTo({ top: el.scrollHeight });
     }
-  }, [messages.length, running, atBottom]);
+  }, [messages, running, atBottom]);
 
   // Textarea auto-grow
   useEffect(() => {
