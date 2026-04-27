@@ -14,6 +14,7 @@ import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
+import { ToolGroup } from './ToolGroup.js';
 import { Tooltip } from './Tooltip.js';
 
 type AiRunState = 'ai' | null;
@@ -80,6 +81,29 @@ function blobToBase64(blob: Blob): Promise<string> {
     };
     reader.readAsDataURL(blob);
   });
+}
+
+type RenderItem =
+  | { kind: 'message'; message: Message }
+  | { kind: 'tool-group'; key: string; messages: Message[] };
+
+function groupConsecutiveTools(messages: Message[]): RenderItem[] {
+  const out: RenderItem[] = [];
+  let buffer: Message[] = [];
+  const flush = () => {
+    if (buffer.length === 0) return;
+    out.push({ kind: 'tool-group', key: `tools-${buffer[0].id}`, messages: buffer });
+    buffer = [];
+  };
+  for (const m of messages) {
+    if (m.role === 'tool') buffer.push(m);
+    else {
+      flush();
+      out.push({ kind: 'message', message: m });
+    }
+  }
+  flush();
+  return out;
 }
 
 interface Props {
@@ -549,14 +573,20 @@ export function ChatView({ session, onPinChange }: Props) {
             Start the conversation. AI answers can be pinned so they stay visible.
           </p>
         )}
-        {messages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            onTogglePin={togglePin}
-            streaming={streamingIds.has(m.id)}
-          />
-        ))}
+        {groupConsecutiveTools(messages).map((item) => {
+          if (item.kind === 'tool-group') {
+            return <ToolGroup key={item.key} messages={item.messages} />;
+          }
+          const m = item.message;
+          return (
+            <MessageBubble
+              key={m.id}
+              message={m}
+              onTogglePin={togglePin}
+              streaming={streamingIds.has(m.id)}
+            />
+          );
+        })}
         {aiRunning && streamingIds.size === 0 && (
           <div className="text-xs text-[var(--color-ink-muted)] space-y-0.5">
             <div className="flex items-center gap-2">
