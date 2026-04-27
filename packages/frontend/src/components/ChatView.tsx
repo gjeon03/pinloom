@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
+  BookPlus,
   ChevronRight,
   ImagePlus,
   Pin,
@@ -13,6 +14,8 @@ import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
+import { ToolGroup } from './ToolGroup.js';
+import { Tooltip } from './Tooltip.js';
 
 type AiRunState = 'ai' | null;
 
@@ -80,6 +83,29 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+type RenderItem =
+  | { kind: 'message'; message: Message }
+  | { kind: 'tool-group'; key: string; messages: Message[] };
+
+function groupConsecutiveTools(messages: Message[]): RenderItem[] {
+  const out: RenderItem[] = [];
+  let buffer: Message[] = [];
+  const flush = () => {
+    if (buffer.length === 0) return;
+    out.push({ kind: 'tool-group', key: `tools-${buffer[0].id}`, messages: buffer });
+    buffer = [];
+  };
+  for (const m of messages) {
+    if (m.role === 'tool') buffer.push(m);
+    else {
+      flush();
+      out.push({ kind: 'message', message: m });
+    }
+  }
+  flush();
+  return out;
+}
+
 interface Props {
   session: Session;
   onPinChange: (message: Message) => void;
@@ -101,6 +127,8 @@ export function ChatView({ session, onPinChange }: Props) {
   const [elapsedSec, setElapsedSec] = useState(0);
   const [verb, setVerb] = useState<string>(() => pickVerb());
   const [thinkingText, setThinkingText] = useState<string>('');
+  const [wikiSyncing, setWikiSyncing] = useState(false);
+  const [wikiResult, setWikiResult] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -476,6 +504,22 @@ export function ChatView({ session, onPinChange }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [running, session.id]);
 
+  async function syncWiki() {
+    if (wikiSyncing) return;
+    setWikiSyncing(true);
+    setWikiResult(null);
+    try {
+      const result = await api.syncWiki(session.id);
+      setWikiResult(result.output);
+    } catch (err) {
+      setWikiResult(
+        err instanceof Error ? `Sync failed: ${err.message}` : `Sync failed: ${String(err)}`,
+      );
+    } finally {
+      setWikiSyncing(false);
+    }
+  }
+
   async function togglePin(message: Message) {
     try {
       const updated = await api.updateMessage(message.id, { pinned: !message.pinned });
@@ -496,6 +540,26 @@ export function ChatView({ session, onPinChange }: Props) {
 
   return (
     <div className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full">
+      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
+          Chat
+        </span>
+        <div className="flex items-center gap-1">
+          <Tooltip
+            label={wikiSyncing ? 'Syncing to wiki…' : 'Sync this session to wiki'}
+            side="bottom"
+          >
+            <button
+              type="button"
+              onClick={syncWiki}
+              disabled={wikiSyncing}
+              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <BookPlus size={14} className={wikiSyncing ? 'animate-pulse' : ''} />
+            </button>
+          </Tooltip>
+        </div>
+      </header>
       <div className="flex-1 min-h-0 relative flex flex-col">
       <div
         ref={scrollRef}
@@ -509,14 +573,20 @@ export function ChatView({ session, onPinChange }: Props) {
             Start the conversation. AI answers can be pinned so they stay visible.
           </p>
         )}
-        {messages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            onTogglePin={togglePin}
-            streaming={streamingIds.has(m.id)}
-          />
-        ))}
+        {groupConsecutiveTools(messages).map((item) => {
+          if (item.kind === 'tool-group') {
+            return <ToolGroup key={item.key} messages={item.messages} />;
+          }
+          const m = item.message;
+          return (
+            <MessageBubble
+              key={m.id}
+              message={m}
+              onTogglePin={togglePin}
+              streaming={streamingIds.has(m.id)}
+            />
+          );
+        })}
         {aiRunning && streamingIds.size === 0 && (
           <div className="text-xs text-[var(--color-ink-muted)] space-y-0.5">
             <div className="flex items-center gap-2">
@@ -578,6 +648,26 @@ export function ChatView({ session, onPinChange }: Props) {
             <span>Jump to latest</span>
           )}
         </button>
+      )}
+      {wikiResult && (
+        <div className="absolute top-3 right-3 z-20 max-w-md rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] shadow-lg p-3 text-xs">
+          <div className="flex items-start justify-between gap-2 mb-1">
+            <span className="font-medium uppercase tracking-wide text-[10px] text-[var(--color-ink-muted)]">
+              Wiki sync
+            </span>
+            <button
+              type="button"
+              onClick={() => setWikiResult(null)}
+              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
+              title="Dismiss"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          <div className="whitespace-pre-wrap text-[var(--color-ink)]/90 max-h-48 overflow-auto">
+            {wikiResult}
+          </div>
+        </div>
       )}
       </div>
 

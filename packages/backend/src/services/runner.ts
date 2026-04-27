@@ -108,7 +108,22 @@ Rules:
 - You are scoped to ONE project on disk (cwd is set for you). Operate on files there.
 - The user is iterating on a living plan. Prefer incremental changes over rewrites.
 - If the user references a plan item (by title or by @id), ground your response in that item.
-- Be concise. Show code blocks only when useful. Use Korean if the user writes in Korean.`;
+- Be concise. Show code blocks only when useful. Use Korean if the user writes in Korean.
+
+## Personal knowledge wiki
+
+The user maintains a personal wiki at \`~/.pinloom/wiki/\` with notes,
+decisions, and gotchas accumulated across all of their sessions.
+
+When the user asks something they may have explored before, browse the wiki
+first:
+1. Read \`~/.pinloom/wiki/index.md\` to see what pages exist.
+2. Use Grep on \`~/.pinloom/wiki/\` for relevant keywords.
+3. Read full pages when their summary looks relevant.
+
+Use this sparingly — only when prior context might genuinely help the user's
+current question. When you do, cite the wiki page name in your reply (e.g.
+"per ~/.pinloom/wiki/pages/react-hooks-patterns.md ...").`;
 
 function persistMessage(args: PersistArgs): Message {
   const db = getDb();

@@ -135,6 +135,12 @@ const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE sessions ADD COLUMN next_image_number INTEGER NOT NULL DEFAULT 1;
     `,
   },
+  {
+    id: 10,
+    sql: `
+      ALTER TABLE sessions ADD COLUMN last_synced_message_id TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

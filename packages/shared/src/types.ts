@@ -38,6 +38,7 @@ export interface Session {
   claudeSessionId: string | null;
   title: string | null;
   nextImageNumber: number;
+  lastSyncedMessageId: string | null;
   createdAt: string;
   updatedAt: string;
 }
