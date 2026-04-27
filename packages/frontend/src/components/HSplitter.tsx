@@ -69,7 +69,10 @@ export function HSplitter({
   const showLeft = left != null && left !== false;
   // When collapsed, 0; when expanded, leftWidth or fallback
   const effectiveLeftWidth = showLeft ? leftWidth ?? 480 : 0;
-  const dividerWidth = showLeft ? 4 : 0;
+  // Keep the divider visually thin (1px) so adjacent header/border lines stay
+  // aligned across the splitter. The resize hit area is a 12px wide absolute
+  // child below, independent of this width.
+  const dividerWidth = showLeft ? 1 : 0;
   const transitionClass = dragging ? '' : 'transition-[width] duration-200 ease-out';
 
   return (

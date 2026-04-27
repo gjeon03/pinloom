@@ -6,6 +6,7 @@ import type { ImageInput, ImageMediaType } from '../services/runner.js';
 import { cancelAiRun, isAiRunning, sendUserMessage } from '../services/runner.js';
 import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
+import { runWikiSync } from '../services/wiki-sync.js';
 
 const ALLOWED_IMAGE_MIME: ReadonlySet<ImageMediaType> = new Set<ImageMediaType>([
   'image/jpeg',
@@ -48,6 +49,7 @@ interface SessionRow {
   claude_session_id: string | null;
   title: string | null;
   next_image_number: number;
+  last_synced_message_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -74,6 +76,7 @@ export function toSession(row: SessionRow): Session {
     claudeSessionId: row.claude_session_id,
     title: row.title,
     nextImageNumber: row.next_image_number,
+    lastSyncedMessageId: row.last_synced_message_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -284,6 +287,22 @@ export async function sessionRoutes(app: FastifyInstance) {
     }
     try {
       const result = await execShellCommand(req.params.sessionId, command);
+      return result;
+    } catch (err) {
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  app.post<{
+    Params: { sessionId: string };
+    Body: { model?: string };
+  }>('/api/sessions/:sessionId/wiki-sync', async (req, reply) => {
+    try {
+      const result = await runWikiSync({
+        sessionId: req.params.sessionId,
+        model: req.body?.model,
+      });
       return result;
     } catch (err) {
       reply.code(500);

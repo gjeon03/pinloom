@@ -10,6 +10,7 @@ interface SessionRow {
   claude_session_id: string | null;
   title: string | null;
   next_image_number: number;
+  last_synced_message_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -36,6 +37,7 @@ function toSession(row: SessionRow): Session {
     claudeSessionId: row.claude_session_id,
     title: row.title,
     nextImageNumber: row.next_image_number,
+    lastSyncedMessageId: row.last_synced_message_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

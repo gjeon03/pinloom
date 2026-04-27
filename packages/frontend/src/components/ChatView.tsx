@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
+  BookPlus,
   ChevronRight,
   ImagePlus,
   Pin,
@@ -13,6 +14,7 @@ import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
+import { Tooltip } from './Tooltip.js';
 
 type AiRunState = 'ai' | null;
 
@@ -101,6 +103,8 @@ export function ChatView({ session, onPinChange }: Props) {
   const [elapsedSec, setElapsedSec] = useState(0);
   const [verb, setVerb] = useState<string>(() => pickVerb());
   const [thinkingText, setThinkingText] = useState<string>('');
+  const [wikiSyncing, setWikiSyncing] = useState(false);
+  const [wikiResult, setWikiResult] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -476,6 +480,22 @@ export function ChatView({ session, onPinChange }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [running, session.id]);
 
+  async function syncWiki() {
+    if (wikiSyncing) return;
+    setWikiSyncing(true);
+    setWikiResult(null);
+    try {
+      const result = await api.syncWiki(session.id);
+      setWikiResult(result.output);
+    } catch (err) {
+      setWikiResult(
+        err instanceof Error ? `Sync failed: ${err.message}` : `Sync failed: ${String(err)}`,
+      );
+    } finally {
+      setWikiSyncing(false);
+    }
+  }
+
   async function togglePin(message: Message) {
     try {
       const updated = await api.updateMessage(message.id, { pinned: !message.pinned });
@@ -496,6 +516,26 @@ export function ChatView({ session, onPinChange }: Props) {
 
   return (
     <div className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full">
+      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
+          Chat
+        </span>
+        <div className="flex items-center gap-1">
+          <Tooltip
+            label={wikiSyncing ? 'Syncing to wiki…' : 'Sync this session to wiki'}
+            side="bottom"
+          >
+            <button
+              type="button"
+              onClick={syncWiki}
+              disabled={wikiSyncing}
+              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <BookPlus size={14} className={wikiSyncing ? 'animate-pulse' : ''} />
+            </button>
+          </Tooltip>
+        </div>
+      </header>
       <div className="flex-1 min-h-0 relative flex flex-col">
       <div
         ref={scrollRef}
@@ -578,6 +618,26 @@ export function ChatView({ session, onPinChange }: Props) {
             <span>Jump to latest</span>
           )}
         </button>
+      )}
+      {wikiResult && (
+        <div className="absolute top-3 right-3 z-20 max-w-md rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] shadow-lg p-3 text-xs">
+          <div className="flex items-start justify-between gap-2 mb-1">
+            <span className="font-medium uppercase tracking-wide text-[10px] text-[var(--color-ink-muted)]">
+              Wiki sync
+            </span>
+            <button
+              type="button"
+              onClick={() => setWikiResult(null)}
+              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
+              title="Dismiss"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          <div className="whitespace-pre-wrap text-[var(--color-ink)]/90 max-h-48 overflow-auto">
+            {wikiResult}
+          </div>
+        </div>
       )}
       </div>
 
