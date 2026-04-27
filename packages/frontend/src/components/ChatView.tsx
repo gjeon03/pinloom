@@ -16,6 +16,7 @@ import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
 import { ToolGroup } from './ToolGroup.js';
 import { Tooltip } from './Tooltip.js';
+import { useNotifications } from '../stores/notifications.js';
 
 type AiRunState = 'ai' | null;
 
@@ -128,7 +129,7 @@ export function ChatView({ session, onPinChange }: Props) {
   const [verb, setVerb] = useState<string>(() => pickVerb());
   const [thinkingText, setThinkingText] = useState<string>('');
   const [wikiSyncing, setWikiSyncing] = useState(false);
-  const [wikiResult, setWikiResult] = useState<string | null>(null);
+  const notifications = useNotifications();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -507,13 +508,18 @@ export function ChatView({ session, onPinChange }: Props) {
   async function syncWiki() {
     if (wikiSyncing) return;
     setWikiSyncing(true);
-    setWikiResult(null);
+    const notifId = notifications.start({
+      kind: 'wiki-sync',
+      title: 'Wiki sync',
+      meta: { sessionId: session.id, sessionTitle: session.title },
+    });
     try {
       const result = await api.syncWiki(session.id);
-      setWikiResult(result.output);
+      notifications.resolve(notifId, result.output);
     } catch (err) {
-      setWikiResult(
-        err instanceof Error ? `Sync failed: ${err.message}` : `Sync failed: ${String(err)}`,
+      notifications.fail(
+        notifId,
+        err instanceof Error ? err.message : String(err),
       );
     } finally {
       setWikiSyncing(false);
@@ -648,26 +654,6 @@ export function ChatView({ session, onPinChange }: Props) {
             <span>Jump to latest</span>
           )}
         </button>
-      )}
-      {wikiResult && (
-        <div className="absolute top-3 right-3 z-20 max-w-md rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] shadow-lg p-3 text-xs">
-          <div className="flex items-start justify-between gap-2 mb-1">
-            <span className="font-medium uppercase tracking-wide text-[10px] text-[var(--color-ink-muted)]">
-              Wiki sync
-            </span>
-            <button
-              type="button"
-              onClick={() => setWikiResult(null)}
-              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-              title="Dismiss"
-            >
-              <X size={12} />
-            </button>
-          </div>
-          <div className="whitespace-pre-wrap text-[var(--color-ink)]/90 max-h-48 overflow-auto">
-            {wikiResult}
-          </div>
-        </div>
       )}
       </div>
 
