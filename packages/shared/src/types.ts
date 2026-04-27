@@ -56,6 +56,7 @@ export interface Message {
   pinTitle: string | null;
   pinnedAt: string | null;
   sourceMessageId: string | null;
+  model: string | null;
   createdAt: string;
 }
 

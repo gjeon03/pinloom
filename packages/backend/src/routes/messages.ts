@@ -15,6 +15,7 @@ interface MessageRow {
   pin_title: string | null;
   pinned_at: string | null;
   source_message_id: string | null;
+  model: string | null;
   created_at: string;
 }
 

@@ -52,6 +52,38 @@ interface PersistArgs {
   toolUse?: unknown;
 }
 
+interface MessageRow {
+  id: string;
+  session_id: string;
+  plan_item_id: string | null;
+  role: string;
+  content: string;
+  tool_use: string | null;
+  pinned: number;
+  pin_title: string | null;
+  pinned_at: string | null;
+  source_message_id: string | null;
+  model: string | null;
+  created_at: string;
+}
+
+function rowToMessage(row: MessageRow): Message {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    planItemId: row.plan_item_id,
+    role: row.role as MessageRole,
+    content: row.content,
+    toolUse: row.tool_use,
+    pinned: row.pinned === 1,
+    pinTitle: row.pin_title,
+    pinnedAt: row.pinned_at,
+    sourceMessageId: row.source_message_id,
+    model: row.model,
+    createdAt: row.created_at,
+  };
+}
+
 interface SessionContext {
   id: string;
   projectId: string;
@@ -150,6 +182,7 @@ function persistMessage(args: PersistArgs): Message {
     pinTitle: null,
     pinnedAt: null,
     sourceMessageId: null,
+    model: null,
     createdAt: now,
   };
   broadcast(`session:${args.sessionId}`, { type: 'message', sessionId: args.sessionId, message });
@@ -348,6 +381,7 @@ export async function sendUserMessage(
   content: string,
   planItemId: string | null = null,
   images: ImageInput[] = [],
+  model?: string,
 ): Promise<Message> {
   const ctx = loadSession(sessionId);
   if (!ctx) throw new Error(`session ${sessionId} not found`);
@@ -370,7 +404,7 @@ export async function sendUserMessage(
       .run(images.length, sessionId);
   }
 
-  runAssistant(ctx, content, resolvedPlanItemId, planItems, images).catch((err) => {
+  runAssistant(ctx, content, resolvedPlanItemId, planItems, images, model).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     persistMessage({
       sessionId,
@@ -397,6 +431,7 @@ async function runAttempt(
   systemPrompt: string,
   useResume: boolean,
   abortController: AbortController,
+  model?: string,
 ): Promise<string> {
   const options: Record<string, unknown> = {
     cwd: ctx.cwd,
@@ -411,6 +446,9 @@ async function runAttempt(
   if (useResume && ctx.claudeSessionId) {
     options.resume = ctx.claudeSessionId;
   }
+  if (model) {
+    options.model = model;
+  }
 
   const promptValue =
     images.length > 0 ? buildPromptIterable(prompt, images) : prompt;
@@ -423,20 +461,33 @@ async function runAttempt(
   let totalText = '';
   let streamMsgId: string | null = null;
   let streamContent = '';
+  let streamModel: string | null = null;
 
   function closeStream() {
     if (!streamMsgId) return;
-    // Persist final content to DB + signal end to clients
-    getDb()
-      .prepare('UPDATE messages SET content = ? WHERE id = ?')
-      .run(streamContent, streamMsgId);
+    const db = getDb();
+    // Persist final content + the model the SDK reported using.
+    db.prepare(
+      'UPDATE messages SET content = ?, model = COALESCE(?, model) WHERE id = ?',
+    ).run(streamContent, streamModel, streamMsgId);
     broadcast(`session:${ctx.id}`, {
       type: 'stream_end',
       sessionId: ctx.id,
       messageId: streamMsgId,
     });
+    // Re-broadcast the row now that content + model are both finalized so the
+    // UI can show the model badge without losing the streamed content.
+    const row = db
+      .prepare('SELECT * FROM messages WHERE id = ?')
+      .get(streamMsgId) as MessageRow;
+    broadcast(`session:${ctx.id}`, {
+      type: 'message_updated',
+      sessionId: ctx.id,
+      message: rowToMessage(row),
+    });
     streamMsgId = null;
     streamContent = '';
+    streamModel = null;
   }
 
   function ensureStream(): string {
@@ -473,7 +524,11 @@ async function runAttempt(
         };
         content_block?: { type?: string; text?: string; name?: string; input?: unknown };
       };
-      message?: { id?: string; content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> };
+      message?: {
+        id?: string;
+        model?: string;
+        content?: Array<{ type: string; text?: string; name?: string; input?: unknown }>;
+      };
       session_id?: string;
     };
 
@@ -526,6 +581,13 @@ async function runAttempt(
       if (anyMsg.session_id && anyMsg.session_id !== ctx.claudeSessionId) {
         updateClaudeSessionId(ctx.id, anyMsg.session_id);
         ctx.claudeSessionId = anyMsg.session_id;
+      }
+      // Capture the actual model the SDK used so we can stamp it on the row
+      // when the stream closes. Persisting earlier (mid-stream) would race
+      // with content accumulation and wipe the streamed text on reload.
+      const actualModel = anyMsg.message?.model;
+      if (actualModel && !streamModel) {
+        streamModel = actualModel;
       }
       const assistantId = anyMsg.message?.id;
       // If we streamed this message's text via partials, skip text blocks but
@@ -633,6 +695,7 @@ async function runAssistant(
   planItemId: string | null,
   planItems: PlanItemLite[],
   images: ImageInput[] = [],
+  model?: string,
 ): Promise<void> {
   broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
 
@@ -655,6 +718,7 @@ async function runAssistant(
           systemPrompt,
           true,
           abortController,
+          model,
         );
       } catch (err) {
         if (abortController.signal.aborted) throw err;
@@ -687,6 +751,7 @@ async function runAssistant(
         systemPrompt,
         false,
         abortController,
+        model,
       );
     }
 
