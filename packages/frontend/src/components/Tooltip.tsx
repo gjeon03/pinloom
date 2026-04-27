@@ -27,13 +27,16 @@ function transformFor(side: Side, dx: number, dy: number): string {
 export function Tooltip({ label, side = 'bottom', children }: Props) {
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const [shift, setShift] = useState({ x: 0, y: 0 });
+  // `visible` is true when the user is actively hovering / focusing.
+  const [visible, setVisible] = useState(false);
+  // `suppressed` hides the tooltip after a click until the user re-enters
+  // the element. Without this, hovering after pressing the button would
+  // keep the tooltip glued open even though the user already acted on it.
+  const [suppressed, setSuppressed] = useState(false);
 
   function recompute() {
     const el = tooltipRef.current;
     if (!el) return;
-    // Measure the natural (unshifted) position. We momentarily override the
-    // applied transform so a stale shift from a previous hover doesn't make
-    // the tooltip appear "already inside the viewport" and trick us.
     const previous = el.style.transform;
     el.style.transform = transformFor(side, 0, 0);
     const rect = el.getBoundingClientRect();
@@ -56,11 +59,28 @@ export function Tooltip({ label, side = 'bottom', children }: Props) {
     }
   }
 
+  const showing = visible && !suppressed;
+
   return (
     <span
-      className="relative inline-flex group"
-      onMouseEnter={recompute}
-      onFocus={recompute}
+      className="relative inline-flex"
+      onMouseEnter={() => {
+        setSuppressed(false);
+        setVisible(true);
+        recompute();
+      }}
+      onMouseLeave={() => {
+        setVisible(false);
+        setSuppressed(false);
+      }}
+      onMouseDown={() => setSuppressed(true)}
+      onFocus={() => {
+        if (!suppressed) {
+          setVisible(true);
+          recompute();
+        }
+      }}
+      onBlur={() => setVisible(false)}
     >
       {children}
       <span
@@ -69,8 +89,9 @@ export function Tooltip({ label, side = 'bottom', children }: Props) {
         style={{
           ...POSITION[side],
           transform: transformFor(side, shift.x, shift.y),
+          opacity: showing ? 1 : 0,
         }}
-        className="pointer-events-none absolute z-50 whitespace-nowrap rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[11px] text-[var(--color-ink)] shadow-lg opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150"
+        className="pointer-events-none absolute z-50 whitespace-nowrap rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[11px] text-[var(--color-ink)] shadow-lg transition-opacity duration-150"
       >
         {label}
       </span>

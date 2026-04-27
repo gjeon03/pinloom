@@ -297,10 +297,17 @@ export function ChatView({ session, onPinChange }: Props) {
     }
   }, [messages, running, atBottom, queue.length, attachments.length]);
 
-  // Textarea auto-grow
+  // Textarea auto-grow.
+  // When the input is empty we DON'T compute height from scrollHeight, because
+  // a wrapping placeholder inflates scrollHeight and leaves the textarea stuck
+  // at multi-row height. Falling back to the rows={1} default keeps it tight.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
+    if (input.length === 0) {
+      el.style.height = '';
+      return;
+    }
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
   }, [input]);
@@ -621,13 +628,13 @@ export function ChatView({ session, onPinChange }: Props) {
           </div>
         )}
         {shellRunning && (
-          <div className="flex items-center gap-2 text-xs text-yellow-300/80 font-mono">
+          <div className="flex items-center gap-2 text-xs text-[var(--color-tool-ink)] font-mono">
             <span>$ running…</span>
             <button
               type="button"
               onClick={cancelRun}
               title="Cancel"
-              className="inline-flex items-center gap-1 rounded border border-yellow-500/40 px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
+              className="inline-flex items-center gap-1 rounded border border-[var(--color-tool-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
             >
               <Square size={10} fill="currentColor" />
               <span>Stop</span>
@@ -761,7 +768,7 @@ export function ChatView({ session, onPinChange }: Props) {
             onClick={() => fileInputRef.current?.click()}
             title="Attach image (or paste from clipboard)"
             disabled={isShellMode || aiRunning}
-            className="shrink-0 rounded border border-[var(--color-border)] p-2 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="shrink-0 h-9 w-9 flex items-center justify-center rounded border border-[var(--color-border)] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <ImagePlus size={14} />
           </button>
@@ -803,7 +810,7 @@ export function ChatView({ session, onPinChange }: Props) {
             rows={1}
             className={`flex-1 resize-none rounded border px-3 py-2 text-sm leading-snug ${
               isShellMode
-                ? 'bg-yellow-500/10 border-yellow-500/40 font-mono text-yellow-100'
+                ? 'bg-[var(--color-tool-bg)] border-[var(--color-tool-border)] font-mono text-[var(--color-tool-ink)]'
                 : 'bg-[var(--color-surface-2)] border-[var(--color-border)]'
             }`}
           />
@@ -844,13 +851,13 @@ function MessageBubble({
     user: 'bg-[var(--color-surface-3)]',
     assistant: 'bg-[var(--color-surface-2)]',
     system: 'bg-red-500/10',
-    tool: 'bg-yellow-500/10',
+    tool: 'bg-[var(--color-tool-bg)]',
   };
   const roleFrame: Record<string, string> = {
     user: 'border-[var(--color-border)]',
     assistant: 'border-[var(--color-accent)]',
     system: 'border-red-500/30 text-red-200',
-    tool: 'border-yellow-500/30 text-yellow-100 font-mono',
+    tool: 'border-[var(--color-tool-border)] text-[var(--color-tool-ink)] font-mono',
   };
 
   const canPin = (message.role === 'assistant' || message.role === 'user') && !streaming;
