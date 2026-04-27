@@ -11,9 +11,11 @@
     "predev": "pnpm build:shared",
     "predev:backend": "pnpm build:shared",
     "predev:frontend": "pnpm build:shared",
-    "dev": "concurrently \"pnpm --filter @pinloom/backend dev\" \"pnpm --filter @pinloom/frontend dev\"",
+    "dev": "concurrently --kill-others \"pnpm --filter @pinloom/backend dev\" \"pnpm --filter @pinloom/frontend dev\"",
     "dev:backend": "pnpm --filter @pinloom/backend dev",
     "dev:frontend": "pnpm --filter @pinloom/frontend dev",
+    "prestart": "pnpm build",
+    "start": "concurrently --kill-others --names backend,frontend \"pnpm --filter @pinloom/backend start\" \"pnpm --filter @pinloom/frontend preview\"",
     "typecheck": "tsc -b",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
     "postinstall": "pnpm build:shared"

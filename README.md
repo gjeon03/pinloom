@@ -24,8 +24,21 @@ Most AI coding UIs treat the plan as a throwaway artifact. pinloom treats it as 
 ```bash
 nvm use              # picks up .nvmrc (Node 24)
 pnpm install
-pnpm dev             # frontend at http://localhost:4747, backend proxy on 4748
+pnpm start           # build + run, http://localhost:4747
 ```
+
+Stop with `Ctrl+C` so both processes exit cleanly. Avoid closing the terminal
+window without `Ctrl+C` — orphaned Node processes can pile up and exhaust your
+system's file descriptor limit (`maxfiles`).
+
+### Developing pinloom itself
+
+```bash
+pnpm dev             # tsx watch + Vite HMR — for editing pinloom's source
+```
+
+`pnpm dev` adds source-file watchers and is heavier; use `pnpm start` for daily
+use.
 
 ## Design principles
 
