@@ -8,6 +8,26 @@
   --color-ink-muted: oklch(0.70 0.01 260);
   --color-accent: oklch(0.72 0.14 200);
   --color-border: oklch(0.32 0.01 260);
+  /* Tool/shell-flavored callouts — distinct amber tint. */
+  --color-tool-bg: oklch(0.30 0.06 90);
+  --color-tool-border: oklch(0.55 0.10 90);
+  --color-tool-ink: oklch(0.92 0.06 90);
+  --color-tool-ink-muted: oklch(0.78 0.05 90);
+}
+
+/* Light theme — applied via `data-theme="light"` on <html>. */
+:root[data-theme='light'] {
+  --color-surface: oklch(0.99 0.003 260);
+  --color-surface-2: oklch(0.965 0.004 260);
+  --color-surface-3: oklch(0.925 0.005 260);
+  --color-ink: oklch(0.22 0.012 260);
+  --color-ink-muted: oklch(0.48 0.012 260);
+  --color-accent: oklch(0.52 0.14 200);
+  --color-border: oklch(0.86 0.006 260);
+  --color-tool-bg: oklch(0.96 0.04 90);
+  --color-tool-border: oklch(0.78 0.10 90);
+  --color-tool-ink: oklch(0.36 0.10 90);
+  --color-tool-ink-muted: oklch(0.50 0.08 90);
 }
 
 html,
@@ -33,4 +53,13 @@ select {
 button:disabled,
 [role="button"][aria-disabled="true"] {
   cursor: not-allowed;
+}
+
+/* Keep textarea placeholders on a single line so they don't inflate the
+   element's intrinsic height when the container is narrow. The user's actual
+   text wraps normally — this only affects the empty-state placeholder. */
+textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

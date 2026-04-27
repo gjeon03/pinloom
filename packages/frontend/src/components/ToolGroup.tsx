@@ -39,18 +39,18 @@ export function ToolGroup({ messages }: Props) {
   // Single tool — render as a normal bubble (no group overhead).
   if (messages.length === 1) {
     return (
-      <div className="rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-yellow-100 font-mono text-sm">
+      <div className="rounded border border-[var(--color-tool-border)] bg-[var(--color-tool-bg)] text-[var(--color-tool-ink)] px-3 py-2 font-mono text-sm">
         <ToolMessage message={messages[0]} />
       </div>
     );
   }
 
   return (
-    <div className="rounded border border-yellow-500/30 bg-yellow-500/10 text-yellow-100 font-mono text-sm overflow-hidden">
+    <div className="rounded border border-[var(--color-tool-border)] bg-[var(--color-tool-bg)] text-[var(--color-tool-ink)] font-mono text-sm overflow-hidden">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-yellow-500/15 text-left"
+        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-tool-border)]/30 text-left"
       >
         {expanded ? (
           <ChevronDown size={12} className="opacity-70 shrink-0" />
@@ -59,12 +59,12 @@ export function ToolGroup({ messages }: Props) {
         )}
         <Wrench size={12} className="shrink-0 opacity-80" />
         <span className="font-semibold">Used {messages.length} tools</span>
-        <span className="flex-1 truncate text-yellow-100/60 font-sans text-[11px]">
+        <span className="flex-1 truncate text-[var(--color-tool-ink-muted)] font-sans text-[11px]">
           {summarizeNames(messages)}
         </span>
       </button>
       {expanded && (
-        <ul className="divide-y divide-yellow-500/20 border-t border-yellow-500/20">
+        <ul className="divide-y divide-[var(--color-tool-border)]/40 border-t border-[var(--color-tool-border)]/40">
           {messages.map((m) => (
             <li key={m.id} className="px-3 py-2">
               <ToolMessage message={m} />

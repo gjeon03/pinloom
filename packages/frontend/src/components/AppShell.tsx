@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Plus, Settings } from 'lucide-react';
+import { Monitor, Moon, Plus, Settings, Sun } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
 import { DirectoryPicker } from './DirectoryPicker.js';
+import { Tooltip } from './Tooltip.js';
+import { useTheme } from '../hooks/useTheme.js';
 
 interface ShellHelpers {
   onProjectRenamed: (project: Project) => void;
@@ -233,14 +235,15 @@ export function AppShell({ children }: Props) {
           )}
         </div>
 
-        <div className="border-t border-[var(--color-border)] p-2">
+        <div className="border-t border-[var(--color-border)] p-2 flex items-center gap-1">
           <button
             onClick={() => setShowSettings(true)}
-            className="w-full rounded px-2 py-1.5 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] flex items-center gap-1.5"
+            className="flex-1 rounded px-2 py-1.5 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] flex items-center gap-1.5"
           >
             <Settings size={12} />
             Settings
           </button>
+          <ThemeToggle />
         </div>
       </aside>
 
@@ -260,5 +263,35 @@ export function AppShell({ children }: Props) {
         />
       )}
     </div>
+  );
+}
+
+function ThemeToggle() {
+  const { preference, effective, setPreference } = useTheme();
+  const next: typeof preference =
+    preference === 'system'
+      ? effective === 'dark'
+        ? 'light'
+        : 'dark'
+      : preference === 'dark'
+        ? 'light'
+        : 'system';
+  const label =
+    preference === 'system'
+      ? `Theme: System (${effective}) — click for ${next}`
+      : preference === 'dark'
+        ? 'Theme: Dark — click for Light'
+        : 'Theme: Light — click for System';
+  const Icon = preference === 'system' ? Monitor : effective === 'dark' ? Moon : Sun;
+  return (
+    <Tooltip label={label} side="top">
+      <button
+        type="button"
+        onClick={() => setPreference(next)}
+        className="rounded p-1.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
+      >
+        <Icon size={12} />
+      </button>
+    </Tooltip>
   );
 }
