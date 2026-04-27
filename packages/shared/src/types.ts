@@ -72,6 +72,8 @@ export type WsEvent =
   | { type: 'message_updated'; sessionId: string; message: Message }
   | { type: 'stream_chunk'; sessionId: string; messageId: string; chunk: string }
   | { type: 'stream_end'; sessionId: string; messageId: string }
+  | { type: 'thinking_start'; sessionId: string }
+  | { type: 'thinking_chunk'; sessionId: string; chunk: string }
   | { type: 'plan_item_updated'; planId: string; item: PlanItem }
   | { type: 'run_log'; sessionId: string; stream: 'stdout' | 'stderr'; chunk: string }
   | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string };

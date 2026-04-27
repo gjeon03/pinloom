@@ -391,6 +391,7 @@ async function runAttempt(
     allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
     abortController,
     includePartialMessages: true,
+    thinking: { type: 'adaptive' },
   };
   if (useResume && ctx.claudeSessionId) {
     options.resume = ctx.claudeSessionId;
@@ -441,6 +442,7 @@ async function runAttempt(
   // id and full content, we don't double-append it.
   const streamedViaPartial = new Set<string>();
 
+  try {
   for await (const message of q) {
     if (abortController.signal.aborted) break;
     const anyMsg = message as unknown as {
@@ -448,7 +450,12 @@ async function runAttempt(
       event?: {
         type: string;
         index?: number;
-        delta?: { type?: string; text?: string; partial_json?: string };
+        delta?: {
+          type?: string;
+          text?: string;
+          partial_json?: string;
+          thinking?: string;
+        };
         content_block?: { type?: string; text?: string; name?: string; input?: unknown };
       };
       message?: { id?: string; content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> };
@@ -470,6 +477,25 @@ async function runAttempt(
           sessionId: ctx.id,
           messageId: id,
           chunk: delta,
+        });
+      } else if (
+        ev.type === 'content_block_delta' &&
+        ev.delta?.type === 'thinking_delta'
+      ) {
+        const delta = ev.delta.thinking ?? '';
+        if (!delta) continue;
+        broadcast(`session:${ctx.id}`, {
+          type: 'thinking_chunk',
+          sessionId: ctx.id,
+          chunk: delta,
+        });
+      } else if (
+        ev.type === 'content_block_start' &&
+        ev.content_block?.type === 'thinking'
+      ) {
+        broadcast(`session:${ctx.id}`, {
+          type: 'thinking_start',
+          sessionId: ctx.id,
         });
       } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
         closeStream();
@@ -569,6 +595,16 @@ async function runAttempt(
           chunk: delta,
         });
       }
+    }
+  }
+  } finally {
+    // Ensure the SDK subprocess and its file watchers are released, even on
+    // abort or mid-stream errors. Without this the CLI can linger holding fds.
+    try {
+      const maybeClose = (q as unknown as { close?: () => void }).close;
+      if (typeof maybeClose === 'function') maybeClose.call(q);
+    } catch {
+      // best-effort cleanup
     }
   }
 

@@ -14,7 +14,7 @@ import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
 
-type RunKind = 'ai' | 'shell' | null;
+type AiRunState = 'ai' | null;
 
 type SupportedImageMime = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 const SUPPORTED_MIME_TYPES: ReadonlySet<string> = new Set<SupportedImageMime>([
@@ -33,6 +33,39 @@ interface Attachment {
 }
 
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+const THINKING_VERBS = [
+  'Thinking',
+  'Pondering',
+  'Brewing',
+  'Hyperspacing',
+  'Cooking',
+  'Hatching',
+  'Weaving',
+  'Crunching',
+  'Noodling',
+  'Untangling',
+  'Composing',
+  'Divining',
+  'Musing',
+  'Incubating',
+  'Reticulating',
+];
+
+function pickVerb(current?: string): string {
+  if (THINKING_VERBS.length <= 1) return THINKING_VERBS[0];
+  while (true) {
+    const v = THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)];
+    if (v !== current) return v;
+  }
+}
+
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${s.toString().padStart(2, '0')}s`;
+}
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -57,12 +90,17 @@ const BOTTOM_STICKY_PX = 60; // within this distance from bottom → auto-scroll
 export function ChatView({ session, onPinChange }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [runKind, setRunKind] = useState<RunKind>(null);
+  const [runKind, setRunKind] = useState<AiRunState>(null);
+  const [shellRunning, setShellRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [queue, setQueue] = useState<string[]>([]);
   const [atBottom, setAtBottom] = useState(true);
   const [unseenCount, setUnseenCount] = useState(0);
   const [streamingIds, setStreamingIds] = useState<Set<string>>(() => new Set());
+  const [runStartAt, setRunStartAt] = useState<number | null>(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [verb, setVerb] = useState<string>(() => pickVerb());
+  const [thinkingText, setThinkingText] = useState<string>('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -71,13 +109,15 @@ export function ChatView({ session, onPinChange }: Props) {
   const queueScrollRef = useRef<HTMLUListElement>(null);
   const nextAttachmentNumberRef = useRef(1);
 
-  const running = runKind !== null;
+  const aiRunning = runKind === 'ai';
+  const running = aiRunning || shellRunning;
 
   useEffect(() => {
     let cancelled = false;
     setMessages([]);
     setError(null);
     setRunKind(null);
+    setShellRunning(false);
     setQueue([]);
     setUnseenCount(0);
     setAtBottom(true);
@@ -86,6 +126,9 @@ export function ChatView({ session, onPinChange }: Props) {
       prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
       return [];
     });
+    setRunStartAt(null);
+    setElapsedSec(0);
+    setThinkingText('');
     nextAttachmentNumberRef.current = 1;
     nextAttachmentNumberRef.current = session.nextImageNumber;
     api
@@ -100,7 +143,7 @@ export function ChatView({ session, onPinChange }: Props) {
       .then((s) => {
         if (cancelled) return;
         if (s.ai) setRunKind('ai');
-        else if (s.exec) setRunKind('shell');
+        if (s.exec) setShellRunning(true);
       })
       .catch(() => {
         // non-critical
@@ -152,12 +195,22 @@ export function ChatView({ session, onPinChange }: Props) {
         next.delete(ev.messageId);
         return next;
       });
+    } else if (ev.type === 'thinking_start' && ev.sessionId === session.id) {
+      setThinkingText('');
+    } else if (ev.type === 'thinking_chunk' && ev.sessionId === session.id) {
+      setThinkingText((prev) => prev + ev.chunk);
     } else if (ev.type === 'run_status' && ev.sessionId === session.id) {
       if (ev.status === 'started') {
         setRunKind('ai');
         setError(null);
+        setRunStartAt(Date.now());
+        setElapsedSec(0);
+        setVerb(pickVerb());
+        setThinkingText('');
       } else {
         setRunKind((prev) => (prev === 'ai' ? null : prev));
+        setRunStartAt(null);
+        setThinkingText('');
         // Any stragglers — clear streaming state on run end
         setStreamingIds(new Set());
         if (ev.status === 'error' && ev.error && ev.error !== 'cancelled') {
@@ -185,6 +238,24 @@ export function ChatView({ session, onPinChange }: Props) {
     // initial position
     handleScroll();
   }, [handleScroll, session.id]);
+
+  // Keep the latest content anchored when the chat area shrinks — e.g. while
+  // the user types and the textarea grows, pushing the bottom up.
+  const atBottomRef = useRef(true);
+  useEffect(() => {
+    atBottomRef.current = atBottom;
+  }, [atBottom]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (atBottomRef.current) {
+        el.scrollTo({ top: el.scrollHeight });
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Auto-scroll only when user is already near bottom.
   // Depends on full `messages` array so streaming content growth (same
@@ -270,21 +341,22 @@ export function ChatView({ session, onPinChange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function runShellCommand(content: string) {
+    const command = content.trimStart().slice(1).trim();
+    if (!command) return;
+    setError(null);
+    setShellRunning(true);
+    try {
+      await api.execShell(session.id, command);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setShellRunning(false);
+    }
+  }
+
   async function runMessage(content: string, atts: Attachment[] = []) {
     setError(null);
-    if (content.trimStart().startsWith('!')) {
-      const command = content.trimStart().slice(1).trim();
-      if (!command) return;
-      setRunKind('shell');
-      try {
-        await api.execShell(session.id, command);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setRunKind((prev) => (prev === 'shell' ? null : prev));
-      }
-      return;
-    }
 
     let imagesPayload: { mimeType: SupportedImageMime; base64: string }[] = [];
     if (atts.length > 0) {
@@ -323,7 +395,16 @@ export function ChatView({ session, onPinChange }: Props) {
   function send() {
     const content = input.trim();
     if (!content && attachments.length === 0) return;
-    if (running || queue.length > 0) {
+
+    // Shell commands (!) bypass the queue — they run as independent child
+    // processes and can execute in parallel with an ongoing AI response.
+    if (content.startsWith('!')) {
+      setInput('');
+      void runShellCommand(content);
+      return;
+    }
+
+    if (aiRunning || queue.length > 0) {
       // Attachments are not supported in queued messages — require the first
       // run to complete before stacking more. Only queue plain text.
       if (attachments.length > 0) {
@@ -342,15 +423,16 @@ export function ChatView({ session, onPinChange }: Props) {
     void runMessage(content, atts);
   }
 
-  // Drain queue: whenever not running and queue has items, pop the first and send
+  // Drain queue: whenever AI finishes and queue has items, pop the first and send.
+  // Shell runs don't block the queue since they're independent.
   useEffect(() => {
-    if (running) return;
+    if (aiRunning) return;
     if (queue.length === 0) return;
     const [next, ...rest] = queue;
     setQueue(rest);
     void runMessage(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, queue]);
+  }, [aiRunning, queue]);
 
   // Keep the queue panel pinned to its top so the "next up" item stays visible.
   useEffect(() => {
@@ -358,6 +440,19 @@ export function ChatView({ session, onPinChange }: Props) {
     if (!el) return;
     el.scrollTop = 0;
   }, [queue.length]);
+
+  // Elapsed-time + occasional verb rotation while the AI is thinking.
+  useEffect(() => {
+    if (runStartAt === null) return;
+    const id = setInterval(() => {
+      const sec = Math.floor((Date.now() - runStartAt) / 1000);
+      setElapsedSec(sec);
+      if (sec > 0 && sec % 12 === 0) {
+        setVerb((prev) => pickVerb(prev));
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [runStartAt]);
 
   async function cancelRun() {
     if (!running) return;
@@ -405,8 +500,10 @@ export function ChatView({ session, onPinChange }: Props) {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-auto p-4 space-y-3 text-sm"
+        className="flex-1 overflow-auto px-4 text-sm"
       >
+        <div className="h-4" aria-hidden />
+        <div className="space-y-3">
         {messages.length === 0 && (
           <p className="text-[var(--color-ink-muted)]">
             Start the conversation. AI answers can be pinned so they stay visible.
@@ -420,37 +517,50 @@ export function ChatView({ session, onPinChange }: Props) {
             streaming={streamingIds.has(m.id)}
           />
         ))}
-        {runKind === 'ai' && (
-          <div className="flex items-center gap-2 text-xs text-[var(--color-ink-muted)]">
-            <span className="italic">…thinking</span>
-            <button
-              type="button"
-              onClick={cancelRun}
-              title="Cancel (Esc)"
-              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
-            >
-              <Square size={10} fill="currentColor" />
-              <span>Stop</span>
-              <span className="opacity-60 text-[10px]">Esc</span>
-            </button>
+        {aiRunning && streamingIds.size === 0 && (
+          <div className="text-xs text-[var(--color-ink-muted)] space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className="italic">
+                {verb}…
+                {elapsedSec > 0 && (
+                  <span className="not-italic opacity-70"> ({formatElapsed(elapsedSec)})</span>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={cancelRun}
+                title="Cancel (Esc)"
+                className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
+              >
+                <Square size={10} fill="currentColor" />
+                <span>Stop</span>
+                <span className="opacity-60 text-[10px]">Esc</span>
+              </button>
+            </div>
+            {thinkingText.trim().length > 0 && (
+              <div className="pl-4 border-l-2 border-[var(--color-border)] opacity-70 max-h-20 overflow-hidden whitespace-pre-wrap">
+                {thinkingText.slice(-500)}
+              </div>
+            )}
           </div>
         )}
-        {runKind === 'shell' && (
+        {shellRunning && (
           <div className="flex items-center gap-2 text-xs text-yellow-300/80 font-mono">
             <span>$ running…</span>
             <button
               type="button"
               onClick={cancelRun}
-              title="Cancel (Esc)"
+              title="Cancel"
               className="inline-flex items-center gap-1 rounded border border-yellow-500/40 px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
             >
               <Square size={10} fill="currentColor" />
               <span>Stop</span>
-              <span className="opacity-60 text-[10px]">Esc</span>
             </button>
           </div>
         )}
         {error && <p className="text-red-400 text-xs">{error}</p>}
+        </div>
+        <div className="h-4" aria-hidden />
       </div>
 
       {!atBottom && (
@@ -574,7 +684,7 @@ export function ChatView({ session, onPinChange }: Props) {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             title="Attach image (or paste from clipboard)"
-            disabled={isShellMode || running}
+            disabled={isShellMode || aiRunning}
             className="shrink-0 rounded border border-[var(--color-border)] p-2 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <ImagePlus size={14} />
@@ -608,9 +718,11 @@ export function ChatView({ session, onPinChange }: Props) {
               }
             }}
             placeholder={
-              running
-                ? 'Type to queue — will send after the current response…'
-                : 'Message the AI (Shift+Enter for newline · paste/attach images · start with ! to run a shell command)'
+              isShellMode
+                ? 'Shell command — runs immediately, even during an AI response'
+                : aiRunning || queue.length > 0
+                  ? 'Type to queue — will send after the current response…'
+                  : 'Message the AI (Shift+Enter for newline · paste/attach images · start with ! to run a shell command)'
             }
             rows={1}
             className={`flex-1 resize-none rounded border px-3 py-2 text-sm leading-snug ${
@@ -629,7 +741,13 @@ export function ChatView({ session, onPinChange }: Props) {
             }`}
           >
             {isShellMode ? <Terminal size={14} /> : <Send size={14} />}
-            <span>{running ? 'Queue' : isShellMode ? 'Run' : 'Send'}</span>
+            <span>
+              {isShellMode
+                ? 'Run'
+                : aiRunning || queue.length > 0
+                  ? 'Queue'
+                  : 'Send'}
+            </span>
           </button>
         </div>
       </form>
@@ -660,6 +778,9 @@ function MessageBubble({
   };
 
   const canPin = (message.role === 'assistant' || message.role === 'user') && !streaming;
+  // Tool/system messages are typically short and not pin targets — sticky there
+  // just adds visual noise as it follows the scroll. Limit sticky to user/assistant.
+  const stickyHeader = message.role === 'assistant' || message.role === 'user';
 
   return (
     <div
@@ -668,7 +789,7 @@ function MessageBubble({
       }`}
     >
       <div
-        className={`sticky top-0 z-10 flex justify-between items-center px-3 py-1.5 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] rounded-t border-b border-[var(--color-border)]/30 ${
+        className={`${stickyHeader ? 'sticky top-0 z-10' : ''} flex justify-between items-center px-3 py-1.5 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] rounded-t border-b border-[var(--color-border)]/30 ${
           roleBg[message.role] ?? ''
         }`}
       >
