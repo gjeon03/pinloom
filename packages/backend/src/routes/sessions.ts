@@ -65,6 +65,7 @@ interface MessageRow {
   pin_title: string | null;
   pinned_at: string | null;
   source_message_id: string | null;
+  model: string | null;
   created_at: string;
 }
 
@@ -94,6 +95,7 @@ export function toMessage(row: MessageRow): Message {
     pinTitle: row.pin_title,
     pinnedAt: row.pinned_at,
     sourceMessageId: row.source_message_id,
+    model: row.model,
     createdAt: row.created_at,
   };
 }
@@ -196,12 +198,13 @@ export async function sessionRoutes(app: FastifyInstance) {
       content: string;
       planItemId?: string | null;
       images?: Array<{ mimeType: string; base64: string }>;
+      model?: string;
     };
   }>(
     '/api/sessions/:sessionId/messages',
     { bodyLimit: 30 * 1024 * 1024 },
     async (req, reply) => {
-      const { content, planItemId = null, images: imagesRaw } = req.body;
+      const { content, planItemId = null, images: imagesRaw, model } = req.body;
       const imagesParsed = parseImages(imagesRaw);
       if ('error' in imagesParsed) {
         reply.code(400);
@@ -212,12 +215,14 @@ export async function sessionRoutes(app: FastifyInstance) {
         reply.code(400);
         return { error: 'content or images is required' };
       }
+      const cleanModel = typeof model === 'string' && model.trim().length > 0 ? model : undefined;
       try {
         const msg = await sendUserMessage(
           req.params.sessionId,
           content ?? '',
           planItemId,
           imagesParsed,
+          cleanModel,
         );
         return msg;
       } catch (err) {

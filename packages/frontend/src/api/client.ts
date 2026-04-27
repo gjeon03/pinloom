@@ -112,6 +112,7 @@ export const api = {
       content: string;
       planItemId?: string | null;
       images?: Array<{ mimeType: string; base64: string }>;
+      model?: string;
     },
   ) =>
     request<Message>(`/api/sessions/${sessionId}/messages`, {

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
   BookPlus,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   ImagePlus,
   Pin,
   Send,
@@ -16,6 +18,7 @@ import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
 import { ToolGroup } from './ToolGroup.js';
 import { Tooltip } from './Tooltip.js';
+import { ModelPicker, findModelLabel } from './ModelPicker.js';
 import { useNotifications } from '../stores/notifications.js';
 
 type AiRunState = 'ai' | null;
@@ -129,6 +132,22 @@ export function ChatView({ session, onPinChange }: Props) {
   const [verb, setVerb] = useState<string>(() => pickVerb());
   const [thinkingText, setThinkingText] = useState<string>('');
   const [wikiSyncing, setWikiSyncing] = useState(false);
+  const [model, setModel] = useState<string | null>(() => {
+    try {
+      const raw = localStorage.getItem(`pinloom:model:${session.id}`);
+      return raw === '' || raw === null ? null : raw;
+    } catch {
+      return null;
+    }
+  });
+  const [showModelRow, setShowModelRow] = useState<boolean>(() => {
+    try {
+      // Default is expanded — first-time users discover the picker, then can collapse.
+      return localStorage.getItem('pinloom:showModelRow') !== '0';
+    } catch {
+      return true;
+    }
+  });
   const notifications = useNotifications();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
@@ -160,6 +179,12 @@ export function ChatView({ session, onPinChange }: Props) {
     setThinkingText('');
     nextAttachmentNumberRef.current = 1;
     nextAttachmentNumberRef.current = session.nextImageNumber;
+    try {
+      const raw = localStorage.getItem(`pinloom:model:${session.id}`);
+      setModel(raw === '' || raw === null ? null : raw);
+    } catch {
+      setModel(null);
+    }
     api
       .listMessages(session.id)
       .then((msgs) => {
@@ -421,6 +446,7 @@ export function ChatView({ session, onPinChange }: Props) {
       await api.sendMessage(session.id, {
         content,
         images: imagesPayload.length > 0 ? imagesPayload : undefined,
+        model: model ?? undefined,
       });
     } catch (err) {
       setRunKind((prev) => (prev === 'ai' ? null : prev));
@@ -512,6 +538,28 @@ export function ChatView({ session, onPinChange }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [running, session.id]);
 
+  function changeModel(next: string | null) {
+    setModel(next);
+    try {
+      if (next === null) localStorage.removeItem(`pinloom:model:${session.id}`);
+      else localStorage.setItem(`pinloom:model:${session.id}`, next);
+    } catch {
+      // ignore
+    }
+  }
+
+  function toggleModelRow() {
+    setShowModelRow((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem('pinloom:showModelRow', next ? '1' : '0');
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }
+
   async function syncWiki() {
     if (wikiSyncing) return;
     setWikiSyncing(true);
@@ -577,7 +625,7 @@ export function ChatView({ session, onPinChange }: Props) {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-auto px-4 text-sm"
+        className="flex-1 overflow-y-auto overflow-x-hidden px-4 text-sm"
       >
         <div className="h-4" aria-hidden />
         <div className="space-y-3">
@@ -621,8 +669,15 @@ export function ChatView({ session, onPinChange }: Props) {
               </button>
             </div>
             {thinkingText.trim().length > 0 && (
-              <div className="pl-4 border-l-2 border-[var(--color-border)] opacity-70 max-h-20 overflow-hidden whitespace-pre-wrap">
-                {thinkingText.slice(-500)}
+              <div className="relative pl-4 border-l-2 border-[var(--color-border)] opacity-70 max-h-24 overflow-hidden flex items-end">
+                {/* Subtle fade so the top edge looks intentional rather than abruptly clipped */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute top-0 left-0 right-0 h-3 bg-gradient-to-b from-[var(--color-surface)] to-transparent"
+                />
+                <div className="whitespace-pre-wrap w-full">
+                  {thinkingText.slice(-1500)}
+                </div>
               </div>
             )}
           </div>
@@ -833,6 +888,34 @@ export function ChatView({ session, onPinChange }: Props) {
             </span>
           </button>
         </div>
+        {!isShellMode && (
+          <div className="border-t border-[var(--color-border)]/60 -mx-3 -mb-3 px-3">
+            {showModelRow && (
+              <div className="py-2 flex items-center justify-between gap-2 text-[11px] text-[var(--color-ink-muted)]">
+                <div className="flex items-center gap-2">
+                  <span>Model</span>
+                  <ModelPicker
+                    value={model}
+                    onChange={changeModel}
+                    side="top"
+                    disabled={aiRunning}
+                  />
+                </div>
+                {/* Reserved space for future composer-level controls. */}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={toggleModelRow}
+              title={showModelRow ? 'Collapse' : 'Expand'}
+              className={`w-full flex items-center justify-center text-[var(--color-ink-muted)]/60 hover:text-[var(--color-accent)] ${
+                showModelRow ? 'py-1' : 'py-0.5'
+              }`}
+            >
+              {showModelRow ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+            </button>
+          </div>
+        )}
       </form>
     </div>
   );
@@ -878,6 +961,14 @@ function MessageBubble({
       >
         <span>{message.role}</span>
         <div className="flex items-center gap-2">
+          {message.role === 'assistant' && message.model && (
+            <span
+              title={message.model}
+              className="rounded border border-[var(--color-border)] px-1 py-0 normal-case tracking-normal text-[10px] text-[var(--color-ink-muted)]"
+            >
+              {findModelLabel(message.model)}
+            </span>
+          )}
           <span>{new Date(message.createdAt).toLocaleTimeString()}</span>
           {canPin && (
             <button
@@ -894,11 +985,11 @@ function MessageBubble({
           )}
         </div>
       </div>
-      <div className="px-3 py-2">
+      <div className="px-3 py-2 min-w-0">
         {message.role === 'tool' ? (
           <ToolMessage message={message} />
         ) : (
-          <div className="whitespace-pre-wrap text-sm">
+          <div className="whitespace-pre-wrap break-words text-sm">
             {message.content}
             {streaming && (
               <span className="inline-block w-1.5 h-3.5 ml-0.5 align-middle bg-[var(--color-ink-muted)] animate-pulse" />

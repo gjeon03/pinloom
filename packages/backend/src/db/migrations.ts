@@ -141,6 +141,12 @@ const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE sessions ADD COLUMN last_synced_message_id TEXT;
     `,
   },
+  {
+    id: 11,
+    sql: `
+      ALTER TABLE messages ADD COLUMN model TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

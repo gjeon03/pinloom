@@ -128,6 +128,7 @@ function persistMessage(args: {
     pinTitle: null,
     pinnedAt: null,
     sourceMessageId: null,
+    model: null,
     createdAt: now,
   };
   broadcast(`session:${args.sessionId}`, {
