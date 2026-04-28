@@ -29,10 +29,6 @@ pnpm install
 pnpm start           # build + run, http://localhost:4747
 ```
 
-Stop with `Ctrl+C` so both processes exit cleanly. Avoid closing the terminal
-window without `Ctrl+C` — orphaned Node processes can pile up and exhaust your
-system's file descriptor limit (`maxfiles`).
-
 ### Developing pinloom itself
 
 ```bash
