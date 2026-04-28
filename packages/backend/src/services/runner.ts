@@ -515,11 +515,6 @@ async function runAttempt(
     return created.id;
   }
 
-  // Track which assistant message ids we've already fully consumed via partial
-  // stream events — so when the final 'assistant' event arrives with the same
-  // id and full content, we don't double-append it.
-  const streamedViaPartial = new Set<string>();
-
   try {
   for await (const message of q) {
     if (abortController.signal.aborted) break;
@@ -601,24 +596,13 @@ async function runAttempt(
       if (actualModel && !streamModel) {
         streamModel = actualModel;
       }
-      const assistantId = anyMsg.message?.id;
-      // If we streamed this message's text via partials, skip text blocks but
-      // still handle tool_use blocks (partials don't give full tool args).
-      const alreadyStreamed = assistantId ? streamedViaPartial.has(assistantId) : false;
+      // Text blocks here are duplicates of what we already streamed via
+      // `stream_event` partials (`includePartialMessages: true`) — skip them.
+      // Tool blocks must be handled here because partials don't carry full
+      // tool input arguments.
       const content = anyMsg.message?.content ?? [];
       for (const block of content) {
-        if (block.type === 'text' && block.text) {
-          if (alreadyStreamed) continue;
-          const id = ensureStream();
-          streamContent += block.text;
-          totalText += block.text;
-          broadcast(`session:${ctx.id}`, {
-            type: 'stream_chunk',
-            sessionId: ctx.id,
-            messageId: id,
-            chunk: block.text,
-          });
-        } else if (block.type === 'tool_use') {
+        if (block.type === 'tool_use') {
           closeStream();
           persistMessage({
             sessionId: ctx.id,
@@ -635,8 +619,6 @@ async function runAttempt(
           });
         }
       }
-      // Mark so future duplicate 'assistant' frames won't re-add text.
-      if (assistantId) streamedViaPartial.add(assistantId);
     } else if (anyMsg.type === 'user') {
       const msg = message as {
         message?: {
