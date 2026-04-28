@@ -15,14 +15,16 @@ Most AI coding UIs treat the plan as a throwaway artifact. pinloom treats it as 
 
 ## Requirements
 
-- **Node.js ≥ 22** (Node 24 LTS recommended). If you use nvm, just `nvm use` — the `.nvmrc` pins it.
+- **Node.js ≥ 22** (Node 24 LTS recommended). Version pins are checked in
+  for both `nvm` (`.nvmrc`) and `asdf` (`.tool-versions`). Use whichever
+  version manager you prefer — or skip if your system Node already meets
+  the requirement.
 - **pnpm** (enable via `corepack enable` if you don't have it)
 - **Claude Code CLI** installed and authenticated locally (`claude --version` should work)
 
 ## Quick start
 
 ```bash
-nvm use              # picks up .nvmrc (Node 24)
 pnpm install
 pnpm start           # build + run, http://localhost:4747
 ```
