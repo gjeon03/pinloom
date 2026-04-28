@@ -933,13 +933,13 @@ function MessageBubble({
   const roleBg: Record<string, string> = {
     user: 'bg-[var(--color-surface-3)]',
     assistant: 'bg-[var(--color-surface-2)]',
-    system: 'bg-red-500/10',
+    system: 'bg-[var(--color-error-bg)]',
     tool: 'bg-[var(--color-tool-bg)]',
   };
   const roleFrame: Record<string, string> = {
     user: 'border-[var(--color-border)]',
     assistant: 'border-[var(--color-accent)]',
-    system: 'border-red-500/30 text-red-200',
+    system: 'border-[var(--color-error-border)] text-[var(--color-error-ink)]',
     tool: 'border-[var(--color-tool-border)] text-[var(--color-tool-ink)] font-mono',
   };
 

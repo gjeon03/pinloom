@@ -86,7 +86,7 @@ function ShellDetail({
         </pre>
       )}
       {stderr && (
-        <pre className="rounded bg-red-500/10 border border-red-500/30 p-2 text-[11px] overflow-auto whitespace-pre-wrap text-red-200">
+        <pre className="rounded bg-[var(--color-error-bg)] border border-[var(--color-error-border)] p-2 text-[11px] overflow-auto whitespace-pre-wrap text-[var(--color-error-ink)]">
           {stderr}
         </pre>
       )}
@@ -95,7 +95,7 @@ function ShellDetail({
       )}
       <div
         className={`text-[10px] uppercase tracking-wide ${
-          failed ? 'text-red-300' : 'text-[var(--color-ink-muted)]'
+          failed ? 'text-[var(--color-error-ink)]' : 'text-[var(--color-ink-muted)]'
         }`}
       >
         exit {exitLabel}
@@ -129,7 +129,7 @@ function EditDetail({ input }: { input: Record<string, unknown> }) {
   return (
     <div className="space-y-1">
       <div className="text-[11px] font-mono text-[var(--color-accent)]">{filePath}</div>
-      <pre className="rounded bg-red-500/10 border border-red-500/30 p-2 text-[11px] overflow-auto whitespace-pre-wrap">
+      <pre className="rounded bg-[var(--color-error-bg)] border border-[var(--color-error-border)] p-2 text-[11px] overflow-auto whitespace-pre-wrap text-[var(--color-error-ink)]">
         - {oldStr}
       </pre>
       <pre className="rounded bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] overflow-auto whitespace-pre-wrap">

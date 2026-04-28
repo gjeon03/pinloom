@@ -13,6 +13,10 @@
   --color-tool-border: oklch(0.55 0.10 90);
   --color-tool-ink: oklch(0.92 0.06 90);
   --color-tool-ink-muted: oklch(0.78 0.05 90);
+  /* Error/stderr — readable in both themes. */
+  --color-error-bg: oklch(0.30 0.10 25);
+  --color-error-border: oklch(0.55 0.15 25);
+  --color-error-ink: oklch(0.90 0.08 25);
 }
 
 /* Light theme — applied via `data-theme="light"` on <html>. */
@@ -28,6 +32,9 @@
   --color-tool-border: oklch(0.78 0.10 90);
   --color-tool-ink: oklch(0.36 0.10 90);
   --color-tool-ink-muted: oklch(0.50 0.08 90);
+  --color-error-bg: oklch(0.95 0.04 25);
+  --color-error-border: oklch(0.72 0.15 25);
+  --color-error-ink: oklch(0.40 0.16 25);
 }
 
 html,
