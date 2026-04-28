@@ -140,22 +140,34 @@ Rules:
 - You are scoped to ONE project on disk (cwd is set for you). Operate on files there.
 - The user is iterating on a living plan. Prefer incremental changes over rewrites.
 - If the user references a plan item (by title or by @id), ground your response in that item.
-- Be concise. Show code blocks only when useful. Use Korean if the user writes in Korean.
+- Be concise. Show code blocks only when useful. Use Korean if the user writes in Korean.`;
+
+function buildWikiContext(projectId: string): string {
+  return `
 
 ## Personal knowledge wiki
 
-The user maintains a personal wiki at \`~/.pinloom/wiki/\` with notes,
-decisions, and gotchas accumulated across all of their sessions.
+The user keeps two tiers of accumulated notes:
 
-When the user asks something they may have explored before, browse the wiki
-first:
-1. Read \`~/.pinloom/wiki/index.md\` to see what pages exist.
-2. Use Grep on \`~/.pinloom/wiki/\` for relevant keywords.
-3. Read full pages when their summary looks relevant.
+- **Project-scoped** (rules, conventions, decisions for THIS project only):
+  \`~/.pinloom/wiki/projects/${projectId}/\`
+- **Global** (cross-project knowledge curated by the user):
+  \`~/.pinloom/wiki/pages/\` and \`~/.pinloom/wiki/index.md\`
 
-Use this sparingly — only when prior context might genuinely help the user's
-current question. When you do, cite the wiki page name in your reply (e.g.
-"per ~/.pinloom/wiki/pages/react-hooks-patterns.md ...").`;
+When the user asks something they may have explored before, browse the
+wiki:
+1. Read \`~/.pinloom/wiki/projects/${projectId}/index.md\` first to see
+   project-specific pages.
+2. Then read \`~/.pinloom/wiki/index.md\` for global pages.
+3. Use Grep across both directories for relevant keywords.
+4. Read full pages when their summary looks relevant.
+
+Treat project-scoped notes as authoritative within this project. **Do not
+apply rules from other projects' directories** (e.g. don't follow PIMF
+conventions while working on KSO). Use this sparingly — only when prior
+context might genuinely help. When you do, cite the wiki page in your
+reply.`;
+}
 
 function persistMessage(args: PersistArgs): Message {
   const db = getDb();
@@ -701,7 +713,10 @@ async function runAssistant(
 
   const pinsContext = buildPinsContext(ctx.id);
   const systemPrompt =
-    SYSTEM_PROMPT + buildPlanContext(planItems) + (pinsContext ? `\n\n${pinsContext}` : '');
+    SYSTEM_PROMPT +
+    buildPlanContext(planItems) +
+    buildWikiContext(ctx.projectId) +
+    (pinsContext ? `\n\n${pinsContext}` : '');
 
   const abortController = registerRun(ctx.id);
 

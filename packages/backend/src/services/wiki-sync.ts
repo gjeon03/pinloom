@@ -6,7 +6,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { getDb } from '../db/connection.js';
 
 const WIKI_ROOT = path.join(os.homedir(), '.pinloom', 'wiki');
-const WIKI_PAGES_DIR = path.join(WIKI_ROOT, 'pages');
+const GLOBAL_PAGES_DIR = path.join(WIKI_ROOT, 'pages');
 
 const DEFAULT_SYNC_MODEL = 'claude-sonnet-4-6';
 
@@ -73,21 +73,46 @@ function filterMessages(rows: SyncMessageRow[]): FilteredMessage[] {
   return out;
 }
 
-function loadMessagesSinceSync(sessionId: string): {
-  messages: SyncMessageRow[];
-  lastMessageId: string | null;
-} {
-  const db = getDb();
-  const session = db
-    .prepare('SELECT last_synced_message_id FROM sessions WHERE id = ?')
-    .get(sessionId) as { last_synced_message_id: string | null } | undefined;
-  if (!session) throw new Error(`session ${sessionId} not found`);
+interface SessionContext {
+  projectId: string;
+  projectName: string | null;
+  lastSyncedMessageId: string | null;
+}
 
+function loadSessionContext(sessionId: string): SessionContext {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT s.last_synced_message_id, s.project_id, p.name AS project_name
+       FROM sessions s
+       JOIN projects p ON p.id = s.project_id
+       WHERE s.id = ?`,
+    )
+    .get(sessionId) as
+    | {
+        last_synced_message_id: string | null;
+        project_id: string;
+        project_name: string | null;
+      }
+    | undefined;
+  if (!row) throw new Error(`session ${sessionId} not found`);
+  return {
+    projectId: row.project_id,
+    projectName: row.project_name,
+    lastSyncedMessageId: row.last_synced_message_id,
+  };
+}
+
+function loadMessagesSinceSync(
+  sessionId: string,
+  lastSyncedMessageId: string | null,
+): { messages: SyncMessageRow[]; lastMessageId: string | null } {
+  const db = getDb();
   let rows: SyncMessageRow[];
-  if (session.last_synced_message_id) {
+  if (lastSyncedMessageId) {
     const cutoff = db
       .prepare('SELECT created_at FROM messages WHERE id = ?')
-      .get(session.last_synced_message_id) as { created_at: string } | undefined;
+      .get(lastSyncedMessageId) as { created_at: string } | undefined;
     if (!cutoff) {
       rows = db
         .prepare(
@@ -123,35 +148,52 @@ function loadMessagesSinceSync(sessionId: string): {
   return { messages: rows, lastMessageId };
 }
 
-async function ensureWikiLayout(): Promise<void> {
-  await mkdir(WIKI_PAGES_DIR, { recursive: true });
+export function getProjectWikiRoot(projectId: string): string {
+  return path.join(WIKI_ROOT, 'projects', projectId);
+}
 
-  const indexPath = path.join(WIKI_ROOT, 'index.md');
-  if (!existsSync(indexPath)) {
+async function ensureWikiLayout(projectId: string, projectName: string | null): Promise<void> {
+  // Global tier — cross-project knowledge. Created once, then user-managed.
+  await mkdir(GLOBAL_PAGES_DIR, { recursive: true });
+
+  const globalIndex = path.join(WIKI_ROOT, 'index.md');
+  if (!existsSync(globalIndex)) {
     await writeFile(
-      indexPath,
-      `# Personal pinloom wiki
+      globalIndex,
+      `# Personal pinloom wiki — global
 
-This is your personal knowledge base, written and maintained by pinloom from
-your sessions. The AI reads this file (and the pages below) at the start of
-new turns when prior knowledge might be relevant.
+Cross-project knowledge lives here. Project-specific notes are kept under
+\`projects/<projectId>/\` so they don't leak into other projects.
+
+The AI reads both this directory and the active project's directory at
+the start of each turn when prior knowledge might be relevant. Sync only
+ever writes to the active project's directory — promote a page to the
+global tier by moving it here yourself.
 
 ## Pages
 
-_(empty — your first \`Sync to wiki\` will populate this list)_
+_(empty — promote pages from \`projects/<id>/pages/\` here when they
+apply across projects)_
 `,
       'utf8',
     );
   }
 
-  const schemaPath = path.join(WIKI_ROOT, '_schema.md');
-  if (!existsSync(schemaPath)) {
+  const globalSchema = path.join(WIKI_ROOT, '_schema.md');
+  if (!existsSync(globalSchema)) {
     await writeFile(
-      schemaPath,
+      globalSchema,
       `# Wiki schema
 
-Edit this file to tell the AI how you want the wiki organized. The sync agent
-reads this on every run.
+Edit this file to tell the AI how you want the wiki organized. The sync
+agent reads both this file and the project-level \`_schema.md\` if present.
+
+## Tiers
+
+- \`~/.pinloom/wiki/pages/\` — **global** cross-project knowledge. Curated
+  by you. Sync never writes here.
+- \`~/.pinloom/wiki/projects/<projectId>/pages/\` — **project-scoped**
+  notes. Sync writes here automatically.
 
 ## Conventions
 
@@ -163,73 +205,134 @@ reads this on every run.
 
 ## Editing
 
-Anything you write in this wiki by hand is preserved. The sync agent only
-modifies content inside \`<!-- pinloom:auto-section -->\` ... \`<!-- /pinloom:auto-section -->\`
-blocks within each page.
+Anything you write in this wiki by hand is preserved. The sync agent
+only modifies content inside \`<!-- pinloom:auto-section -->\` ...
+\`<!-- /pinloom:auto-section -->\` blocks within each page.
+`,
+      'utf8',
+    );
+  }
+
+  // Project tier — created on demand for the active project.
+  const projectRoot = getProjectWikiRoot(projectId);
+  const projectPagesDir = path.join(projectRoot, 'pages');
+  await mkdir(projectPagesDir, { recursive: true });
+
+  const projectIndex = path.join(projectRoot, 'index.md');
+  if (!existsSync(projectIndex)) {
+    const heading = projectName ? `# ${projectName} wiki` : `# Project wiki`;
+    await writeFile(
+      projectIndex,
+      `${heading}
+
+Project-scoped knowledge for ${projectName ?? projectId}. Decisions,
+conventions, and gotchas that only apply inside this project. The AI
+reads this directory plus the global tier on each turn.
+
+## Pages
+
+_(empty — your first \`Sync to wiki\` will populate this list)_
 `,
       'utf8',
     );
   }
 }
 
-async function readWikiSnapshot(): Promise<string> {
-  await ensureWikiLayout();
+async function readWikiSnapshot(projectId: string): Promise<string> {
   const parts: string[] = [];
 
-  const indexPath = path.join(WIKI_ROOT, 'index.md');
-  parts.push(`### ~/.pinloom/wiki/index.md\n\n${await readFile(indexPath, 'utf8')}`);
-
-  const schemaPath = path.join(WIKI_ROOT, '_schema.md');
-  parts.push(`### ~/.pinloom/wiki/_schema.md\n\n${await readFile(schemaPath, 'utf8')}`);
-
-  let pages: string[] = [];
+  // Global tier — for context only; sync agent should not write here.
+  const globalIndex = path.join(WIKI_ROOT, 'index.md');
+  if (existsSync(globalIndex)) {
+    parts.push(`### ~/.pinloom/wiki/index.md (GLOBAL — read-only for sync)\n\n${await readFile(globalIndex, 'utf8')}`);
+  }
+  const globalSchema = path.join(WIKI_ROOT, '_schema.md');
+  if (existsSync(globalSchema)) {
+    parts.push(`### ~/.pinloom/wiki/_schema.md\n\n${await readFile(globalSchema, 'utf8')}`);
+  }
+  let globalPages: string[] = [];
   try {
-    pages = (await readdir(WIKI_PAGES_DIR)).filter((f) => f.endsWith('.md')).sort();
+    globalPages = (await readdir(GLOBAL_PAGES_DIR)).filter((f) => f.endsWith('.md')).sort();
   } catch {
-    pages = [];
+    globalPages = [];
+  }
+  for (const name of globalPages) {
+    const full = path.join(GLOBAL_PAGES_DIR, name);
+    const body = await readFile(full, 'utf8');
+    parts.push(`### ~/.pinloom/wiki/pages/${name} (GLOBAL — read-only for sync)\n\n${body}`);
   }
 
-  for (const name of pages) {
-    const full = path.join(WIKI_PAGES_DIR, name);
+  // Project tier — sync agent writes here.
+  const projectRoot = getProjectWikiRoot(projectId);
+  const projectIndex = path.join(projectRoot, 'index.md');
+  if (existsSync(projectIndex)) {
+    parts.push(
+      `### ~/.pinloom/wiki/projects/${projectId}/index.md (PROJECT — sync target)\n\n${await readFile(projectIndex, 'utf8')}`,
+    );
+  }
+  const projectPagesDir = path.join(projectRoot, 'pages');
+  let projectPages: string[] = [];
+  try {
+    projectPages = (await readdir(projectPagesDir)).filter((f) => f.endsWith('.md')).sort();
+  } catch {
+    projectPages = [];
+  }
+  for (const name of projectPages) {
+    const full = path.join(projectPagesDir, name);
     const body = await readFile(full, 'utf8');
-    parts.push(`### ~/.pinloom/wiki/pages/${name}\n\n${body}`);
+    parts.push(
+      `### ~/.pinloom/wiki/projects/${projectId}/pages/${name} (PROJECT — sync target)\n\n${body}`,
+    );
   }
 
   return parts.join('\n\n---\n\n');
 }
 
-const SYNC_SYSTEM_PROMPT = `You maintain a personal knowledge wiki at \`~/.pinloom/wiki/\` for the user.
+function buildSyncSystemPrompt(projectId: string, projectName: string | null): string {
+  return `You maintain a personal knowledge wiki for the user. The wiki has two tiers:
+
+1. **Global**: \`~/.pinloom/wiki/\` (cross-project knowledge). **READ-ONLY for you.**
+   Only the user promotes pages here. Do not create or modify any file under
+   \`~/.pinloom/wiki/index.md\`, \`~/.pinloom/wiki/_schema.md\`, or
+   \`~/.pinloom/wiki/pages/\`.
+2. **Project**: \`~/.pinloom/wiki/projects/${projectId}/\` (notes for the
+   active project, ${projectName ?? projectId}). **THIS IS YOUR WORKSPACE.**
 
 Your job: read the conversation snippet provided below, distill durable
-knowledge from it, and integrate that knowledge into the existing wiki using
-your filesystem tools.
+knowledge from it, and write it into the **project** tier using your
+filesystem tools. The global tier is provided in the snapshot purely as
+context so you don't redundantly capture cross-project things that already
+live there.
 
 ## What to extract
-- Decisions the user made (and the reasoning)
-- Concepts learned, gotchas resolved, patterns discovered
-- Cross-cutting insights that apply beyond this single session
+- Decisions the user made (and the reasoning), scoped to this project
+- Concepts learned, gotchas resolved, patterns discovered while working here
+- Project-specific conventions (git workflow, naming rules, build commands)
 
 ## What to skip
 - Transient working state (e.g. a bug being actively debugged but not yet solved)
 - Trivial details (file paths, one-off command output)
-- Information already captured well in existing pages — only update if new
+- Information already captured well in existing project pages — only update if new
+- Cross-project knowledge that already lives in the global tier (cite it instead)
 
 ## How to write
 
 1. Read \`~/.pinloom/wiki/_schema.md\` for the user's organizational conventions.
-2. Read \`~/.pinloom/wiki/index.md\` to see existing pages.
-3. For each insight, decide: create a new page in \`~/.pinloom/wiki/pages/\` OR
-   update an existing page.
+2. Read \`~/.pinloom/wiki/projects/${projectId}/index.md\` to see existing pages.
+3. For each insight, decide: create a new page in
+   \`~/.pinloom/wiki/projects/${projectId}/pages/\` OR update an existing one.
 4. Add cross-references with relative links between pages.
-5. If you find a contradiction with existing content, mark it explicitly:
+5. If a contradiction shows up with existing content, mark it explicitly:
    \`> **Conflict**: existing page says X; this session suggests Y.\`
-6. Update \`index.md\` so it lists every page with a one-line description.
-7. Preserve any user-written content outside \`<!-- pinloom:auto-section -->\`
-   markers. Only edit inside those markers, or wrap new auto-managed content in
-   them.
+6. Update \`~/.pinloom/wiki/projects/${projectId}/index.md\` so it lists every
+   page in this project with a one-line description.
+7. Preserve user-written content outside \`<!-- pinloom:auto-section -->\`
+   markers. Only edit inside those markers, or wrap new auto-managed
+   content in them.
 
-When done, briefly summarize what you did (which pages you created or updated).
-Be concise — no preamble, just the result.`;
+When done, briefly summarize what you did (which pages you created or
+updated). Be concise — no preamble, just the result.`;
+}
 
 interface SyncResult {
   output: string;
@@ -243,9 +346,13 @@ export async function runWikiSync(args: {
 }): Promise<SyncResult> {
   const { sessionId, model = DEFAULT_SYNC_MODEL } = args;
 
-  await ensureWikiLayout();
+  const ctx = loadSessionContext(sessionId);
+  await ensureWikiLayout(ctx.projectId, ctx.projectName);
 
-  const { messages, lastMessageId } = loadMessagesSinceSync(sessionId);
+  const { messages, lastMessageId } = loadMessagesSinceSync(
+    sessionId,
+    ctx.lastSyncedMessageId,
+  );
   if (messages.length === 0) {
     return {
       output: 'No new messages since last sync. Wiki is up to date.',
@@ -263,7 +370,7 @@ export async function runWikiSync(args: {
     };
   }
 
-  const wikiSnapshot = await readWikiSnapshot();
+  const wikiSnapshot = await readWikiSnapshot(ctx.projectId);
 
   const transcript = filtered
     .map((m) => `### ${m.role === 'user' ? 'User' : 'AI'}\n\n${m.content}`)
@@ -281,12 +388,13 @@ export async function runWikiSync(args: {
     transcript,
   ].join('\n');
 
+  const projectRoot = getProjectWikiRoot(ctx.projectId);
   const abortController = new AbortController();
   const q = query({
     prompt,
     options: {
-      cwd: WIKI_ROOT,
-      systemPrompt: SYNC_SYSTEM_PROMPT,
+      cwd: projectRoot,
+      systemPrompt: buildSyncSystemPrompt(ctx.projectId, ctx.projectName),
       model,
       maxTurns: 30,
       permissionMode: 'bypassPermissions',
