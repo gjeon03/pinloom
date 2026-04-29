@@ -1,4 +1,12 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,9 +14,55 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { getDb } from '../db/connection.js';
 
 const WIKI_ROOT = path.join(os.homedir(), '.pinloom', 'wiki');
-const GLOBAL_PAGES_DIR = path.join(WIKI_ROOT, 'pages');
+const PAGES_DIR = path.join(WIKI_ROOT, 'pages');
+const SCHEMA_FILE = path.join(WIKI_ROOT, '_schema.md');
+const INDEX_FILE = path.join(WIKI_ROOT, 'index.md');
+const LEGACY_PROJECTS_DIR = path.join(WIKI_ROOT, 'projects');
 
 const DEFAULT_SYNC_MODEL = 'claude-sonnet-4-6';
+
+const AUTO_SECTION_OPEN = '<!-- pinloom:auto-section -->';
+const AUTO_SECTION_CLOSE = '<!-- /pinloom:auto-section -->';
+
+interface ProjectInfo {
+  id: string;
+  name: string | null;
+  cwd: string;
+}
+
+const SLUG_REPLACE = /[^a-zA-Z0-9._-]/g;
+function slugify(input: string): string {
+  const cleaned = input.replace(SLUG_REPLACE, '-').replace(/^-+|-+$/g, '');
+  return cleaned || 'project';
+}
+
+function loadAllProjects(): ProjectInfo[] {
+  const db = getDb();
+  return db.prepare('SELECT id, name, cwd FROM projects').all() as ProjectInfo[];
+}
+
+function computeWikiSlug(
+  projectId: string,
+  cwd: string,
+  allProjects: ProjectInfo[],
+): string {
+  const base = slugify(path.basename(cwd));
+  const hasCollision = allProjects.some(
+    (p) => p.id !== projectId && slugify(path.basename(p.cwd)) === base,
+  );
+  return hasCollision ? `${base}-${projectId.slice(0, 6)}` : base;
+}
+
+export function getProjectWikiSlugByProjectId(projectId: string): string {
+  const all = loadAllProjects();
+  const me = all.find((p) => p.id === projectId);
+  if (!me) return projectId;
+  return computeWikiSlug(projectId, me.cwd, all);
+}
+
+export function getWikiRoot(): string {
+  return WIKI_ROOT;
+}
 
 interface SyncMessageRow {
   id: string;
@@ -76,6 +130,7 @@ function filterMessages(rows: SyncMessageRow[]): FilteredMessage[] {
 interface SessionContext {
   projectId: string;
   projectName: string | null;
+  projectCwd: string;
   lastSyncedMessageId: string | null;
 }
 
@@ -83,7 +138,10 @@ function loadSessionContext(sessionId: string): SessionContext {
   const db = getDb();
   const row = db
     .prepare(
-      `SELECT s.last_synced_message_id, s.project_id, p.name AS project_name
+      `SELECT s.last_synced_message_id,
+              s.project_id,
+              p.name AS project_name,
+              p.cwd AS project_cwd
        FROM sessions s
        JOIN projects p ON p.id = s.project_id
        WHERE s.id = ?`,
@@ -93,12 +151,14 @@ function loadSessionContext(sessionId: string): SessionContext {
         last_synced_message_id: string | null;
         project_id: string;
         project_name: string | null;
+        project_cwd: string;
       }
     | undefined;
   if (!row) throw new Error(`session ${sessionId} not found`);
   return {
     projectId: row.project_id,
     projectName: row.project_name,
+    projectCwd: row.project_cwd,
     lastSyncedMessageId: row.last_synced_message_id,
   };
 }
@@ -148,196 +208,393 @@ function loadMessagesSinceSync(
   return { messages: rows, lastMessageId };
 }
 
-export function getProjectWikiRoot(projectId: string): string {
-  return path.join(WIKI_ROOT, 'projects', projectId);
+function hasFrontmatter(body: string): boolean {
+  return /^---\s*\n[\s\S]*?\n---\s*(\n|$)/.test(body);
 }
 
-async function ensureWikiLayout(projectId: string, projectName: string | null): Promise<void> {
-  // Global tier — cross-project knowledge. Created once, then user-managed.
-  await mkdir(GLOBAL_PAGES_DIR, { recursive: true });
-
-  const globalIndex = path.join(WIKI_ROOT, 'index.md');
-  if (!existsSync(globalIndex)) {
-    await writeFile(
-      globalIndex,
-      `# Personal pinloom wiki — global
-
-Cross-project knowledge lives here. Project-specific notes are kept under
-\`projects/<projectId>/\` so they don't leak into other projects.
-
-The AI reads both this directory and the active project's directory at
-the start of each turn when prior knowledge might be relevant. Sync only
-ever writes to the active project's directory — promote a page to the
-global tier by moving it here yourself.
-
-## Pages
-
-_(empty — promote pages from \`projects/<id>/pages/\` here when they
-apply across projects)_
-`,
-      'utf8',
-    );
+function extractFirstNonHeadingLine(body: string): string {
+  for (const raw of body.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('#')) continue;
+    if (line.startsWith('<!--')) continue;
+    return line.length > 120 ? `${line.slice(0, 117)}...` : line;
   }
+  return '';
+}
 
-  const globalSchema = path.join(WIKI_ROOT, '_schema.md');
-  if (!existsSync(globalSchema)) {
-    await writeFile(
-      globalSchema,
-      `# Wiki schema
-
-Edit this file to tell the AI how you want the wiki organized. The sync
-agent reads both this file and the project-level \`_schema.md\` if present.
-
-## Tiers
-
-- \`~/.pinloom/wiki/pages/\` — **global** cross-project knowledge. Curated
-  by you. Sync never writes here.
-- \`~/.pinloom/wiki/projects/<projectId>/pages/\` — **project-scoped**
-  notes. Sync writes here automatically.
-
-## Conventions
-
-- One topic per page in \`pages/\`
-- Use kebab-case filenames (e.g. \`react-hooks-patterns.md\`)
-- Each page should start with a one-line description for the index
-- Cross-reference pages with markdown links: \`[topic](./other-page.md)\`
-- Mark known contradictions explicitly with a "**Conflict**" callout
-
-## Editing
-
-Anything you write in this wiki by hand is preserved. The sync agent
-only modifies content inside \`<!-- pinloom:auto-section -->\` ...
-\`<!-- /pinloom:auto-section -->\` blocks within each page.
-`,
-      'utf8',
-    );
+function buildFrontmatter(args: {
+  appliesTo: string[];
+  topics?: string[];
+  related?: string[];
+  summary: string;
+}): string {
+  const fm: string[] = ['---'];
+  if (args.appliesTo.length > 0) {
+    fm.push(`applies_to: [${args.appliesTo.join(', ')}]`);
+  } else {
+    fm.push('applies_to: [global]');
   }
+  fm.push(`topic: [${(args.topics ?? []).join(', ')}]`);
+  fm.push(`related: [${(args.related ?? []).join(', ')}]`);
+  fm.push(`summary: ${JSON.stringify(args.summary)}`);
+  fm.push('---', '');
+  return fm.join('\n');
+}
 
-  // Project tier — created on demand for the active project.
-  const projectRoot = getProjectWikiRoot(projectId);
-  const projectPagesDir = path.join(projectRoot, 'pages');
-  await mkdir(projectPagesDir, { recursive: true });
+const DEFAULT_SCHEMA = `# Wiki schema
 
-  const projectIndex = path.join(projectRoot, 'index.md');
-  if (!existsSync(projectIndex)) {
-    const heading = projectName ? `# ${projectName} wiki` : `# Project wiki`;
-    await writeFile(
-      projectIndex,
-      `${heading}
+User-editable. The sync agent reads this on every run to learn how the
+wiki should be organized.
 
-Project-scoped knowledge for ${projectName ?? projectId}. Decisions,
-conventions, and gotchas that only apply inside this project. The AI
-reads this directory plus the global tier on each turn.
+## Frontmatter (required for every page)
 
-## Pages
+\`\`\`yaml
+---
+applies_to: [<projectSlug>...]   # pinloom project slugs; omit or [global] = applies everywhere
+topic: [<tag>...]                # topical tags (free-form, e.g. git, react, deploy, debugging)
+related: [<filename>...]         # other pages explicitly relevant to this one
+summary: "<one-line description>"
+---
+\`\`\`
+
+## Filename conventions
+
+- kebab-case
+- Project-specific page: suffix with project slug
+  (e.g. \`git-conventions-pims-frontend.md\`)
+- Cross-project page: generic name (e.g. \`react-hooks-patterns.md\`)
+
+## Index
+
+\`index.md\` is auto-maintained by the sync agent inside the
+${AUTO_SECTION_OPEN} ... ${AUTO_SECTION_CLOSE} block. Pages are grouped
+into sections by their primary \`topic\`. Anything outside the markers
+is user-owned and preserved across runs.
+
+## Auto vs manual content within pages
+
+The AI only edits inside ${AUTO_SECTION_OPEN} ... ${AUTO_SECTION_CLOSE}
+markers within each page. Anything outside is user-owned. You can
+hand-edit frontmatter, rewrite sections, add notes — the sync agent
+preserves it.
+
+## Page-level evolution
+
+When a single page grows beyond ~5000 chars or has 5+ major sections,
+you can promote it to a directory:
+
+\`\`\`
+pages/<name>.md   →   pages/<name>/
+                       ├── index.md      (entry, with frontmatter)
+                       ├── workflow.md
+                       └── examples.md
+\`\`\`
+
+The reading agent treats \`pages/<name>.md\` and \`pages/<name>/index.md\`
+as equivalent entry points. Promotion is a per-page decision.
+`;
+
+const DEFAULT_INDEX = `# Personal pinloom wiki
+
+The AI reads this index at the start of each turn to find relevant
+pages. Each page declares its scope via \`applies_to\` frontmatter —
+the AI must filter by the active project's slug before applying any
+rules from a page.
+
+${AUTO_SECTION_OPEN}
 
 _(empty — your first \`Sync to wiki\` will populate this list)_
-`,
-      'utf8',
-    );
+
+${AUTO_SECTION_CLOSE}
+`;
+
+async function ensureWikiLayout(): Promise<void> {
+  await mkdir(PAGES_DIR, { recursive: true });
+  if (!existsSync(SCHEMA_FILE)) {
+    await writeFile(SCHEMA_FILE, DEFAULT_SCHEMA, 'utf8');
+  }
+  if (!existsSync(INDEX_FILE)) {
+    await writeFile(INDEX_FILE, DEFAULT_INDEX, 'utf8');
   }
 }
 
-async function readWikiSnapshot(projectId: string): Promise<string> {
+interface MigrationReport {
+  projectPagesMoved: number;
+  globalPagesAnnotated: number;
+  legacyDirsRemoved: number;
+  indexRewritten: boolean;
+  schemaRewritten: boolean;
+}
+
+async function migrateLegacyLayout(): Promise<MigrationReport> {
+  const report: MigrationReport = {
+    projectPagesMoved: 0,
+    globalPagesAnnotated: 0,
+    legacyDirsRemoved: 0,
+    indexRewritten: false,
+    schemaRewritten: false,
+  };
+
+  // 1. Annotate existing flat global pages with frontmatter if missing.
+  if (existsSync(PAGES_DIR)) {
+    const entries = await readdir(PAGES_DIR);
+    for (const entry of entries) {
+      if (!entry.endsWith('.md')) continue;
+      const full = path.join(PAGES_DIR, entry);
+      const st = await stat(full);
+      if (!st.isFile()) continue;
+      const body = await readFile(full, 'utf8');
+      if (hasFrontmatter(body)) continue;
+      const summary = extractFirstNonHeadingLine(body);
+      const fm = buildFrontmatter({
+        appliesTo: ['global'],
+        topics: [],
+        related: [],
+        summary,
+      });
+      await writeFile(full, fm + body, 'utf8');
+      report.globalPagesAnnotated++;
+    }
+  }
+
+  // 2. Move project-tier pages out into the flat pages dir with
+  //    `applies_to: [<projectSlug>]` frontmatter.
+  if (existsSync(LEGACY_PROJECTS_DIR)) {
+    const all = loadAllProjects();
+    const projectDirs = await readdir(LEGACY_PROJECTS_DIR);
+    for (const dirName of projectDirs) {
+      const dirPath = path.join(LEGACY_PROJECTS_DIR, dirName);
+      const dirStat = await stat(dirPath).catch(() => null);
+      if (!dirStat || !dirStat.isDirectory()) continue;
+
+      // Resolve slug. The dir name is either a pinloom projectId (legacy)
+      // or already a slug (e.g. from an aborted PR-#28 era branch).
+      const matchById = all.find((p) => p.id === dirName);
+      const slug = matchById ? computeWikiSlug(matchById.id, matchById.cwd, all) : dirName;
+
+      const legacyPagesDir = path.join(dirPath, 'pages');
+      if (existsSync(legacyPagesDir)) {
+        const entries = await readdir(legacyPagesDir);
+        for (const entry of entries) {
+          if (!entry.endsWith('.md')) continue;
+          const src = path.join(legacyPagesDir, entry);
+          const st = await stat(src).catch(() => null);
+          if (!st || !st.isFile()) continue;
+
+          const baseName = entry.replace(/\.md$/, '');
+          const targetName = baseName.endsWith(`-${slug}`)
+            ? entry
+            : `${baseName}-${slug}.md`;
+          const target = path.join(PAGES_DIR, targetName);
+
+          const body = await readFile(src, 'utf8');
+          let newBody = body;
+          if (!hasFrontmatter(body)) {
+            const summary = extractFirstNonHeadingLine(body);
+            newBody =
+              buildFrontmatter({
+                appliesTo: [slug],
+                topics: [],
+                related: [],
+                summary,
+              }) + body;
+          }
+
+          if (existsSync(target)) {
+            // Already migrated — drop the source. The sync agent will
+            // reconcile any divergence on its next run.
+            await rm(src, { force: true });
+          } else {
+            await writeFile(target, newBody, 'utf8');
+            await rm(src, { force: true });
+          }
+          report.projectPagesMoved++;
+        }
+      }
+
+      // Drop the now-redundant project subtree (index.md, _schema.md, pages/).
+      await rm(dirPath, { recursive: true, force: true });
+      report.legacyDirsRemoved++;
+    }
+
+    // Best-effort cleanup of the empty `projects/` dir itself.
+    try {
+      const remaining = await readdir(LEGACY_PROJECTS_DIR);
+      if (remaining.length === 0) {
+        await rm(LEGACY_PROJECTS_DIR, { recursive: true, force: true });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return report;
+}
+
+async function readWikiPagesFlat(): Promise<
+  { name: string; body: string; relPath: string }[]
+> {
+  if (!existsSync(PAGES_DIR)) return [];
+  const out: { name: string; body: string; relPath: string }[] = [];
+  const entries = await readdir(PAGES_DIR);
+  for (const entry of entries) {
+    const full = path.join(PAGES_DIR, entry);
+    const st = await stat(full).catch(() => null);
+    if (!st) continue;
+    if (st.isDirectory()) {
+      // Promoted topic directory — read its index.md as the entry point.
+      const inner = path.join(full, 'index.md');
+      if (existsSync(inner)) {
+        const body = await readFile(inner, 'utf8');
+        out.push({ name: `${entry}/index.md`, body, relPath: `${entry}/index.md` });
+      }
+      continue;
+    }
+    if (!entry.endsWith('.md')) continue;
+    const body = await readFile(full, 'utf8');
+    out.push({ name: entry, body, relPath: entry });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+async function readWikiSnapshot(): Promise<string> {
   const parts: string[] = [];
 
-  // Global tier — for context only; sync agent should not write here.
-  const globalIndex = path.join(WIKI_ROOT, 'index.md');
-  if (existsSync(globalIndex)) {
-    parts.push(`### ~/.pinloom/wiki/index.md (GLOBAL — read-only for sync)\n\n${await readFile(globalIndex, 'utf8')}`);
+  if (existsSync(SCHEMA_FILE)) {
+    parts.push(`### ~/.pinloom/wiki/_schema.md\n\n${await readFile(SCHEMA_FILE, 'utf8')}`);
   }
-  const globalSchema = path.join(WIKI_ROOT, '_schema.md');
-  if (existsSync(globalSchema)) {
-    parts.push(`### ~/.pinloom/wiki/_schema.md\n\n${await readFile(globalSchema, 'utf8')}`);
-  }
-  let globalPages: string[] = [];
-  try {
-    globalPages = (await readdir(GLOBAL_PAGES_DIR)).filter((f) => f.endsWith('.md')).sort();
-  } catch {
-    globalPages = [];
-  }
-  for (const name of globalPages) {
-    const full = path.join(GLOBAL_PAGES_DIR, name);
-    const body = await readFile(full, 'utf8');
-    parts.push(`### ~/.pinloom/wiki/pages/${name} (GLOBAL — read-only for sync)\n\n${body}`);
+  if (existsSync(INDEX_FILE)) {
+    parts.push(`### ~/.pinloom/wiki/index.md\n\n${await readFile(INDEX_FILE, 'utf8')}`);
   }
 
-  // Project tier — sync agent writes here.
-  const projectRoot = getProjectWikiRoot(projectId);
-  const projectIndex = path.join(projectRoot, 'index.md');
-  if (existsSync(projectIndex)) {
-    parts.push(
-      `### ~/.pinloom/wiki/projects/${projectId}/index.md (PROJECT — sync target)\n\n${await readFile(projectIndex, 'utf8')}`,
-    );
-  }
-  const projectPagesDir = path.join(projectRoot, 'pages');
-  let projectPages: string[] = [];
-  try {
-    projectPages = (await readdir(projectPagesDir)).filter((f) => f.endsWith('.md')).sort();
-  } catch {
-    projectPages = [];
-  }
-  for (const name of projectPages) {
-    const full = path.join(projectPagesDir, name);
-    const body = await readFile(full, 'utf8');
-    parts.push(
-      `### ~/.pinloom/wiki/projects/${projectId}/pages/${name} (PROJECT — sync target)\n\n${body}`,
-    );
+  const pages = await readWikiPagesFlat();
+  for (const p of pages) {
+    parts.push(`### ~/.pinloom/wiki/pages/${p.relPath}\n\n${p.body}`);
   }
 
-  return parts.join('\n\n---\n\n');
+  return parts.length === 0 ? '_(wiki is empty)_' : parts.join('\n\n---\n\n');
 }
 
-function buildSyncSystemPrompt(projectId: string, projectName: string | null): string {
-  return `You maintain a personal knowledge wiki for the user. The wiki has two tiers:
+interface ProjectScope {
+  projectId: string;
+  name: string | null;
+  cwd: string;
+  slug: string;
+  isActive: boolean;
+}
 
-1. **Global**: \`~/.pinloom/wiki/\` (cross-project knowledge). **READ-ONLY for you.**
-   Only the user promotes pages here. Do not create or modify any file under
-   \`~/.pinloom/wiki/index.md\`, \`~/.pinloom/wiki/_schema.md\`, or
-   \`~/.pinloom/wiki/pages/\`.
-2. **Project**: \`~/.pinloom/wiki/projects/${projectId}/\` (notes for the
-   active project, ${projectName ?? projectId}). **THIS IS YOUR WORKSPACE.**
+function buildProjectScopes(
+  activeProjectId: string,
+  allProjects: ProjectInfo[],
+): ProjectScope[] {
+  return allProjects.map((p) => ({
+    projectId: p.id,
+    name: p.name,
+    cwd: p.cwd,
+    slug: computeWikiSlug(p.id, p.cwd, allProjects),
+    isActive: p.id === activeProjectId,
+  }));
+}
 
-Your job: read the conversation snippet provided below, distill durable
-knowledge from it, and write it into the **project** tier using your
-filesystem tools. The global tier is provided in the snapshot purely as
-context so you don't redundantly capture cross-project things that already
-live there.
+function buildSyncSystemPrompt(scopes: ProjectScope[]): string {
+  const active = scopes.find((s) => s.isActive);
+  if (!active) throw new Error('no active project scope');
+  const others = scopes.filter((s) => !s.isActive);
 
-## What to extract
-- Decisions the user made (and the reasoning), scoped to this project
-- Concepts learned, gotchas resolved, patterns discovered while working here
-- Project-specific conventions (git workflow, naming rules, build commands)
+  const projectsTable = [active, ...others]
+    .map((s) => {
+      const tag = s.isActive ? ' (ACTIVE — default scope)' : '';
+      return `- \`${s.slug}\`${tag} — ${s.name ?? '(unnamed)'} (cwd: \`${s.cwd}\`)`;
+    })
+    .join('\n');
+
+  return `You maintain the user's personal knowledge wiki at \`~/.pinloom/wiki/\`.
+
+## Layout
+
+- \`pages/\` — flat directory of every page. Each page has YAML
+  frontmatter declaring scope.
+- \`index.md\` — auto-maintained list of every page, grouped by topic.
+- \`_schema.md\` — user-editable conventions; read it once at the
+  start of your run.
+
+## Active session
+
+The user is in a session for project \`${active.slug}\` (${active.name ?? '(unnamed)'}, cwd \`${active.cwd}\`). Treat this as the **default scope** for new
+insights from the conversation.
+
+## All registered projects (valid \`applies_to\` slugs)
+
+${projectsTable}
+
+\`global\` is also a valid \`applies_to\` value, meaning "applies to all
+sessions regardless of project."
+
+## Your job
+
+1. Read \`_schema.md\` once for conventions.
+2. Read \`index.md\` to see what pages already exist.
+3. For each insight extracted from the conversation snippet below:
+   a. **Decide scope** — which projects does this apply to?
+      - Specific to active project → \`applies_to: [${active.slug}]\`
+      - Specific to another listed project → \`applies_to: [<thatSlug>]\`
+      - Cross-project / general → \`applies_to: [global]\`
+      - Multi-project → list all relevant slugs
+      Default to the active project when in doubt. Only route to
+      another project when the conversation explicitly discussed that
+      project's repo or rules.
+   b. **Decide topic tags** — free-form, kebab-friendly. Reuse tags
+      already in use across existing pages when applicable. Look at
+      existing frontmatter before inventing a new tag.
+   c. **Pick filename** —
+      - Project-specific: suffix with project slug
+        (e.g. \`git-conventions-${active.slug}.md\`)
+      - Cross-project: generic kebab-case
+        (e.g. \`react-hooks-patterns.md\`)
+   d. **Write or update the page** in \`pages/\`. If a similar page
+      exists, prefer updating it over creating a duplicate. Set
+      \`related\` to other pages explicitly connected to this one.
+      Provide a 1-line \`summary\`.
+
+4. After all page writes, update \`index.md\`:
+   - **Only inside** the ${AUTO_SECTION_OPEN} ... ${AUTO_SECTION_CLOSE}
+     markers. Anything outside is user-owned.
+   - List every page in \`pages/\` (or its promoted directory entry).
+   - Group pages into sections by their primary \`topic\`. Use H2 (\`##\`)
+     headings for groups; "Misc" for pages without topic tags.
+   - Each entry format:
+     \`- [<filename>](./pages/<filename>) \\\`[applies_to]\\\` \\\`topic1, topic2\\\` — summary\`
 
 ## What to skip
-- Transient working state (e.g. a bug being actively debugged but not yet solved)
+
+- Transient working state (a bug being actively debugged but not solved)
 - Trivial details (file paths, one-off command output)
-- Information already captured well in existing project pages — only update if new
-- Cross-project knowledge that already lives in the global tier (cite it instead)
+- Information already captured well in existing pages — only update if new
+- Anything that doesn't yield durable, reusable knowledge
 
-## How to write
+## Reading-agent protections
 
-1. Read \`~/.pinloom/wiki/_schema.md\` for the user's organizational conventions.
-2. Read \`~/.pinloom/wiki/projects/${projectId}/index.md\` to see existing pages.
-3. For each insight, decide: create a new page in
-   \`~/.pinloom/wiki/projects/${projectId}/pages/\` OR update an existing one.
-4. Add cross-references with relative links between pages.
-5. If a contradiction shows up with existing content, mark it explicitly:
-   \`> **Conflict**: existing page says X; this session suggests Y.\`
-6. Update \`~/.pinloom/wiki/projects/${projectId}/index.md\` so it lists every
-   page in this project with a one-line description.
-7. Preserve user-written content outside \`<!-- pinloom:auto-section -->\`
-   markers. Only edit inside those markers, or wrap new auto-managed
-   content in them.
+The runner agent (the one that reads the wiki during normal sessions)
+filters pages by matching \`applies_to\` against the active project's
+slug. **Choose \`applies_to\` carefully** — a wrong slug means a rule
+will leak into projects it shouldn't apply to, or stay invisible
+where it should.
 
-When done, briefly summarize what you did (which pages you created or
-updated). Be concise — no preamble, just the result.`;
+## When done
+
+Briefly summarize:
+- Pages created or updated, and the \`applies_to\` you assigned to each.
+- Any page that you considered creating but skipped (and why).
+- No preamble.`;
 }
 
 interface SyncResult {
   output: string;
   lastSyncedMessageId: string | null;
   messageCount: number;
+  migration?: MigrationReport;
 }
 
 export async function runWikiSync(args: {
@@ -346,8 +603,12 @@ export async function runWikiSync(args: {
 }): Promise<SyncResult> {
   const { sessionId, model = DEFAULT_SYNC_MODEL } = args;
 
+  await ensureWikiLayout();
+  const migration = await migrateLegacyLayout();
+
   const ctx = loadSessionContext(sessionId);
-  await ensureWikiLayout(ctx.projectId, ctx.projectName);
+  const allProjects = loadAllProjects();
+  const scopes = buildProjectScopes(ctx.projectId, allProjects);
 
   const { messages, lastMessageId } = loadMessagesSinceSync(
     sessionId,
@@ -358,6 +619,7 @@ export async function runWikiSync(args: {
       output: 'No new messages since last sync. Wiki is up to date.',
       lastSyncedMessageId: null,
       messageCount: 0,
+      migration,
     };
   }
 
@@ -367,10 +629,11 @@ export async function runWikiSync(args: {
       output: 'New messages contained no syncable content.',
       lastSyncedMessageId: lastMessageId,
       messageCount: messages.length,
+      migration,
     };
   }
 
-  const wikiSnapshot = await readWikiSnapshot(ctx.projectId);
+  const wikiSnapshot = await readWikiSnapshot();
 
   const transcript = filtered
     .map((m) => `### ${m.role === 'user' ? 'User' : 'AI'}\n\n${m.content}`)
@@ -388,13 +651,12 @@ export async function runWikiSync(args: {
     transcript,
   ].join('\n');
 
-  const projectRoot = getProjectWikiRoot(ctx.projectId);
   const abortController = new AbortController();
   const q = query({
     prompt,
     options: {
-      cwd: projectRoot,
-      systemPrompt: buildSyncSystemPrompt(ctx.projectId, ctx.projectName),
+      cwd: WIKI_ROOT,
+      systemPrompt: buildSyncSystemPrompt(scopes),
       model,
       maxTurns: 30,
       permissionMode: 'bypassPermissions',
@@ -447,9 +709,14 @@ export async function runWikiSync(args: {
     output: summary || 'Sync completed. (No summary returned.)',
     lastSyncedMessageId: lastMessageId,
     messageCount: messages.length,
+    migration,
   };
 }
 
-export function getWikiRoot(): string {
-  return WIKI_ROOT;
-}
+// Exported so the legacy `rename`/migration tests can be added later if needed.
+export const _internal = {
+  computeWikiSlug,
+  hasFrontmatter,
+  buildFrontmatter,
+  migrateLegacyLayout,
+};
