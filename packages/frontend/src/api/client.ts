@@ -181,4 +181,58 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+
+  // Wiki dashboard.
+  wikiOverview: () => request<WikiOverview>('/api/wiki/overview'),
+  wikiPage: (filename: string) =>
+    request<WikiPage>(`/api/wiki/pages/${encodeURI(filename)}`),
+  wikiOpenInEditor: (filename: string) =>
+    request<{ ok: true; path: string }>('/api/wiki/open', {
+      method: 'POST',
+      body: JSON.stringify({ filename }),
+    }),
+  wikiOpenFolder: () =>
+    request<{ ok: true; path: string }>('/api/wiki/open-folder', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  wikiSyncCandidates: () =>
+    request<WikiSyncCandidate[]>('/api/wiki/sync-candidates'),
 };
+
+export interface WikiFrontmatter {
+  appliesTo: string[];
+  topic: string[];
+  related: string[];
+  summary: string;
+}
+
+export interface WikiPage {
+  filename: string;
+  relPath: string;
+  title: string;
+  meta: WikiFrontmatter;
+  body: string;
+  rawBody: string;
+  isPromotedDir: boolean;
+}
+
+export interface WikiOverview {
+  pages: WikiPage[];
+  index: string | null;
+  schema: string | null;
+  wikiRoot: string;
+}
+
+export interface WikiSyncCandidate {
+  id: string;
+  projectId: string;
+  projectName: string | null;
+  projectCwd: string;
+  projectBasename: string;
+  title: string | null;
+  lastSyncedMessageId: string | null;
+  unsyncedCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
