@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
+import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 
 export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 
@@ -143,30 +144,32 @@ Rules:
 - Be concise. Show code blocks only when useful. Use Korean if the user writes in Korean.`;
 
 function buildWikiContext(projectId: string): string {
+  const slug = getProjectWikiSlugByProjectId(projectId);
   return `
 
 ## Personal knowledge wiki
 
-The user keeps two tiers of accumulated notes:
+The user maintains a wiki at \`~/.pinloom/wiki/\`. Layout:
+- \`index.md\` — list of every page with scope/topic tags
+- \`pages/\` — flat directory of \`.md\` pages, each with YAML frontmatter
 
-- **Project-scoped** (rules, conventions, decisions for THIS project only):
-  \`~/.pinloom/wiki/projects/${projectId}/\`
-- **Global** (cross-project knowledge curated by the user):
-  \`~/.pinloom/wiki/pages/\` and \`~/.pinloom/wiki/index.md\`
+Each page declares its scope via the \`applies_to\` frontmatter field —
+an array of pinloom project slugs, or \`[global]\` for cross-project.
 
-When the user asks something they may have explored before, browse the
-wiki:
-1. Read \`~/.pinloom/wiki/projects/${projectId}/index.md\` first to see
-   project-specific pages.
-2. Then read \`~/.pinloom/wiki/index.md\` for global pages.
-3. Use Grep across both directories for relevant keywords.
-4. Read full pages when their summary looks relevant.
+**Active project slug: \`${slug}\`**
 
-Treat project-scoped notes as authoritative within this project. **Do not
-apply rules from other projects' directories** (e.g. don't follow PIMF
-conventions while working on KSO). Use this sparingly — only when prior
-context might genuinely help. When you do, cite the wiki page in your
-reply.`;
+When prior knowledge might help:
+1. Read \`~/.pinloom/wiki/index.md\` to see all pages with scope tags.
+2. A page applies if its \`applies_to\` is missing/empty/contains
+   \`global\`, OR contains \`${slug}\`.
+3. **Pages whose \`applies_to\` excludes \`${slug}\` MUST NOT inform your
+   behavior** — even if the topic looks relevant. Different projects
+   have different conventions; do not cross-apply rules.
+4. Read full content of relevant pages with Read; follow the
+   \`related\` frontmatter field for connected pages.
+5. Cite the wiki page when you use it.
+
+Use this sparingly — only when prior context might genuinely help.`;
 }
 
 function persistMessage(args: PersistArgs): Message {
