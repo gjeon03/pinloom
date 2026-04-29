@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
+import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 
 export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 
@@ -143,6 +144,7 @@ Rules:
 - Be concise. Show code blocks only when useful. Use Korean if the user writes in Korean.`;
 
 function buildWikiContext(projectId: string): string {
+  const slug = getProjectWikiSlugByProjectId(projectId);
   return `
 
 ## Personal knowledge wiki
@@ -150,13 +152,13 @@ function buildWikiContext(projectId: string): string {
 The user keeps two tiers of accumulated notes:
 
 - **Project-scoped** (rules, conventions, decisions for THIS project only):
-  \`~/.pinloom/wiki/projects/${projectId}/\`
+  \`~/.pinloom/wiki/projects/${slug}/\`
 - **Global** (cross-project knowledge curated by the user):
   \`~/.pinloom/wiki/pages/\` and \`~/.pinloom/wiki/index.md\`
 
 When the user asks something they may have explored before, browse the
 wiki:
-1. Read \`~/.pinloom/wiki/projects/${projectId}/index.md\` first to see
+1. Read \`~/.pinloom/wiki/projects/${slug}/index.md\` first to see
    project-specific pages.
 2. Then read \`~/.pinloom/wiki/index.md\` for global pages.
 3. Use Grep across both directories for relevant keywords.
