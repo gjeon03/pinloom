@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, BookPlus, Check, CircleAlert, Loader2, X } from 'lucide-react';
+import { Bell, BookPlus, Check, CircleAlert, Loader2, Sparkles, X } from 'lucide-react';
 import {
   useNotifications,
   type NotificationItem,
@@ -20,6 +20,7 @@ function formatRelative(ts: number): string {
 
 function kindIcon(kind: NotificationKind) {
   if (kind === 'wiki-sync') return <BookPlus size={12} />;
+  if (kind === 'wiki-analyze') return <Sparkles size={12} />;
   return <Bell size={12} />;
 }
 
@@ -211,9 +212,9 @@ function NotificationRow({
             {statusIcon(item)}
             <span className="font-medium truncate">{item.title}</span>
           </div>
-          {item.meta?.sessionTitle && (
+          {(item.meta?.sessionTitle || item.meta?.projectName) && (
             <div className="text-[10px] text-[var(--color-ink-muted)] truncate">
-              {item.meta.sessionTitle}
+              {item.meta?.projectName ?? item.meta?.sessionTitle}
             </div>
           )}
           <div className="text-[10px] text-[var(--color-ink-muted)]/70">

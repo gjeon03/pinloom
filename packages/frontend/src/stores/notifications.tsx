@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 
-export type NotificationKind = 'wiki-sync' | 'generic';
+export type NotificationKind = 'wiki-sync' | 'wiki-analyze' | 'generic';
 export type NotificationStatus = 'running' | 'success' | 'error';
 
 export interface NotificationItem {
@@ -20,7 +20,12 @@ export interface NotificationItem {
   startedAt: number;
   finishedAt?: number;
   read: boolean;
-  meta?: { sessionId?: string; sessionTitle?: string | null };
+  meta?: {
+    sessionId?: string;
+    sessionTitle?: string | null;
+    projectId?: string;
+    projectName?: string | null;
+  };
 }
 
 interface StartArgs {

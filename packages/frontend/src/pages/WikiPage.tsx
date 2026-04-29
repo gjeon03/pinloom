@@ -6,6 +6,7 @@ import { api, type WikiOverview, type WikiPage } from '../api/client.js';
 import { WikiSyncPicker } from '../components/WikiSyncPicker.js';
 import { WikiAnalyzePicker } from '../components/WikiAnalyzePicker.js';
 import { Tooltip } from '../components/Tooltip.js';
+import { useNotifications } from '../stores/notifications.js';
 
 type ScopeFilter = string | null; // null = all
 type TopicFilter = string | null;
@@ -57,6 +58,43 @@ export function WikiPage() {
   const [loading, setLoading] = useState(true);
   const [lastSyncSummary, setLastSyncSummary] = useState<string | null>(null);
   const [lastAnalyzeSummary, setLastAnalyzeSummary] = useState<string | null>(null);
+  const notifications = useNotifications();
+
+  const runningAnalyzeProjectIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of notifications.items) {
+      if (
+        it.kind === 'wiki-analyze' &&
+        it.status === 'running' &&
+        it.meta?.projectId
+      ) {
+        set.add(it.meta.projectId);
+      }
+    }
+    return set;
+  }, [notifications.items]);
+
+  function analyzeProject(project: Project) {
+    if (runningAnalyzeProjectIds.has(project.id)) return;
+    const notifId = notifications.start({
+      kind: 'wiki-analyze',
+      title: `Analyzing ${project.name}`,
+      meta: { projectId: project.id, projectName: project.name },
+    });
+    void (async () => {
+      try {
+        const result = await api.wikiAnalyze({
+          projectId: project.id,
+          dimension: 'conventions',
+        });
+        notifications.resolve(notifId, result.output);
+        setLastAnalyzeSummary(`${project.name} — ${result.output}`);
+        void refresh();
+      } catch (e) {
+        notifications.fail(notifId, e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }
 
   async function refresh() {
     try {
@@ -293,11 +331,9 @@ export function WikiPage() {
       {showAnalyzePicker && (
         <WikiAnalyzePicker
           projects={projects}
+          runningProjectIds={runningAnalyzeProjectIds}
+          onAnalyze={analyzeProject}
           onClose={() => setShowAnalyzePicker(false)}
-          onAnalyzed={(_p, result) => {
-            setLastAnalyzeSummary(result.output);
-            void refresh();
-          }}
         />
       )}
     </div>

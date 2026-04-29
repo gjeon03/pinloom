@@ -1,37 +1,19 @@
-import { useState } from 'react';
-import { Check, Loader2, Sparkles, X } from 'lucide-react';
+import { Loader2, Sparkles, X } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
-import { api, type WikiAnalyzeResult } from '../api/client.js';
 
 interface Props {
   projects: Project[];
+  runningProjectIds: Set<string>;
+  onAnalyze: (project: Project) => void;
   onClose: () => void;
-  onAnalyzed: (project: Project, result: WikiAnalyzeResult) => void;
 }
 
-export function WikiAnalyzePicker({ projects, onClose, onAnalyzed }: Props) {
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [doneId, setDoneId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function analyzeOne(p: Project) {
-    setBusyId(p.id);
-    setError(null);
-    try {
-      const result = await api.wikiAnalyze({
-        projectId: p.id,
-        dimension: 'conventions',
-      });
-      setDoneId(p.id);
-      onAnalyzed(p, result);
-      setTimeout(() => onClose(), 800);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusyId(null);
-    }
-  }
-
+export function WikiAnalyzePicker({
+  projects,
+  runningProjectIds,
+  onAnalyze,
+  onClose,
+}: Props) {
   return (
     <div
       onClick={onClose}
@@ -49,8 +31,9 @@ export function WikiAnalyzePicker({ projects, onClose, onAnalyzed }: Props) {
               Analyze project for conventions
             </h2>
             <p className="mt-0.5 text-[11px] text-[var(--color-ink-muted)]">
-              An AI agent will read the project read-only and produce a
-              \`conventions-{'<slug>'}.md\` page.
+              An AI agent reads the project read-only and writes
+              <span className="font-mono"> conventions-&lt;slug&gt;.md</span>.
+              Runs in the background — track progress in the notification bell.
             </p>
           </div>
           <button
@@ -68,15 +51,17 @@ export function WikiAnalyzePicker({ projects, onClose, onAnalyzed }: Props) {
             </div>
           )}
           {projects.map((p) => {
-            const busy = busyId === p.id;
-            const done = doneId === p.id;
-            const disabled = !!busyId || done;
+            const running = runningProjectIds.has(p.id);
             return (
               <button
                 key={p.id}
-                onClick={() => !disabled && analyzeOne(p)}
-                disabled={disabled}
-                className="w-full text-left px-4 py-3 border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-3)] disabled:opacity-60 flex items-start justify-between gap-3"
+                onClick={() => {
+                  if (running) return;
+                  onAnalyze(p);
+                  onClose();
+                }}
+                disabled={running}
+                className="w-full text-left px-4 py-3 border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-3)] disabled:cursor-not-allowed flex items-start justify-between gap-3"
               >
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium truncate">{p.name}</div>
@@ -85,30 +70,17 @@ export function WikiAnalyzePicker({ projects, onClose, onAnalyzed }: Props) {
                   </div>
                 </div>
                 <div className="shrink-0 mt-1">
-                  {busy ? (
-                    <Loader2
-                      size={14}
-                      className="animate-spin text-[var(--color-accent)]"
-                    />
-                  ) : done ? (
-                    <Check size={14} className="text-emerald-500" />
-                  ) : null}
+                  {running && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-accent)]">
+                      <Loader2 size={12} className="animate-spin" />
+                      Analyzing…
+                    </div>
+                  )}
                 </div>
               </button>
             );
           })}
         </div>
-
-        {busyId && (
-          <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-3)] px-4 py-2 text-[11px] text-[var(--color-ink-muted)]">
-            Analyzing… this may take 30s–2min depending on project size.
-          </div>
-        )}
-        {error && (
-          <div className="border-t border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-4 py-2 text-[11px] text-[var(--color-error-ink)]">
-            {error}
-          </div>
-        )}
       </div>
     </div>
   );
