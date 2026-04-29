@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Monitor, Moon, Plus, Settings, Sun } from 'lucide-react';
+import { BookOpen, Monitor, Moon, Plus, Settings, Sun } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
@@ -24,7 +25,9 @@ function basenameOfPath(path: string): string {
 
 export function AppShell({ children }: Props) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { projectId } = useParams<{ projectId: string }>();
+  const onWiki = location.pathname.startsWith('/wiki');
   const [projects, setProjects] = useState<Project[]>([]);
   const [picking, setPicking] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -235,15 +238,28 @@ export function AppShell({ children }: Props) {
           )}
         </div>
 
-        <div className="border-t border-[var(--color-border)] p-2 flex items-center gap-1">
+        <div className="border-t border-[var(--color-border)] p-2 space-y-1">
           <button
-            onClick={() => setShowSettings(true)}
-            className="flex-1 rounded px-2 py-1.5 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] flex items-center gap-1.5"
+            onClick={() => navigate('/wiki')}
+            className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
+              onWiki
+                ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
+            }`}
           >
-            <Settings size={12} />
-            Settings
+            <BookOpen size={12} />
+            Wiki
           </button>
-          <ThemeToggle />
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowSettings(true)}
+              className="flex-1 rounded px-2 py-1.5 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] flex items-center gap-1.5"
+            >
+              <Settings size={12} />
+              Settings
+            </button>
+            <ThemeToggle />
+          </div>
         </div>
       </aside>
 
