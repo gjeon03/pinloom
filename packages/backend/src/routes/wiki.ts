@@ -8,6 +8,7 @@ import {
   readWikiPage,
   resolveAbsolutePageFile,
 } from '../services/wiki-reader.js';
+import { runConventionsAnalysis } from '../services/wiki-analyzer.js';
 
 interface SessionRow {
   id: string;
@@ -158,5 +159,31 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return result;
+  });
+
+  app.post<{
+    Body: { projectId?: string; dimension?: string; model?: string };
+  }>('/api/wiki/analyze', async (req, reply) => {
+    const projectId = req.body?.projectId;
+    if (!projectId || typeof projectId !== 'string') {
+      reply.code(400);
+      return { error: 'projectId is required' };
+    }
+    // dimension is reserved for future expansion (architecture, build-deploy,
+    // etc.). For now we only support 'conventions'.
+    const dimension = req.body?.dimension ?? 'conventions';
+    if (dimension !== 'conventions') {
+      reply.code(400);
+      return { error: `unsupported dimension: ${dimension}` };
+    }
+    try {
+      const result = await runConventionsAnalysis(projectId, {
+        model: req.body?.model,
+      });
+      return result;
+    } catch (err) {
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
   });
 }

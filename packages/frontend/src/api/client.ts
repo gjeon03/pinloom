@@ -198,7 +198,20 @@ export const api = {
     }),
   wikiSyncCandidates: () =>
     request<WikiSyncCandidate[]>('/api/wiki/sync-candidates'),
+  wikiAnalyze: (body: { projectId: string; dimension?: string; model?: string }) =>
+    request<WikiAnalyzeResult>('/api/wiki/analyze', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };
+
+export interface WikiAnalyzeResult {
+  output: string;
+  pageFile: string;
+  pageRelPath: string;
+  pageWritten: boolean;
+  charCount: number;
+}
 
 export interface WikiFrontmatter {
   appliesTo: string[];

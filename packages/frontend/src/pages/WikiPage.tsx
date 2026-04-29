@@ -4,6 +4,7 @@ import { FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import { api, type WikiOverview, type WikiPage } from '../api/client.js';
 import { WikiSyncPicker } from '../components/WikiSyncPicker.js';
+import { WikiAnalyzePicker } from '../components/WikiAnalyzePicker.js';
 import { Tooltip } from '../components/Tooltip.js';
 
 type ScopeFilter = string | null; // null = all
@@ -51,9 +52,11 @@ export function WikiPage() {
   const [scope, setScope] = useState<ScopeFilter>(null);
   const [topic, setTopic] = useState<TopicFilter>(null);
   const [showSyncPicker, setShowSyncPicker] = useState(false);
+  const [showAnalyzePicker, setShowAnalyzePicker] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastSyncSummary, setLastSyncSummary] = useState<string | null>(null);
+  const [lastAnalyzeSummary, setLastAnalyzeSummary] = useState<string | null>(null);
 
   async function refresh() {
     try {
@@ -116,10 +119,13 @@ export function WikiPage() {
                   Sync
                 </button>
               </Tooltip>
-              <Tooltip label="Analyze project (coming soon)" side="bottom">
+              <Tooltip
+                label="Analyze a project's codebase for conventions"
+                side="bottom"
+              >
                 <button
-                  disabled
-                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs opacity-60"
+                  onClick={() => setShowAnalyzePicker(true)}
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
                 >
                   <Sparkles size={12} />
                   Analyze
@@ -205,6 +211,14 @@ export function WikiPage() {
               : lastSyncSummary}
           </div>
         )}
+        {lastAnalyzeSummary && (
+          <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-2 text-[11px] text-[var(--color-ink-muted)]">
+            <span className="font-medium text-[var(--color-ink)]">Last analysis:</span>{' '}
+            {lastAnalyzeSummary.length > 240
+              ? `${lastAnalyzeSummary.slice(0, 240)}…`
+              : lastAnalyzeSummary}
+          </div>
+        )}
         {error && (
           <div className="border-t border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-6 py-2 text-[11px] text-[var(--color-error-ink)]">
             {error}
@@ -272,6 +286,16 @@ export function WikiPage() {
           onClose={() => setShowSyncPicker(false)}
           onSynced={(_c, output) => {
             setLastSyncSummary(output);
+            void refresh();
+          }}
+        />
+      )}
+      {showAnalyzePicker && (
+        <WikiAnalyzePicker
+          projects={projects}
+          onClose={() => setShowAnalyzePicker(false)}
+          onAnalyzed={(_p, result) => {
+            setLastAnalyzeSummary(result.output);
             void refresh();
           }}
         />
