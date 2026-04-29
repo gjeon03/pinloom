@@ -76,8 +76,15 @@ Skip:
 
 ## Output format
 
-Your **final response** must be ONLY the markdown body of the wiki page.
-No preamble, no explanation, no code-fence wrapping the whole document.
+Your **final response** is the markdown body. NOTHING ELSE.
+
+- Do NOT prefix with any acknowledgment, status update, or meta-comment.
+  Strings like "이제 충분한 정보를 수집했습니다", "Here's the analysis",
+  "I'll now write the document", "Based on my findings…" — none of these.
+- Start IMMEDIATELY with the \`# <Project> conventions\` heading on the
+  very first line.
+- Do NOT wrap the whole response in a markdown code fence.
+- Do NOT include any YAML frontmatter (\`---\` block) — the caller adds it.
 
 Recommended structure:
 
@@ -127,6 +134,30 @@ If most of the previous analysis is still accurate, you can keep
 those sections. Only update what has changed in the codebase.`
     : ''
 }`;
+}
+
+// Defensive cleanup of whatever the agent returned. The system prompt
+// already forbids these patterns but agents occasionally slip in:
+//   - leading status preamble ("이제 충분한 정보를 수집했습니다…")
+//   - YAML frontmatter (we add our own)
+//   - whole-document code-fence wrapping
+//   - dangling closing fence after we strip preamble
+// Order matters here — strip frontmatter first, then unwrap full fences,
+// then drop everything before the first H1, then mop up trailing fences.
+function sanitizeAgentBody(input: string): string {
+  let body = input;
+
+  body = body.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '');
+
+  const fullFence = body.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
+  if (fullFence) body = fullFence[1];
+
+  const h1Idx = body.search(/^# /m);
+  if (h1Idx > 0) body = body.slice(h1Idx);
+
+  body = body.replace(/\n?```\s*$/, '');
+
+  return body.trim();
 }
 
 function extractSummary(body: string, fallback: string): string {
@@ -303,10 +334,7 @@ export async function runConventionsAnalysis(
       };
     }
 
-    body = body.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '');
-    const fenceMatch = body.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
-    if (fenceMatch) body = fenceMatch[1];
-    body = body.trim();
+    body = sanitizeAgentBody(body);
 
     const summary = extractSummary(body, project.name ?? slug);
     const frontmatter = [
