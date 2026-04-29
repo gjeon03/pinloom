@@ -8,7 +8,10 @@ import {
   readWikiPage,
   resolveAbsolutePageFile,
 } from '../services/wiki-reader.js';
-import { runConventionsAnalysis } from '../services/wiki-analyzer.js';
+import {
+  getAnalysisStatus,
+  runConventionsAnalysis,
+} from '../services/wiki-analyzer.js';
 
 interface SessionRow {
   id: string;
@@ -162,7 +165,12 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{
-    Body: { projectId?: string; dimension?: string; model?: string };
+    Body: {
+      projectId?: string;
+      dimension?: string;
+      model?: string;
+      startedAt?: string;
+    };
   }>('/api/wiki/analyze', async (req, reply) => {
     const projectId = req.body?.projectId;
     if (!projectId || typeof projectId !== 'string') {
@@ -179,6 +187,7 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
     try {
       const result = await runConventionsAnalysis(projectId, {
         model: req.body?.model,
+        startedAt: req.body?.startedAt,
       });
       return result;
     } catch (err) {
@@ -186,4 +195,8 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
       return { error: err instanceof Error ? err.message : String(err) };
     }
   });
+
+  // Status of wiki analyses — used by the frontend to rehydrate notifications
+  // after a page reload, and to poll until in-flight analyses finish.
+  app.get('/api/wiki/analyses/status', async () => getAnalysisStatus());
 }

@@ -6,7 +6,10 @@ import { api, type WikiOverview, type WikiPage } from '../api/client.js';
 import { WikiSyncPicker } from '../components/WikiSyncPicker.js';
 import { WikiAnalyzePicker } from '../components/WikiAnalyzePicker.js';
 import { Tooltip } from '../components/Tooltip.js';
-import { useNotifications } from '../stores/notifications.js';
+import {
+  analyzeNotificationId,
+  useNotifications,
+} from '../stores/notifications.js';
 
 type ScopeFilter = string | null; // null = all
 type TopicFilter = string | null;
@@ -76,7 +79,12 @@ export function WikiPage() {
 
   function analyzeProject(project: Project) {
     if (runningAnalyzeProjectIds.has(project.id)) return;
-    const notifId = notifications.start({
+    // Frontend chooses startedAt and sends it to the backend so both sides
+    // agree on the deterministic notification id, even across page reloads.
+    const startedAt = new Date().toISOString();
+    const notifId = analyzeNotificationId({ projectId: project.id, startedAt });
+    notifications.start({
+      id: notifId,
       kind: 'wiki-analyze',
       title: `Analyzing ${project.name}`,
       meta: { projectId: project.id, projectName: project.name },
@@ -86,6 +94,7 @@ export function WikiPage() {
         const result = await api.wikiAnalyze({
           projectId: project.id,
           dimension: 'conventions',
+          startedAt,
         });
         notifications.resolve(notifId, result.output);
         setLastAnalyzeSummary(`${project.name} — ${result.output}`);

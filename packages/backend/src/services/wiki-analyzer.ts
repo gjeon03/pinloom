@@ -153,9 +153,43 @@ export function isAnalyzing(projectId: string): boolean {
   return activeAnalyses.has(projectId);
 }
 
+// Persistent (in-process) log of analyses so the frontend can rehydrate
+// "running" state across page reloads. Reset on backend restart, which
+// is fine because any in-flight agent dies with the process anyway.
+export interface AnalysisLogEntry {
+  projectId: string;
+  projectName: string;
+  startedAt: string;
+  finishedAt?: string;
+  status: 'running' | 'success' | 'error';
+  detail?: string;
+  pageRelPath?: string;
+}
+
+const ANALYSIS_LOG_LIMIT = 30;
+const analysisLog: AnalysisLogEntry[] = [];
+
+function pushLog(entry: AnalysisLogEntry): AnalysisLogEntry {
+  analysisLog.unshift(entry);
+  if (analysisLog.length > ANALYSIS_LOG_LIMIT) {
+    analysisLog.length = ANALYSIS_LOG_LIMIT;
+  }
+  return entry;
+}
+
+export function getAnalysisStatus(): {
+  running: AnalysisLogEntry[];
+  recent: AnalysisLogEntry[];
+} {
+  return {
+    running: analysisLog.filter((e) => e.status === 'running'),
+    recent: analysisLog.slice(),
+  };
+}
+
 export async function runConventionsAnalysis(
   projectId: string,
-  options?: { model?: string },
+  options?: { model?: string; startedAt?: string },
 ): Promise<AnalyzeResult> {
   if (activeAnalyses.has(projectId)) {
     throw new Error('analysis already in progress for this project');
@@ -195,6 +229,15 @@ export async function runConventionsAnalysis(
 
   const abortController = new AbortController();
   activeAnalyses.set(projectId, abortController);
+
+  const logEntry = pushLog({
+    projectId,
+    projectName: project.name ?? slug,
+    // Trust the caller's timestamp so the frontend can build a matching
+    // deterministic notification id without a round-trip.
+    startedAt: options?.startedAt ?? new Date().toISOString(),
+    status: 'running',
+  });
 
   try {
     const q = query({
@@ -248,8 +291,11 @@ export async function runConventionsAnalysis(
     }
 
     if (!body.trim()) {
+      logEntry.status = 'success';
+      logEntry.finishedAt = new Date().toISOString();
+      logEntry.detail = 'Analysis returned no content; nothing was written.';
       return {
-        output: 'Analysis returned no content; nothing was written.',
+        output: logEntry.detail,
         pageFile,
         pageRelPath,
         pageWritten: false,
@@ -275,13 +321,24 @@ export async function runConventionsAnalysis(
 
     await writeFile(pageFile, frontmatter + body + '\n', 'utf8');
 
+    const output = `Wrote ${pageRelPath} (${body.length} chars). ${summary}`;
+    logEntry.status = 'success';
+    logEntry.finishedAt = new Date().toISOString();
+    logEntry.detail = output;
+    logEntry.pageRelPath = pageRelPath;
+
     return {
-      output: `Wrote ${pageRelPath} (${body.length} chars). ${summary}`,
+      output,
       pageFile,
       pageRelPath,
       pageWritten: true,
       charCount: body.length,
     };
+  } catch (err) {
+    logEntry.status = 'error';
+    logEntry.finishedAt = new Date().toISOString();
+    logEntry.detail = err instanceof Error ? err.message : String(err);
+    throw err;
   } finally {
     if (activeAnalyses.get(projectId) === abortController) {
       activeAnalyses.delete(projectId);
