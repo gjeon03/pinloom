@@ -41,7 +41,7 @@ export function WikiDetailPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-2)] px-6 py-3 flex items-center justify-between gap-4">
+      <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-2)] pl-6 pr-16 py-3 flex items-center justify-between gap-4">
         <Link
           to="/wiki"
           className="flex items-center gap-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
