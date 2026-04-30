@@ -597,11 +597,48 @@ interface SyncResult {
   migration?: MigrationReport;
 }
 
+// Global lock — only one wiki sync may run at a time. The wiki lives in a
+// single shared `pages/` tree, and the sync agent reads + writes the
+// directory plus index.md as a transaction. Two concurrent agents would
+// race on snapshot/index updates and last-write-wins on overlapping
+// pages, so we serialize.
+let activeSync: { sessionId: string; startedAt: string } | null = null;
+
+export function getActiveSyncSession(): {
+  sessionId: string;
+  startedAt: string;
+} | null {
+  return activeSync;
+}
+
 export async function runWikiSync(args: {
   sessionId: string;
   model?: string;
 }): Promise<SyncResult> {
   const { sessionId, model = DEFAULT_SYNC_MODEL } = args;
+
+  if (activeSync && activeSync.sessionId !== sessionId) {
+    throw new Error(
+      `another wiki sync is already in progress (session ${activeSync.sessionId}). Try again when it finishes.`,
+    );
+  }
+  if (activeSync && activeSync.sessionId === sessionId) {
+    throw new Error('a wiki sync for this session is already in progress.');
+  }
+
+  activeSync = { sessionId, startedAt: new Date().toISOString() };
+  try {
+    return await runWikiSyncInner({ sessionId, model });
+  } finally {
+    if (activeSync?.sessionId === sessionId) activeSync = null;
+  }
+}
+
+async function runWikiSyncInner(args: {
+  sessionId: string;
+  model: string;
+}): Promise<SyncResult> {
+  const { sessionId, model } = args;
 
   await ensureWikiLayout();
   const migration = await migrateLegacyLayout();
