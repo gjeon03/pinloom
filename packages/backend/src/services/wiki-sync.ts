@@ -597,18 +597,35 @@ interface SyncResult {
   migration?: MigrationReport;
 }
 
-// Global lock — only one wiki sync may run at a time. The wiki lives in a
-// single shared `pages/` tree, and the sync agent reads + writes the
-// directory plus index.md as a transaction. Two concurrent agents would
-// race on snapshot/index updates and last-write-wins on overlapping
-// pages, so we serialize.
-let activeSync: { sessionId: string; startedAt: string } | null = null;
+// Global serialization — only one wiki sync may run at a time. The wiki
+// lives in a single shared `pages/` tree, and the sync agent reads +
+// writes the directory plus `index.md` as a transaction. Two concurrent
+// agents would race on snapshot/index updates and last-write-wins on
+// overlapping pages.
+//
+// We queue rather than reject: each runWikiSync() call attaches to a
+// Promise chain and resolves with its own result when its turn comes up.
+// The HTTP request just stays open longer if there's a queue ahead of it.
+//
+// Same-session dedup: if a request for the same session is already
+// running or queued, return the existing in-flight Promise so the second
+// click is idempotent rather than enqueueing a duplicate.
 
-export function getActiveSyncSession(): {
-  sessionId: string;
-  startedAt: string;
-} | null {
-  return activeSync;
+let syncChain: Promise<unknown> = Promise.resolve();
+const pendingBySession = new Map<string, Promise<SyncResult>>();
+
+export interface SyncQueueState {
+  active: { sessionId: string; startedAt: string } | null;
+  queuedSessionIds: string[];
+}
+
+let queueState: SyncQueueState = { active: null, queuedSessionIds: [] };
+
+export function getSyncQueueState(): SyncQueueState {
+  return {
+    active: queueState.active ? { ...queueState.active } : null,
+    queuedSessionIds: [...queueState.queuedSessionIds],
+  };
 }
 
 export async function runWikiSync(args: {
@@ -617,21 +634,39 @@ export async function runWikiSync(args: {
 }): Promise<SyncResult> {
   const { sessionId, model = DEFAULT_SYNC_MODEL } = args;
 
-  if (activeSync && activeSync.sessionId !== sessionId) {
-    throw new Error(
-      `another wiki sync is already in progress (session ${activeSync.sessionId}). Try again when it finishes.`,
-    );
-  }
-  if (activeSync && activeSync.sessionId === sessionId) {
-    throw new Error('a wiki sync for this session is already in progress.');
-  }
+  const existing = pendingBySession.get(sessionId);
+  if (existing) return existing;
 
-  activeSync = { sessionId, startedAt: new Date().toISOString() };
-  try {
-    return await runWikiSyncInner({ sessionId, model });
-  } finally {
-    if (activeSync?.sessionId === sessionId) activeSync = null;
-  }
+  queueState = {
+    ...queueState,
+    queuedSessionIds: [...queueState.queuedSessionIds, sessionId],
+  };
+
+  const ourTurn = syncChain.then(async () => {
+    queueState = {
+      active: { sessionId, startedAt: new Date().toISOString() },
+      queuedSessionIds: queueState.queuedSessionIds.filter((id) => id !== sessionId),
+    };
+    try {
+      return await runWikiSyncInner({ sessionId, model });
+    } finally {
+      if (queueState.active?.sessionId === sessionId) {
+        queueState = { ...queueState, active: null };
+      }
+    }
+  });
+
+  // Keep the chain alive even if our turn throws.
+  syncChain = ourTurn.catch(() => undefined);
+
+  pendingBySession.set(sessionId, ourTurn);
+  ourTurn.finally(() => {
+    if (pendingBySession.get(sessionId) === ourTurn) {
+      pendingBySession.delete(sessionId);
+    }
+  });
+
+  return ourTurn;
 }
 
 async function runWikiSyncInner(args: {
