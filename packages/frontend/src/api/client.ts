@@ -198,7 +198,42 @@ export const api = {
     }),
   wikiSyncCandidates: () =>
     request<WikiSyncCandidate[]>('/api/wiki/sync-candidates'),
+  wikiAnalyze: (body: {
+    projectId: string;
+    dimension?: string;
+    model?: string;
+    startedAt?: string;
+  }) =>
+    request<WikiAnalyzeResult>('/api/wiki/analyze', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  wikiAnalysesStatus: () =>
+    request<WikiAnalysesStatusResponse>('/api/wiki/analyses/status'),
 };
+
+export interface WikiAnalyzeResult {
+  output: string;
+  pageFile: string;
+  pageRelPath: string;
+  pageWritten: boolean;
+  charCount: number;
+}
+
+export interface WikiAnalysisLogEntry {
+  projectId: string;
+  projectName: string;
+  startedAt: string;
+  finishedAt?: string;
+  status: 'running' | 'success' | 'error';
+  detail?: string;
+  pageRelPath?: string;
+}
+
+export interface WikiAnalysesStatusResponse {
+  running: WikiAnalysisLogEntry[];
+  recent: WikiAnalysisLogEntry[];
+}
 
 export interface WikiFrontmatter {
   appliesTo: string[];
