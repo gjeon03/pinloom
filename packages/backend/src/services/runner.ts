@@ -451,7 +451,10 @@ async function runAttempt(
   const options: Record<string, unknown> = {
     cwd: ctx.cwd,
     systemPrompt,
-    maxTurns: 20,
+    // 100 is generous enough that legitimate codebase-exploration turns
+    // (grep + read + edit cycles) don't bump the ceiling, while still
+    // catching genuine runaway loops. The user can always abort sooner.
+    maxTurns: 100,
     permissionMode: 'bypassPermissions',
     allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
     abortController,
