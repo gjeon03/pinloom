@@ -120,6 +120,7 @@ export function ProjectPage({
           left={
             pins.length > 0 && activeSession ? (
               <PinnedPanel
+                key={activeSession.id}
                 pins={pins}
                 onChange={handlePinsChange}
                 sessionId={activeSession.id}
@@ -134,7 +135,14 @@ export function ProjectPage({
           }
           right={
             activeSession ? (
-              <ChatView session={activeSession} onPinChange={handlePinsChange} />
+              // Force a fresh component instance per session so per-session
+              // local state (textarea draft, queue, wikiSyncing flag, etc.)
+              // doesn't leak across tab switches.
+              <ChatView
+                key={activeSession.id}
+                session={activeSession}
+                onPinChange={handlePinsChange}
+              />
             ) : (
               <div className="p-6 text-sm text-[var(--color-ink-muted)]">
                 No sessions yet. Click + in the tab bar to create one.
@@ -144,7 +152,13 @@ export function ProjectPage({
         />
       </div>
 
-      {activeSession && <BottomPanel projectId={project.id} session={activeSession} />}
+      {activeSession && (
+        <BottomPanel
+          key={activeSession.id}
+          projectId={project.id}
+          session={activeSession}
+        />
+      )}
 
       {sendingPin && activeSession && (
         <SessionPickerModal
