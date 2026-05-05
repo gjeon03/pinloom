@@ -682,40 +682,31 @@ function GroupHeader({
         </button>
       )}
       {!isRenaming && (
-        <>
+        <div className="relative">
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              onNewProject();
+              if (menuOpen) onMenuClose();
+              else onMenuOpen();
             }}
             className="p-0.5 rounded hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
-            title={`New project in "${group.name}"`}
+            title="Group options"
           >
-            <Plus size={12} />
+            <MoreHorizontal size={12} />
           </button>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (menuOpen) onMenuClose();
-                else onMenuOpen();
+          {menuOpen && (
+            <GroupMenu
+              onNewProject={() => {
+                onMenuClose();
+                onNewProject();
               }}
-              className="p-0.5 rounded hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
-              title="Group options"
-            >
-              <MoreHorizontal size={12} />
-            </button>
-            {menuOpen && (
-              <GroupMenu
-                onRename={onStartRename}
-                onDelete={onDelete}
-                onClose={onMenuClose}
-              />
-            )}
-          </div>
-        </>
+              onRename={onStartRename}
+              onDelete={onDelete}
+              onClose={onMenuClose}
+            />
+          )}
+        </div>
       )}
     </div>
   );
@@ -760,12 +751,13 @@ function RenameInput({ initial, onCommit, onCancel }: RenameInputProps) {
 }
 
 interface GroupMenuProps {
+  onNewProject: () => void;
   onRename: () => void;
   onDelete: () => void;
   onClose: () => void;
 }
 
-function GroupMenu({ onRename, onDelete, onClose }: GroupMenuProps) {
+function GroupMenu({ onNewProject, onRename, onDelete, onClose }: GroupMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -777,8 +769,19 @@ function GroupMenu({ onRename, onDelete, onClose }: GroupMenuProps) {
   return (
     <div
       ref={ref}
-      className="absolute right-0 top-full mt-1 z-10 min-w-[100px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs normal-case tracking-normal"
+      className="absolute right-0 top-full mt-1 z-10 min-w-[120px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs normal-case tracking-normal"
     >
+      <button
+        type="button"
+        className="w-full text-left px-2 py-1 hover:bg-[var(--color-surface-3)]"
+        onClick={(e) => {
+          e.stopPropagation();
+          onNewProject();
+        }}
+      >
+        New project
+      </button>
+      <div className="my-1 border-t border-[var(--color-border)]" />
       <button
         type="button"
         className="w-full text-left px-2 py-1 hover:bg-[var(--color-surface-3)]"
