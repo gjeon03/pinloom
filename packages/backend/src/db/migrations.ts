@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-const MIGRATIONS: { id: number; sql: string }[] = [
+export const MIGRATIONS: { id: number; sql: string }[] = [
   {
     id: 1,
     sql: `

@@ -99,7 +99,7 @@ interface PlanItemLite {
   status: string;
 }
 
-function summarizeToolCall(block: { name?: string; input?: unknown }): string {
+export function summarizeToolCall(block: { name?: string; input?: unknown }): string {
   const name = block.name ?? 'tool';
   const input = block.input as Record<string, unknown> | undefined;
   if (!input) return name;
@@ -117,7 +117,7 @@ function summarizeToolCall(block: { name?: string; input?: unknown }): string {
   return name;
 }
 
-function toolResultText(content: unknown): string {
+export function toolResultText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
@@ -242,7 +242,7 @@ function loadPlanItems(planId: string | null): PlanItemLite[] {
     .all(planId) as PlanItemLite[];
 }
 
-function buildPlanContext(items: PlanItemLite[]): string {
+export function buildPlanContext(items: PlanItemLite[]): string {
   if (items.length === 0) return '';
   const lines = items.map((i) => `- [${i.status}] (${i.id}) ${i.title}`);
   return `\n\n## Current plan items\n${lines.join('\n')}\n\nReference by @<id> if you want to tie a change to a specific item.`;
@@ -345,7 +345,7 @@ export function isAiRunning(sessionId: string): boolean {
   return activeAbortControllers.has(sessionId);
 }
 
-function buildFallbackPrompt(history: HistoryMessage[], currentUserMessage: string): string {
+export function buildFallbackPrompt(history: HistoryMessage[], currentUserMessage: string): string {
   if (history.length === 0) return currentUserMessage;
   const lines: string[] = [
     '## Prior conversation (reconstructed from local history)',
