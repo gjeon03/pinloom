@@ -230,7 +230,28 @@ export const api = {
     }),
   wikiAnalysesStatus: () =>
     request<WikiAnalysesStatusResponse>('/api/wiki/analyses/status'),
+
+  // Wiki archive — export streams a zip; import expects base64 (server
+  // creates a backup before mutating the wiki tree).
+  wikiExport: async (): Promise<Blob> => {
+    const res = await fetch('/api/wiki/export');
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.blob();
+  },
+  wikiImport: (body: { mode: 'skip' | 'overwrite'; dataBase64: string }) =>
+    request<WikiImportSummary>('/api/wiki/import', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };
+
+export interface WikiImportSummary {
+  mode: 'skip' | 'overwrite';
+  added: string[];
+  overwritten: string[];
+  skipped: string[];
+  backupPath: string;
+}
 
 export interface WikiAnalyzeResult {
   output: string;
