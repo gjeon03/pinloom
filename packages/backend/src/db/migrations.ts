@@ -147,6 +147,23 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE messages ADD COLUMN model TEXT;
     `,
   },
+  {
+    id: 12,
+    sql: `
+      CREATE TABLE IF NOT EXISTS project_groups (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        order_index INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      ALTER TABLE projects
+        ADD COLUMN group_id TEXT REFERENCES project_groups(id) ON DELETE SET NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(group_id, order_index);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

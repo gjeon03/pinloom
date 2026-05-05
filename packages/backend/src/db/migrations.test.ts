@@ -77,10 +77,18 @@ describe('runMigrations', () => {
       'sessions',
       'messages',
       'terminals',
+      'project_groups',
       'schema_migrations',
     ]) {
       expect(names).toContain(t);
     }
+  });
+
+  it('projects has group_id after migration 12', () => {
+    const db = freshDb();
+    runMigrations(db);
+    const cols = tableInfo(db, 'projects');
+    expect(cols).toContain('group_id');
   });
 
   it('messages has all columns added through migration 11', () => {
@@ -151,6 +159,7 @@ describe('runMigrations', () => {
       'idx_sessions_order',
       'idx_terminals_project_order',
       'idx_messages_pinned_at',
+      'idx_projects_group',
     ]) {
       expect(idx).toContain(n);
     }
@@ -253,6 +262,50 @@ describe('migration 8 — messages.pinned_at backfill', () => {
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId['m-pinned'].pinned_at).toBe('2020-02-02T00:00:00Z');
     expect(byId['m-unpinned'].pinned_at).toBeNull();
+  });
+});
+
+describe('migration 12 — project groups', () => {
+  it('deleting a group sets member projects.group_id to NULL (Explicit deletion only)', () => {
+    const db = freshDb();
+    runMigrations(db);
+    db.pragma('foreign_keys = ON');
+
+    const now = '2024-01-01T00:00:00Z';
+    db.prepare(
+      `INSERT INTO project_groups (id, name, order_index, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('g1', 'Work', 0, now, now);
+    db.prepare(
+      `INSERT INTO projects (id, name, cwd, group_id, order_index, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('p1', 'Proj', '/p', 'g1', 0, now, now);
+
+    db.prepare('DELETE FROM project_groups WHERE id = ?').run('g1');
+
+    const row = db
+      .prepare('SELECT id, group_id FROM projects WHERE id = ?')
+      .get('p1') as { id: string; group_id: string | null };
+    expect(row.group_id).toBeNull();
+  });
+
+  it('preserves an existing project (group_id NULL) across migration 12', () => {
+    const db = freshDb();
+    applyUpTo(db, 11);
+
+    const now = '2024-01-01T00:00:00Z';
+    db.prepare(
+      `INSERT INTO projects (id, name, cwd, order_index, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('legacy', 'Legacy', '/legacy', 0, now, now);
+
+    runMigrations(db);
+
+    const row = db
+      .prepare('SELECT id, name, group_id FROM projects WHERE id = ?')
+      .get('legacy') as { id: string; name: string; group_id: string | null };
+    expect(row.name).toBe('Legacy');
+    expect(row.group_id).toBeNull();
   });
 });
 

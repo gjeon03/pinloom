@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import { getDb } from './db/connection.js';
 import { projectRoutes } from './routes/projects.js';
+import { projectGroupRoutes } from './routes/project-groups.js';
 import { planRoutes } from './routes/plans.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { messageRoutes } from './routes/messages.js';
@@ -25,6 +26,7 @@ export async function createApp() {
   });
 
   await app.register(projectRoutes);
+  await app.register(projectGroupRoutes);
   await app.register(planRoutes);
   await app.register(sessionRoutes);
   await app.register(messageRoutes);

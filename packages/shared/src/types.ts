@@ -2,6 +2,15 @@ export interface Project {
   id: string;
   name: string;
   cwd: string;
+  groupId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectGroup {
+  id: string;
+  name: string;
+  orderIndex: number;
   createdAt: string;
   updatedAt: string;
 }

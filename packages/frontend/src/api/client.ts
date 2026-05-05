@@ -62,9 +62,14 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
   reorderProjects: (ids: string[]) =>
+    // PR #2 will surface group membership in the UI; until then every project
+    // is treated as ungrouped (groupId: null) so the backend's per-group
+    // order_index walk produces the same flat ordering as before.
     request<Project[]>('/api/projects/reorder', {
       method: 'POST',
-      body: JSON.stringify({ ids }),
+      body: JSON.stringify({
+        items: ids.map((id) => ({ id, groupId: null })),
+      }),
     }),
 
   listPlans: (projectId: string) =>
