@@ -108,7 +108,7 @@ export function AppShell({ children }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
-  const [picking, setPicking] = useState(false);
+  const [pickerTarget, setPickerTarget] = useState<{ groupId: string | null } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragSource>(null);
@@ -146,14 +146,21 @@ export function AppShell({ children }: Props) {
   const showUngroupedSection = groups.length > 0;
 
   async function handleDirectoryChosen(cwd: string) {
+    if (!pickerTarget) return;
+    const targetGroupId = pickerTarget.groupId;
     setError(null);
     try {
       const name = basenameOfPath(cwd);
-      // Inherit the active project's group so creating-from-context is sticky.
-      const inheritGroupId = activeProject?.groupId ?? null;
-      const created = await api.createProject({ name, cwd, groupId: inheritGroupId });
+      const created = await api.createProject({ name, cwd, groupId: targetGroupId });
       setProjects((prev) => [created, ...prev]);
-      setPicking(false);
+      if (targetGroupId && collapsedGroups.has(targetGroupId)) {
+        setCollapsedGroups((prev) => {
+          const next = new Set(prev);
+          next.delete(targetGroupId);
+          return next;
+        });
+      }
+      setPickerTarget(null);
       navigate(`/projects/${created.id}`);
     } catch (e) {
       setError(String(e));
@@ -323,9 +330,16 @@ export function AppShell({ children }: Props) {
                 <FolderPlus size={14} />
               </button>
             </Tooltip>
-            <Tooltip label="New project — pick a directory" side="bottom">
+            <Tooltip
+              label={
+                groups.length > 0
+                  ? 'New project (Ungrouped) — pick a directory'
+                  : 'New project — pick a directory'
+              }
+              side="bottom"
+            >
               <button
-                onClick={() => setPicking(true)}
+                onClick={() => setPickerTarget({ groupId: null })}
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
               >
                 <Plus size={16} />
@@ -394,6 +408,7 @@ export function AppShell({ children }: Props) {
                   onCommitRename={(name) => handleRenameGroup(g.id, name)}
                   onCancelRename={() => setRenamingGroupId(null)}
                   onDelete={() => handleDeleteGroup(g.id)}
+                  onNewProject={() => setPickerTarget({ groupId: g.id })}
                   onDragStart={(e) => {
                     setDrag({ kind: 'group', id: g.id });
                     e.dataTransfer.effectAllowed = 'move';
@@ -578,10 +593,10 @@ export function AppShell({ children }: Props) {
       </main>
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      {picking && (
+      {pickerTarget && (
         <DirectoryPicker
           onSelect={handleDirectoryChosen}
-          onClose={() => setPicking(false)}
+          onClose={() => setPickerTarget(null)}
         />
       )}
     </div>
@@ -602,6 +617,7 @@ interface GroupHeaderProps {
   onCommitRename: (name: string) => void;
   onCancelRename: () => void;
   onDelete: () => void;
+  onNewProject: () => void;
   onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -622,6 +638,7 @@ function GroupHeader({
   onCommitRename,
   onCancelRename,
   onDelete,
+  onNewProject,
   onDragStart,
   onDragOver,
   onDrop,
@@ -665,27 +682,40 @@ function GroupHeader({
         </button>
       )}
       {!isRenaming && (
-        <div className="relative">
+        <>
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (menuOpen) onMenuClose();
-              else onMenuOpen();
+              onNewProject();
             }}
             className="p-0.5 rounded hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
-            title="Group options"
+            title={`New project in "${group.name}"`}
           >
-            <MoreHorizontal size={12} />
+            <Plus size={12} />
           </button>
-          {menuOpen && (
-            <GroupMenu
-              onRename={onStartRename}
-              onDelete={onDelete}
-              onClose={onMenuClose}
-            />
-          )}
-        </div>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (menuOpen) onMenuClose();
+                else onMenuOpen();
+              }}
+              className="p-0.5 rounded hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
+              title="Group options"
+            >
+              <MoreHorizontal size={12} />
+            </button>
+            {menuOpen && (
+              <GroupMenu
+                onRename={onStartRename}
+                onDelete={onDelete}
+                onClose={onMenuClose}
+              />
+            )}
+          </div>
+        </>
       )}
     </div>
   );
