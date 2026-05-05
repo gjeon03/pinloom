@@ -4,6 +4,7 @@ import type {
   Plan,
   PlanItem,
   Project,
+  ProjectGroup,
   Session,
 } from '@pinloom/shared';
 
@@ -52,7 +53,7 @@ export const api = {
   homeDir: () => request<{ home: string }>('/api/fs/home'),
 
   listProjects: () => request<Project[]>('/api/projects'),
-  createProject: (body: { name: string; cwd: string }) =>
+  createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
   deleteProject: (id: string) =>
     request<{ ok: true }>(`/api/projects/${id}`, { method: 'DELETE' }),
@@ -61,15 +62,29 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ name }),
     }),
-  reorderProjects: (ids: string[]) =>
-    // PR #2 will surface group membership in the UI; until then every project
-    // is treated as ungrouped (groupId: null) so the backend's per-group
-    // order_index walk produces the same flat ordering as before.
+  reorderProjects: (items: Array<{ id: string; groupId: string | null }>) =>
     request<Project[]>('/api/projects/reorder', {
       method: 'POST',
-      body: JSON.stringify({
-        items: ids.map((id) => ({ id, groupId: null })),
-      }),
+      body: JSON.stringify({ items }),
+    }),
+
+  listProjectGroups: () => request<ProjectGroup[]>('/api/project-groups'),
+  createProjectGroup: (name: string) =>
+    request<ProjectGroup>('/api/project-groups', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  renameProjectGroup: (id: string, name: string) =>
+    request<ProjectGroup>(`/api/project-groups/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteProjectGroup: (id: string) =>
+    request<{ ok: true }>(`/api/project-groups/${id}`, { method: 'DELETE' }),
+  reorderProjectGroups: (ids: string[]) =>
+    request<ProjectGroup[]>('/api/project-groups/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
     }),
 
   listPlans: (projectId: string) =>
