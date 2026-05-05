@@ -9,6 +9,9 @@ const dbPath = path.join(
   `pinloom-test-${process.pid}-${Date.now()}.sqlite`,
 );
 process.env.PINLOOM_DB_PATH = dbPath;
+// Declare test intent so connection.ts's startup guard can verify the path
+// is non-default and refuse to run against production data.
+process.env.PINLOOM_TEST_MODE = '1';
 
 const cleanup = () => {
   for (const suffix of ['', '-wal', '-shm', '-journal']) {

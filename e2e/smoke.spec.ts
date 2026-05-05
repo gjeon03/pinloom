@@ -15,19 +15,10 @@ async function seedProject(
 }
 
 test.describe('smoke', () => {
-  test.beforeEach(async ({ request }) => {
-    // reuseExistingServer (local dev) means the SQLite file persists across
-    // runs; wipe it so the test starts from a known empty state. Order
-    // matters: groups before projects so FK SET NULL doesn't fight us.
-    const projects = (await (await request.get('/api/projects')).json()) as Array<{
-      id: string;
-    }>;
-    for (const p of projects) await request.delete(`/api/projects/${p.id}`);
-    const groups = (await (
-      await request.get('/api/project-groups')
-    ).json()) as Array<{ id: string }>;
-    for (const g of groups) await request.delete(`/api/project-groups/${g.id}`);
-  });
+  // No beforeEach cleanup: playwright.config.ts now starts a fresh server
+  // with a fresh per-run SQLite file, so the test always begins empty.
+  // The previous "delete all" pattern is what wiped production data when
+  // reuseExistingServer was true.
 
   test('group lifecycle: create, persist on reload, delete (members survive)', async ({
     page,
