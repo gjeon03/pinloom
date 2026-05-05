@@ -41,6 +41,93 @@ function errorStream(err: Error): QueryReturn {
   })() as unknown as QueryReturn;
 }
 
+function streamFromMessages(messages: unknown[]): QueryReturn {
+  return (async function* () {
+    for (const m of messages) yield m;
+  })() as unknown as QueryReturn;
+}
+
+// SDK message shape helpers — keep tests readable by hiding the nested
+// stream_event envelope structure runner.ts expects.
+const sdk = {
+  textDelta(text: string) {
+    return {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        delta: { type: 'text_delta', text },
+      },
+    };
+  },
+  thinkingStart() {
+    return {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        content_block: { type: 'thinking' },
+      },
+    };
+  },
+  thinkingDelta(thinking: string) {
+    return {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        delta: { type: 'thinking_delta', thinking },
+      },
+    };
+  },
+  toolUseBlockStart() {
+    return {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        content_block: { type: 'tool_use' },
+      },
+    };
+  },
+  messageStop() {
+    return {
+      type: 'stream_event',
+      event: { type: 'message_stop' },
+    };
+  },
+  assistant({
+    sessionId,
+    model,
+    blocks,
+  }: {
+    sessionId?: string;
+    model?: string;
+    blocks: Array<
+      | { type: 'text'; text: string }
+      | { type: 'tool_use'; name: string; input: Record<string, unknown> }
+    >;
+  }) {
+    return {
+      type: 'assistant',
+      session_id: sessionId,
+      message: { id: 'msg-x', model, content: blocks },
+    };
+  },
+  toolResult(content: string, isError = false) {
+    return {
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', content, is_error: isError }],
+      },
+    };
+  },
+  result({ text, sessionId }: { text: string; sessionId?: string }) {
+    return {
+      type: 'result',
+      subtype: 'success',
+      result: text,
+      session_id: sessionId,
+    };
+  },
+};
+
 function abortAwaitingStream(args: QueryArgs): QueryReturn {
   // Hangs forever until the abortController fires, then rejects so the runner
   // exits its for-await loop. Models the SDK's expected abort semantics.
@@ -349,6 +436,351 @@ describe('sendUserMessage — error and cancel paths', () => {
       )
       .all('s1') as { content: string }[];
     expect(rows.some((r) => r.content === '[cancelled by user]')).toBe(true);
+    cap.stop();
+  });
+});
+
+describe('runAttempt — text streaming via stream_event', () => {
+  it('persists the concatenated assistant text on stream close', async () => {
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.textDelta('Hello'),
+        sdk.textDelta(', '),
+        sdk.textDelta('world!'),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'hi');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const row = getDb()
+      .prepare(
+        `SELECT content FROM messages WHERE session_id = ? AND role = 'assistant'`,
+      )
+      .get('s1') as { content: string } | undefined;
+    expect(row?.content).toBe('Hello, world!');
+    cap.stop();
+  });
+
+  it('broadcasts a stream_chunk event for each text_delta', async () => {
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.textDelta('foo'),
+        sdk.textDelta('bar'),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'hi');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const chunks = cap.events
+      .filter((e): e is Extract<WsEvent, { type: 'stream_chunk' }> => e.type === 'stream_chunk')
+      .map((e) => e.chunk);
+    expect(chunks).toEqual(['foo', 'bar']);
+    cap.stop();
+  });
+
+  it('captures and stamps the model the SDK reports back on the assistant row', async () => {
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.textDelta('hi'),
+        sdk.assistant({
+          model: 'claude-sonnet-4-6',
+          blocks: [{ type: 'text', text: 'hi' }],
+        }),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'hi');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const row = getDb()
+      .prepare(
+        `SELECT model FROM messages WHERE session_id = ? AND role = 'assistant'`,
+      )
+      .get('s1') as { model: string | null } | undefined;
+    expect(row?.model).toBe('claude-sonnet-4-6');
+    cap.stop();
+  });
+
+  it('forwards thinking deltas as thinking_chunk events without persisting them', async () => {
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.thinkingStart(),
+        sdk.thinkingDelta('reasoning step 1...'),
+        sdk.thinkingDelta(' step 2'),
+        sdk.textDelta('answer'),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'hi');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const thinkingChunks = cap.events
+      .filter((e): e is Extract<WsEvent, { type: 'thinking_chunk' }> => e.type === 'thinking_chunk')
+      .map((e) => e.chunk);
+    expect(thinkingChunks).toEqual(['reasoning step 1...', ' step 2']);
+
+    // Thinking content must not leak into the persisted assistant message.
+    const row = getDb()
+      .prepare(
+        `SELECT content FROM messages WHERE session_id = ? AND role = 'assistant'`,
+      )
+      .get('s1') as { content: string } | undefined;
+    expect(row?.content).toBe('answer');
+    cap.stop();
+  });
+});
+
+describe('runAttempt — tool_use blocks', () => {
+  it('persists a tool message with summarized content and toolUse JSON', async () => {
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.assistant({
+          blocks: [
+            {
+              type: 'tool_use',
+              name: 'Bash',
+              input: { command: 'ls -la' },
+            },
+          ],
+        }),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'list files');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const row = getDb()
+      .prepare(
+        `SELECT content, tool_use FROM messages WHERE session_id = ? AND role = 'tool'`,
+      )
+      .get('s1') as { content: string; tool_use: string } | undefined;
+    expect(row?.content).toBe('Bash: ls -la');
+    expect(row?.tool_use).toBeTruthy();
+    const parsed = JSON.parse(row!.tool_use) as { name: string; input: { command: string } };
+    expect(parsed.name).toBe('Bash');
+    expect(parsed.input.command).toBe('ls -la');
+
+    const runLog = cap.events.find(
+      (e): e is Extract<WsEvent, { type: 'run_log' }> => e.type === 'run_log',
+    );
+    expect(runLog?.chunk).toContain('$ Bash: ls -la');
+    cap.stop();
+  });
+
+  it('closes any in-flight text stream before persisting tool_use', async () => {
+    // text → tool_use should produce TWO assistant rows: the closed text one,
+    // then the tool one. Tests the closeStream() call in tool_use handling.
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.textDelta('Looking now'),
+        sdk.assistant({
+          blocks: [
+            { type: 'tool_use', name: 'Read', input: { file_path: '/tmp/x' } },
+          ],
+        }),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'investigate');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const rows = getDb()
+      .prepare(
+        `SELECT role, content FROM messages WHERE session_id = ? AND role IN ('assistant', 'tool') ORDER BY created_at ASC`,
+      )
+      .all('s1') as { role: string; content: string }[];
+    expect(rows[0]).toEqual({ role: 'assistant', content: 'Looking now' });
+    expect(rows[1]).toEqual({ role: 'tool', content: 'Read: /tmp/x' });
+    cap.stop();
+  });
+});
+
+describe('runAttempt — tool_result handling', () => {
+  it('broadcasts non-error tool_result text on the stdout stream', async () => {
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.toolResult('file contents here', false),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'go');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const log = cap.events.find(
+      (e): e is Extract<WsEvent, { type: 'run_log' }> =>
+        e.type === 'run_log' && e.chunk.includes('file contents here'),
+    );
+    expect(log).toBeTruthy();
+    expect(log?.stream).toBe('stdout');
+    cap.stop();
+  });
+
+  it('broadcasts error tool_result on the stderr stream', async () => {
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.toolResult('command not found', true),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'go');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const log = cap.events.find(
+      (e): e is Extract<WsEvent, { type: 'run_log' }> =>
+        e.type === 'run_log' && e.chunk.includes('command not found'),
+    );
+    expect(log?.stream).toBe('stderr');
+    cap.stop();
+  });
+});
+
+describe('runAttempt — session_id capture', () => {
+  it('persists the SDK session_id from an assistant message into sessions.claude_session_id', async () => {
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.assistant({
+          sessionId: 'sdk-session-abc',
+          blocks: [{ type: 'text', text: 'hi' }],
+        }),
+        sdk.textDelta('hi'),
+        sdk.messageStop(),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'hi');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const row = getDb()
+      .prepare('SELECT claude_session_id FROM sessions WHERE id = ?')
+      .get('s1') as { claude_session_id: string };
+    expect(row.claude_session_id).toBe('sdk-session-abc');
+    cap.stop();
+  });
+});
+
+describe('runAttempt — result subtype text fallback', () => {
+  it('appends the result.result text when it exceeds what was streamed', async () => {
+    // The SDK sometimes emits a final `result` with a longer string than the
+    // accumulated text deltas (rare); the runner should surface the missing
+    // tail rather than truncate.
+    // No messageStop here: the SDK uses `result` itself as the end signal,
+    // so streamMsgId is still set when result arrives and the delta
+    // correctly appends to the in-flight assistant message.
+    setQueryImpl(() =>
+      streamFromMessages([
+        sdk.textDelta('Partial'),
+        sdk.result({ text: 'Partial answer with extra' }),
+      ]),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'hi');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    const row = getDb()
+      .prepare(
+        `SELECT content FROM messages WHERE session_id = ? AND role = 'assistant'`,
+      )
+      .get('s1') as { content: string };
+    expect(row.content).toBe('Partial answer with extra');
+    cap.stop();
+  });
+});
+
+describe('runAssistant — resume + fallback path', () => {
+  it('clears claude_session_id and retries without resume when the resumed call throws', async () => {
+    // Simulates the "session lost on SDK side" recovery: first call (resume)
+    // throws, runner clears the local session id and retries from scratch
+    // using buildFallbackPrompt-reconstructed history.
+    let callCount = 0;
+    const calls: Array<{ resume: string | undefined }> = [];
+    setQueryImpl((args) => {
+      callCount++;
+      const opts = args.options as { resume?: string };
+      calls.push({ resume: opts.resume });
+      if (callCount === 1) {
+        return errorStream(new Error('resume failed'));
+      }
+      return streamFromMessages([
+        sdk.textDelta('Recovered answer'),
+        sdk.messageStop(),
+      ]);
+    });
+
+    seedProject('p1');
+    // Pre-set claude_session_id so runAssistant takes the resume branch first.
+    const now = new Date().toISOString();
+    getDb()
+      .prepare(
+        `INSERT INTO sessions (id, project_id, claude_session_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run('s1', 'p1', 'stale-session', now, now);
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'hi again');
+    await waitFor(() => isFinishedOrError(cap.events));
+
+    expect(callCount).toBe(2);
+    expect(calls[0].resume).toBe('stale-session');
+    expect(calls[1].resume).toBeUndefined();
+
+    const sessionRow = getDb()
+      .prepare('SELECT claude_session_id FROM sessions WHERE id = ?')
+      .get('s1') as { claude_session_id: string | null };
+    expect(sessionRow.claude_session_id).toBeNull();
+
+    const assistant = getDb()
+      .prepare(
+        `SELECT content FROM messages WHERE session_id = ? AND role = 'assistant'`,
+      )
+      .get('s1') as { content: string } | undefined;
+    expect(assistant?.content).toBe('Recovered answer');
+
+    const fallbackLog = cap.events.find(
+      (e): e is Extract<WsEvent, { type: 'run_log' }> =>
+        e.type === 'run_log' && e.chunk.includes('[resume failed'),
+    );
+    expect(fallbackLog?.stream).toBe('stderr');
     cap.stop();
   });
 });
