@@ -6,5 +6,6 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     pool: 'forks',
     restoreMocks: true,
+    setupFiles: ['./test-setup.ts'],
   },
 });
