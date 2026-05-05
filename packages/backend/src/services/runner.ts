@@ -319,7 +319,7 @@ function loadRecentHistory(sessionId: string, excludeId: string, limit = 40): Hi
 
 const activeAbortControllers = new Map<string, AbortController>();
 
-function registerRun(sessionId: string): AbortController {
+export function registerRun(sessionId: string): AbortController {
   const prior = activeAbortControllers.get(sessionId);
   if (prior) prior.abort();
   const controller = new AbortController();
@@ -327,7 +327,7 @@ function registerRun(sessionId: string): AbortController {
   return controller;
 }
 
-function clearRun(sessionId: string, controller: AbortController) {
+export function clearRun(sessionId: string, controller: AbortController) {
   if (activeAbortControllers.get(sessionId) === controller) {
     activeAbortControllers.delete(sessionId);
   }
