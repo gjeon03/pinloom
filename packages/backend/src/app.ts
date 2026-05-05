@@ -13,7 +13,9 @@ import { subscribe, unsubscribe } from './ws/hub.js';
 import { checkCli } from './services/cli-check.js';
 
 export async function createApp() {
-  const app = Fastify({ logger: true });
+  // 100MB body limit — image-attached messages and wiki imports both ship
+  // large base64 blobs through the JSON body. Default 1MB is too tight.
+  const app = Fastify({ logger: true, bodyLimit: 100 * 1024 * 1024 });
 
   getDb();
 

@@ -12,6 +12,11 @@ import {
   getAnalysisStatus,
   runConventionsAnalysis,
 } from '../services/wiki-analyzer.js';
+import {
+  exportWikiZip,
+  importWikiZip,
+  type ImportMode,
+} from '../services/wiki-archive.js';
 
 interface SessionRow {
   id: string;
@@ -199,4 +204,52 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
   // Status of wiki analyses — used by the frontend to rehydrate notifications
   // after a page reload, and to poll until in-flight analyses finish.
   app.get('/api/wiki/analyses/status', async () => getAnalysisStatus());
+
+  // Stream the entire wiki tree as a zip download.
+  app.get('/api/wiki/export', async (_req, reply) => {
+    const buf = await exportWikiZip();
+    const stamp = new Date().toISOString().slice(0, 10);
+    reply
+      .header('Content-Type', 'application/zip')
+      .header(
+        'Content-Disposition',
+        `attachment; filename="pinloom-wiki-${stamp}.zip"`,
+      )
+      .header('Content-Length', String(buf.length));
+    return buf;
+  });
+
+  // Receive a zip via JSON+base64 (avoids adding a multipart dep). The
+  // wiki is small enough for this to be fine in practice. Always creates
+  // a backup zip first; never destructive without a recovery point.
+  app.post<{
+    Body: { mode?: ImportMode; dataBase64?: string };
+  }>('/api/wiki/import', async (req, reply) => {
+    const mode = req.body?.mode === 'overwrite' ? 'overwrite' : 'skip';
+    const dataBase64 = req.body?.dataBase64;
+    if (!dataBase64 || typeof dataBase64 !== 'string') {
+      reply.code(400);
+      return { error: 'dataBase64 is required' };
+    }
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(dataBase64, 'base64');
+    } catch {
+      reply.code(400);
+      return { error: 'invalid base64' };
+    }
+    if (buffer.length === 0) {
+      reply.code(400);
+      return { error: 'empty payload' };
+    }
+    try {
+      const summary = await importWikiZip(buffer, { mode });
+      return summary;
+    } catch (err) {
+      reply.code(400);
+      return {
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
 }

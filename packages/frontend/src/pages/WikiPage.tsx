@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
+import { Download, FolderOpen, RefreshCw, Sparkles, Upload } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
-import { api, type WikiOverview, type WikiPage } from '../api/client.js';
+import {
+  api,
+  type WikiImportSummary,
+  type WikiOverview,
+  type WikiPage,
+} from '../api/client.js';
 import { WikiSyncPicker } from '../components/WikiSyncPicker.js';
 import { WikiAnalyzePicker } from '../components/WikiAnalyzePicker.js';
 import { Tooltip } from '../components/Tooltip.js';
@@ -137,11 +142,52 @@ export function WikiPage() {
   );
   const groups = useMemo(() => groupByTopic(filtered), [filtered]);
 
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+
   async function handleOpenFolder() {
     try {
       await api.wikiOpenFolder();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleExport() {
+    setError(null);
+    try {
+      const blob = await api.wikiExport();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.download = `pinloom-wiki-${stamp}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function runImport(mode: 'skip' | 'overwrite') {
+    if (!pendingImportFile) return;
+    setError(null);
+    setImporting(true);
+    try {
+      const buf = await pendingImportFile.arrayBuffer();
+      const dataBase64 = bufferToBase64(buf);
+      const summary = await api.wikiImport({ mode, dataBase64 });
+      setPendingImportFile(null);
+      // Pull fresh overview so the new pages render.
+      void refresh();
+      window.alert(formatImportSummary(summary));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -187,6 +233,36 @@ export function WikiPage() {
                   Folder
                 </button>
               </Tooltip>
+              <Tooltip label="Export wiki as zip" side="bottom">
+                <button
+                  onClick={handleExport}
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
+                >
+                  <Download size={12} />
+                  Export
+                </button>
+              </Tooltip>
+              <Tooltip label="Import wiki from zip (auto-backs up first)" side="bottom">
+                <button
+                  onClick={() => importInputRef.current?.click()}
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
+                >
+                  <Upload size={12} />
+                  Import
+                </button>
+              </Tooltip>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setPendingImportFile(f);
+                  // Reset so picking the same file twice still triggers onChange.
+                  e.target.value = '';
+                }}
+              />
               <Tooltip label="Reload" side="bottom">
                 <button
                   onClick={refresh}
@@ -345,8 +421,106 @@ export function WikiPage() {
           onClose={() => setShowAnalyzePicker(false)}
         />
       )}
+      {pendingImportFile && (
+        <ImportModeModal
+          fileName={pendingImportFile.name}
+          busy={importing}
+          onCancel={() => setPendingImportFile(null)}
+          onConfirm={runImport}
+        />
+      )}
     </div>
   );
+}
+
+interface ImportModeModalProps {
+  fileName: string;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (mode: 'skip' | 'overwrite') => void;
+}
+
+function ImportModeModal({
+  fileName,
+  busy,
+  onCancel,
+  onConfirm,
+}: ImportModeModalProps) {
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+      onClick={busy ? undefined : onCancel}
+    >
+      <div
+        className="w-[420px] max-w-[90vw] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-2 text-sm font-semibold">Import wiki</div>
+        <div className="mb-3 text-[11px] text-[var(--color-ink-muted)] font-mono truncate">
+          {fileName}
+        </div>
+        <p className="mb-4 text-xs text-[var(--color-ink-muted)]">
+          The current wiki is automatically backed up to{' '}
+          <span className="font-mono">~/.pinloom/wiki-backups/</span> before any change.
+        </p>
+        <div className="flex flex-col gap-2">
+          <button
+            disabled={busy}
+            onClick={() => onConfirm('skip')}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-3 py-2 text-left text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+          >
+            <div className="font-medium">Skip duplicates</div>
+            <div className="text-[10px] text-[var(--color-ink-muted)]">
+              Existing files are kept; only new files are added.
+            </div>
+          </button>
+          <button
+            disabled={busy}
+            onClick={() => onConfirm('overwrite')}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-3 py-2 text-left text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+          >
+            <div className="font-medium">Overwrite duplicates</div>
+            <div className="text-[10px] text-[var(--color-ink-muted)]">
+              Existing files with the same path are replaced. Files not in the zip stay untouched.
+            </div>
+          </button>
+        </div>
+        <div className="mt-3 flex justify-end">
+          <button
+            disabled={busy}
+            onClick={onCancel}
+            className="text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-50"
+          >
+            {busy ? 'Importing…' : 'Cancel'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function bufferToBase64(buf: ArrayBuffer): string {
+  // Avoid String.fromCharCode(...largeArray) stack overflow on big files
+  // by chunking. 0x8000 is well under V8's spread-arg limit.
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function formatImportSummary(s: WikiImportSummary): string {
+  return [
+    `Wiki import (${s.mode}):`,
+    `  Added:       ${s.added.length}`,
+    `  Overwritten: ${s.overwritten.length}`,
+    `  Skipped:     ${s.skipped.length}`,
+    ``,
+    `Backup written to:`,
+    s.backupPath,
+  ].join('\n');
 }
 
 interface FilterPillProps {
