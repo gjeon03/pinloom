@@ -669,7 +669,7 @@ function GroupHeader({
         highlighted
           ? 'bg-[var(--color-surface-3)] text-[var(--color-accent)]'
           : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60'
-      } ${isDragging ? 'opacity-40' : ''}`}
+      } ${isDragging ? 'opacity-40' : ''} ${menuOpen ? 'relative z-20' : ''}`}
     >
       <button
         type="button"
@@ -906,7 +906,11 @@ function ProjectsList({
                 showBefore ? 'bg-[var(--color-accent)]' : 'bg-transparent'
               }`}
             />
-            <div className="relative group/proj mx-2 my-0.5">
+            <div
+              className={`relative group/proj mx-2 my-0.5 ${
+                menuOpen ? 'z-20' : ''
+              }`}
+            >
               <button
                 draggable
                 onDragStart={(e) => {
