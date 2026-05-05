@@ -17,6 +17,7 @@
     "prestart": "pnpm build",
     "start": "concurrently --kill-others --names backend,frontend \"pnpm --filter @pinloom/backend start\" \"pnpm --filter @pinloom/frontend preview\"",
     "test": "pnpm --filter @pinloom/backend test",
+    "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "typecheck": "tsc -b",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
     "postinstall": "pnpm build:shared"
@@ -25,6 +26,7 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "concurrently": "^9.1.2",
     "typescript": "^5.7.3"
   },
