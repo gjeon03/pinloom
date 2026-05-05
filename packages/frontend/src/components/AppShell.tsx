@@ -115,6 +115,7 @@ export function AppShell({ children }: Props) {
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);
   const [openMenuGroupId, setOpenMenuGroupId] = useState<string | null>(null);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.listProjects(), api.listProjectGroups()])
@@ -188,6 +189,32 @@ export function AppShell({ children }: Props) {
       setError(String(e));
     } finally {
       setRenamingGroupId(null);
+    }
+  }
+
+  async function handleDeleteProject(id: string) {
+    const proj = projects.find((p) => p.id === id);
+    if (!proj) return;
+    if (
+      !window.confirm(
+        `Delete project "${proj.name}"? Plans, sessions, and messages will be deleted too.`,
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    try {
+      await api.deleteProject(id);
+      const remaining = projects.filter((p) => p.id !== id);
+      setProjects(remaining);
+      if (projectId === id) {
+        const next = remaining[0];
+        navigate(next ? `/projects/${next.id}` : '/');
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setOpenProjectMenuId(null);
     }
   }
 
@@ -316,6 +343,28 @@ export function AppShell({ children }: Props) {
     }
   }
 
+  function renderProjectsList(items: Project[]) {
+    return (
+      <ProjectsList
+        projects={items}
+        activeProjectId={projectId ?? null}
+        drag={drag}
+        dropTarget={dropTarget}
+        openMenuProjectId={openProjectMenuId}
+        onNavigate={(id) => navigate(`/projects/${id}`)}
+        onProjectDragStart={(id) => setDrag({ kind: 'project', id })}
+        onProjectDragOver={(targetId, position) =>
+          setDropTarget({ kind: 'project', id: targetId, position })
+        }
+        onDragEnd={resetDrag}
+        onDrop={commitDrop}
+        onMenuOpen={(id) => setOpenProjectMenuId(id)}
+        onMenuClose={() => setOpenProjectMenuId(null)}
+        onDelete={handleDeleteProject}
+      />
+    );
+  }
+
   return (
     <div className="flex h-full">
       <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
@@ -437,21 +486,7 @@ export function AppShell({ children }: Props) {
                   }}
                   onDragEnd={resetDrag}
                 />
-                {!collapsed && (
-                  <ProjectsList
-                    projects={items}
-                    activeProjectId={projectId ?? null}
-                    drag={drag}
-                    dropTarget={dropTarget}
-                    onNavigate={(id) => navigate(`/projects/${id}`)}
-                    onProjectDragStart={(id) => setDrag({ kind: 'project', id })}
-                    onProjectDragOver={(targetId, position) =>
-                      setDropTarget({ kind: 'project', id: targetId, position })
-                    }
-                    onDragEnd={resetDrag}
-                    onDrop={commitDrop}
-                  />
-                )}
+                {!collapsed && renderProjectsList(items)}
               </div>
             );
           })}
@@ -477,19 +512,7 @@ export function AppShell({ children }: Props) {
 
           {/* Ungrouped section. With no groups defined, render flat (no header). */}
           {groups.length === 0 ? (
-            <ProjectsList
-              projects={ungroupedProjects}
-              activeProjectId={projectId ?? null}
-              drag={drag}
-              dropTarget={dropTarget}
-              onNavigate={(id) => navigate(`/projects/${id}`)}
-              onProjectDragStart={(id) => setDrag({ kind: 'project', id })}
-              onProjectDragOver={(targetId, position) =>
-                setDropTarget({ kind: 'project', id: targetId, position })
-              }
-              onDragEnd={resetDrag}
-              onDrop={commitDrop}
-            />
+            renderProjectsList(ungroupedProjects)
           ) : showUngroupedSection ? (
             <div className="flex flex-col">
               <div
@@ -514,19 +537,7 @@ export function AppShell({ children }: Props) {
               >
                 Ungrouped
               </div>
-              <ProjectsList
-                projects={ungroupedProjects}
-                activeProjectId={projectId ?? null}
-                drag={drag}
-                dropTarget={dropTarget}
-                onNavigate={(id) => navigate(`/projects/${id}`)}
-                onProjectDragStart={(id) => setDrag({ kind: 'project', id })}
-                onProjectDragOver={(targetId, position) =>
-                  setDropTarget({ kind: 'project', id: targetId, position })
-                }
-                onDragEnd={resetDrag}
-                onDrop={commitDrop}
-              />
+              {renderProjectsList(ungroupedProjects)}
               {ungroupedProjects.length === 0 && (
                 <div
                   className={`mx-2 h-6 rounded transition-colors ${
@@ -806,11 +817,45 @@ function GroupMenu({ onNewProject, onRename, onDelete, onClose }: GroupMenuProps
   );
 }
 
+interface ProjectMenuProps {
+  onDelete: () => void;
+  onClose: () => void;
+}
+
+function ProjectMenu({ onDelete, onClose }: ProjectMenuProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [onClose]);
+  return (
+    <div
+      ref={ref}
+      className="absolute right-0 top-full mt-1 z-10 min-w-[100px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs"
+    >
+      <button
+        type="button"
+        className="w-full text-left px-2 py-1 hover:bg-[var(--color-surface-3)] text-red-400"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+      >
+        Delete
+      </button>
+    </div>
+  );
+}
+
 interface ProjectsListProps {
   projects: Project[];
   activeProjectId: string | null;
   drag: DragSource;
   dropTarget: DropTarget;
+  openMenuProjectId: string | null;
   onNavigate: (id: string) => void;
   onProjectDragStart: (id: string) => void;
   onProjectDragOver: (
@@ -819,6 +864,9 @@ interface ProjectsListProps {
   ) => void;
   onDragEnd: () => void;
   onDrop: () => void;
+  onMenuOpen: (id: string) => void;
+  onMenuClose: () => void;
+  onDelete: (id: string) => void;
 }
 
 function ProjectsList({
@@ -826,17 +874,22 @@ function ProjectsList({
   activeProjectId,
   drag,
   dropTarget,
+  openMenuProjectId,
   onNavigate,
   onProjectDragStart,
   onProjectDragOver,
   onDragEnd,
   onDrop,
+  onMenuOpen,
+  onMenuClose,
+  onDelete,
 }: ProjectsListProps) {
   return (
     <>
       {projects.map((p, i) => {
         const active = p.id === activeProjectId;
         const isDragging = drag?.kind === 'project' && drag.id === p.id;
+        const menuOpen = openMenuProjectId === p.id;
         const showBefore =
           dropTarget?.kind === 'project' &&
           dropTarget.id === p.id &&
@@ -851,57 +904,84 @@ function ProjectsList({
                 showBefore ? 'bg-[var(--color-accent)]' : 'bg-transparent'
               }`}
             />
-            <button
-              draggable
-              onDragStart={(e) => {
-                onProjectDragStart(p.id);
-                e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/plain', `project:${p.id}`);
-                const original = e.currentTarget;
-                const ghost = original.cloneNode(true) as HTMLElement;
-                ghost.style.position = 'absolute';
-                ghost.style.top = '-9999px';
-                ghost.style.left = '-9999px';
-                ghost.style.opacity = '0.25';
-                ghost.style.transform = 'scale(0.85)';
-                ghost.style.pointerEvents = 'none';
-                document.body.appendChild(ghost);
-                e.dataTransfer.setDragImage(ghost, 20, 10);
-                setTimeout(() => ghost.remove(), 0);
-              }}
-              onDragOver={(e) => {
-                if (drag?.kind !== 'project' || drag.id === p.id) return;
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                const rect = e.currentTarget.getBoundingClientRect();
-                const isTopHalf = e.clientY < rect.top + rect.height / 2;
-                if (isTopHalf) {
-                  onProjectDragOver(p.id, 'before');
-                } else {
-                  const nextProj = projects[i + 1];
-                  if (nextProj && nextProj.id !== drag.id) {
-                    onProjectDragOver(nextProj.id, 'before');
+            <div className="relative group/proj mx-2 my-0.5">
+              <button
+                draggable
+                onDragStart={(e) => {
+                  onProjectDragStart(p.id);
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', `project:${p.id}`);
+                  const original = e.currentTarget;
+                  const ghost = original.cloneNode(true) as HTMLElement;
+                  ghost.style.position = 'absolute';
+                  ghost.style.top = '-9999px';
+                  ghost.style.left = '-9999px';
+                  ghost.style.opacity = '0.25';
+                  ghost.style.transform = 'scale(0.85)';
+                  ghost.style.pointerEvents = 'none';
+                  document.body.appendChild(ghost);
+                  e.dataTransfer.setDragImage(ghost, 20, 10);
+                  setTimeout(() => ghost.remove(), 0);
+                }}
+                onDragOver={(e) => {
+                  if (drag?.kind !== 'project' || drag.id === p.id) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const isTopHalf = e.clientY < rect.top + rect.height / 2;
+                  if (isTopHalf) {
+                    onProjectDragOver(p.id, 'before');
                   } else {
-                    onProjectDragOver(p.id, 'after');
+                    const nextProj = projects[i + 1];
+                    if (nextProj && nextProj.id !== drag.id) {
+                      onProjectDragOver(nextProj.id, 'before');
+                    } else {
+                      onProjectDragOver(p.id, 'after');
+                    }
                   }
-                }
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onDrop();
-              }}
-              onDragEnd={onDragEnd}
-              onClick={() => onNavigate(p.id)}
-              className={`mx-2 my-0.5 rounded px-2 py-1.5 text-left text-sm flex flex-col gap-0.5 transition-colors ${
-                active
-                  ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-                  : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60'
-              } ${isDragging ? 'opacity-40' : ''}`}
-            >
-              <span className="truncate font-medium">{p.name}</span>
-              <span className="truncate text-[10px] opacity-70 font-mono">{p.cwd}</span>
-            </button>
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onDrop();
+                }}
+                onDragEnd={onDragEnd}
+                onClick={() => onNavigate(p.id)}
+                className={`w-full rounded px-2 py-1.5 pr-7 text-left text-sm flex flex-col gap-0.5 transition-colors ${
+                  active
+                    ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                    : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60'
+                } ${isDragging ? 'opacity-40' : ''}`}
+              >
+                <span className="truncate font-medium">{p.name}</span>
+                <span className="truncate text-[10px] opacity-70 font-mono">{p.cwd}</span>
+              </button>
+              <div className="absolute right-1 top-1/2 -translate-y-1/2">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (menuOpen) onMenuClose();
+                    else onMenuOpen(p.id);
+                  }}
+                  className={`p-0.5 rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)] transition-opacity ${
+                    menuOpen ? 'opacity-100' : 'opacity-0 group-hover/proj:opacity-100'
+                  }`}
+                  title="Project options"
+                >
+                  <MoreHorizontal size={12} />
+                </button>
+                {menuOpen && (
+                  <ProjectMenu
+                    onDelete={() => {
+                      onMenuClose();
+                      onDelete(p.id);
+                    }}
+                    onClose={onMenuClose}
+                  />
+                )}
+              </div>
+            </div>
           </div>
         );
       })}
