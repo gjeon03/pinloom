@@ -373,6 +373,7 @@ export function AppShell({ children }: Props) {
           <div className="flex items-center gap-0.5">
             <Tooltip label="New group" side="bottom">
               <button
+                aria-label="New group"
                 onClick={handleCreateGroup}
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
               >
@@ -388,6 +389,7 @@ export function AppShell({ children }: Props) {
               side="bottom"
             >
               <button
+                aria-label="New project"
                 onClick={() => setPickerTarget({ groupId: null })}
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
               >
