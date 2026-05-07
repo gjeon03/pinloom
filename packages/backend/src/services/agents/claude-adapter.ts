@@ -120,10 +120,10 @@ class ClaudeAdapterImpl implements AgentAdapter {
     const options: Record<string, unknown> = {
       cwd: args.cwd,
       systemPrompt: args.systemPrompt,
-      // 100 is generous enough that legitimate codebase-exploration turns
-      // (grep + read + edit cycles) don't bump the ceiling, while still
-      // catching genuine runaway loops. The user can always abort sooner.
-      maxTurns: 100,
+      // No maxTurns ceiling: pinloom is a single-user local tool where the
+      // user can always cancel via the chat UI. A hard cap was prematurely
+      // ending legitimate large refactors with "Reached maximum number of
+      // turns" instead of letting the work finish.
       permissionMode: 'bypassPermissions',
       allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
       abortController: args.abortController,
