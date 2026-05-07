@@ -33,8 +33,10 @@ export function SessionTabs({
     { id: string; position: 'before' | 'after' } | null
   >(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerCoords, setPickerCoords] = useState<{ top: number; right: number } | null>(null);
   const [codexAvailable, setCodexAvailable] = useState<boolean | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const pickerButtonRef = useRef<HTMLButtonElement>(null);
 
   // One-shot health probe to know whether the Codex CLI is on PATH.
   // We use this only to dim the picker option — even when codex looks
@@ -126,13 +128,9 @@ export function SessionTabs({
   }
 
   return (
-    <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2">
-      {/* Tabs scroll horizontally if there are many; the picker (+/dropdown)
-          lives outside this container so its dropdown isn't clipped by the
-          implicit overflow-y constraint that overflow-x-auto creates. */}
-      <div
-        className="flex items-center overflow-x-auto flex-1 min-w-0"
-        onDragOver={(e) => {
+    <div
+      className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2 overflow-x-auto"
+      onDragOver={(e) => {
         if (!draggingId) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
@@ -306,21 +304,39 @@ export function SessionTabs({
           />
         );
       })()}
-      </div>
-      {/* Picker lives outside the scroll/clip area so the dropdown can
-          render below the tab bar without being cropped. */}
       <div ref={pickerRef} className="relative ml-1 shrink-0">
         <button
+          ref={pickerButtonRef}
           type="button"
-          onClick={() => setPickerOpen((v) => !v)}
+          onClick={() => {
+            // The tab bar uses overflow-x-auto, which (per CSS spec) implicitly
+            // clips overflow-y too. So we render the dropdown with position:fixed
+            // anchored to the button's screen rect to escape the clip.
+            const r = pickerButtonRef.current?.getBoundingClientRect();
+            if (r) {
+              setPickerCoords({
+                top: r.bottom + 4,
+                right: Math.max(0, window.innerWidth - r.right),
+              });
+            }
+            setPickerOpen((v) => !v);
+          }}
           className="flex items-center gap-0.5 p-1.5 rounded text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
           title="New tab — pick agent"
         >
           <Plus size={14} />
           <ChevronDown size={10} />
         </button>
-        {pickerOpen && (
-          <div className="absolute right-0 top-full mt-1 z-20 min-w-[140px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs">
+        {pickerOpen && pickerCoords && (
+          <div
+            style={{
+              position: 'fixed',
+              top: pickerCoords.top,
+              right: pickerCoords.right,
+              zIndex: 50,
+            }}
+            className="min-w-[140px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs"
+          >
             <button
               type="button"
               onClick={() => createTab('claude')}
