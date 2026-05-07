@@ -126,9 +126,13 @@ export function SessionTabs({
   }
 
   return (
-    <div
-      className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2 overflow-x-auto"
-      onDragOver={(e) => {
+    <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2">
+      {/* Tabs scroll horizontally if there are many; the picker (+/dropdown)
+          lives outside this container so its dropdown isn't clipped by the
+          implicit overflow-y constraint that overflow-x-auto creates. */}
+      <div
+        className="flex items-center overflow-x-auto flex-1 min-w-0"
+        onDragOver={(e) => {
         if (!draggingId) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
@@ -302,7 +306,10 @@ export function SessionTabs({
           />
         );
       })()}
-      <div ref={pickerRef} className="relative ml-1">
+      </div>
+      {/* Picker lives outside the scroll/clip area so the dropdown can
+          render below the tab bar without being cropped. */}
+      <div ref={pickerRef} className="relative ml-1 shrink-0">
         <button
           type="button"
           onClick={() => setPickerOpen((v) => !v)}
