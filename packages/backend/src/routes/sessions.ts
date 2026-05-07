@@ -46,6 +46,9 @@ interface SessionRow {
   id: string;
   project_id: string;
   plan_id: string | null;
+  agent: string;
+  agent_session_id: string | null;
+  // Legacy column kept in sync with agent_session_id; will be dropped later.
   claude_session_id: string | null;
   title: string | null;
   next_image_number: number;
@@ -70,11 +73,17 @@ interface MessageRow {
 }
 
 export function toSession(row: SessionRow): Session {
+  const agent = row.agent === 'codex' ? 'codex' : 'claude';
+  // agent_session_id is the canonical resume token going forward; fall back
+  // to claude_session_id for any rows the migration backfill missed.
+  const agentSessionId = row.agent_session_id ?? row.claude_session_id;
   return {
     id: row.id,
     projectId: row.project_id,
     planId: row.plan_id,
-    claudeSessionId: row.claude_session_id,
+    agent,
+    agentSessionId,
+    claudeSessionId: agentSessionId,
     title: row.title,
     nextImageNumber: row.next_image_number,
     lastSyncedMessageId: row.last_synced_message_id,
@@ -125,8 +134,17 @@ export async function sessionRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { projectId: string };
-    Body: { planId?: string | null; title?: string | null };
-  }>('/api/projects/:projectId/sessions', async (req) => {
+    Body: {
+      planId?: string | null;
+      title?: string | null;
+      agent?: 'claude' | 'codex';
+    };
+  }>('/api/projects/:projectId/sessions', async (req, reply) => {
+    const agent = req.body.agent === 'codex' ? 'codex' : 'claude';
+    if (req.body.agent && req.body.agent !== 'claude' && req.body.agent !== 'codex') {
+      reply.code(400);
+      return { error: `unknown agent: ${req.body.agent}` };
+    }
     const id = nanoid();
     const now = new Date().toISOString();
     const maxRow = db
@@ -137,12 +155,13 @@ export async function sessionRoutes(app: FastifyInstance) {
     const nextOrder = maxRow.max + 1;
     db.prepare(
       `INSERT INTO sessions
-         (id, project_id, plan_id, claude_session_id, title, order_index, created_at, updated_at)
-       VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
+         (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
     ).run(
       id,
       req.params.projectId,
       req.body.planId ?? null,
+      agent,
       req.body.title ?? null,
       nextOrder,
       now,

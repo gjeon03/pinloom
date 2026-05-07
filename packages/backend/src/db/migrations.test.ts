@@ -113,7 +113,7 @@ describe('runMigrations', () => {
     }
   });
 
-  it('sessions has all columns added through migration 10', () => {
+  it('sessions has all columns added through migration 13', () => {
     const db = freshDb();
     runMigrations(db);
     const cols = tableInfo(db, 'sessions');
@@ -130,6 +130,8 @@ describe('runMigrations', () => {
       'order_index',
       'next_image_number',
       'last_synced_message_id',
+      'agent',
+      'agent_session_id',
     ]) {
       expect(cols).toContain(c);
     }
@@ -262,6 +264,49 @@ describe('migration 8 — messages.pinned_at backfill', () => {
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId['m-pinned'].pinned_at).toBe('2020-02-02T00:00:00Z');
     expect(byId['m-unpinned'].pinned_at).toBeNull();
+  });
+});
+
+describe('migration 13 — per-session agent', () => {
+  it("defaults sessions.agent to 'claude' for newly inserted rows", () => {
+    const db = freshDb();
+    runMigrations(db);
+
+    const now = '2024-01-01T00:00:00Z';
+    db.prepare(
+      'INSERT INTO projects (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('p', 'P', '/p', now, now);
+    db.prepare(
+      'INSERT INTO sessions (id, project_id, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    ).run('s', 'p', now, now);
+
+    const row = db
+      .prepare('SELECT agent, agent_session_id FROM sessions WHERE id = ?')
+      .get('s') as { agent: string; agent_session_id: string | null };
+    expect(row.agent).toBe('claude');
+    expect(row.agent_session_id).toBeNull();
+  });
+
+  it('backfills agent_session_id from claude_session_id for legacy rows', () => {
+    const db = freshDb();
+    applyUpTo(db, 12);
+
+    const now = '2024-01-01T00:00:00Z';
+    db.prepare(
+      'INSERT INTO projects (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('p', 'P', '/p', now, now);
+    db.prepare(
+      `INSERT INTO sessions (id, project_id, claude_session_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('s', 'p', 'legacy-claude-session-id', now, now);
+
+    runMigrations(db);
+
+    const row = db
+      .prepare('SELECT agent, agent_session_id FROM sessions WHERE id = ?')
+      .get('s') as { agent: string; agent_session_id: string | null };
+    expect(row.agent).toBe('claude');
+    expect(row.agent_session_id).toBe('legacy-claude-session-id');
   });
 });
 

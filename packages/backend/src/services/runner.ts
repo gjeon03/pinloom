@@ -1,49 +1,12 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { nanoid } from 'nanoid';
 import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
+import { getAgentAdapter } from './agents/index.js';
+import type { ImageInput, ImageMediaType } from './runner-types.js';
 
-export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
-
-export interface ImageInput {
-  mimeType: ImageMediaType;
-  base64: string;
-}
-
-interface PromptTextBlock {
-  type: 'text';
-  text: string;
-}
-interface PromptImageBlock {
-  type: 'image';
-  source: { type: 'base64'; media_type: ImageMediaType; data: string };
-}
-type PromptContentBlock = PromptTextBlock | PromptImageBlock;
-
-function buildContentBlocks(text: string, images: ImageInput[]): PromptContentBlock[] {
-  const blocks: PromptContentBlock[] = [];
-  if (text.length > 0) blocks.push({ type: 'text', text });
-  for (const img of images) {
-    blocks.push({
-      type: 'image',
-      source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
-    });
-  }
-  return blocks;
-}
-
-async function* buildPromptIterable(
-  text: string,
-  images: ImageInput[],
-): AsyncGenerator<{ type: 'user'; message: { role: 'user'; content: PromptContentBlock[] }; parent_tool_use_id: null }> {
-  yield {
-    type: 'user',
-    message: { role: 'user', content: buildContentBlocks(text, images) },
-    parent_tool_use_id: null,
-  };
-}
+export type { ImageInput, ImageMediaType } from './runner-types.js';
 
 interface PersistArgs {
   sessionId: string;
@@ -89,6 +52,9 @@ interface SessionContext {
   id: string;
   projectId: string;
   planId: string | null;
+  agent: 'claude' | 'codex';
+  // Resume token: Claude SDK calls it session_id; Codex calls it thread_id.
+  // Same column under the hood (agent_session_id), just a different label.
   claudeSessionId: string | null;
   cwd: string;
 }
@@ -208,7 +174,8 @@ function loadSession(sessionId: string): SessionContext | null {
   const db = getDb();
   const row = db
     .prepare(
-      `SELECT s.id, s.project_id, s.plan_id, s.claude_session_id, p.cwd
+      `SELECT s.id, s.project_id, s.plan_id, s.agent,
+              s.agent_session_id, s.claude_session_id, p.cwd
        FROM sessions s
        JOIN projects p ON p.id = s.project_id
        WHERE s.id = ?`,
@@ -218,6 +185,8 @@ function loadSession(sessionId: string): SessionContext | null {
         id: string;
         project_id: string;
         plan_id: string | null;
+        agent: string;
+        agent_session_id: string | null;
         claude_session_id: string | null;
         cwd: string;
       }
@@ -227,7 +196,8 @@ function loadSession(sessionId: string): SessionContext | null {
     id: row.id,
     projectId: row.project_id,
     planId: row.plan_id,
-    claudeSessionId: row.claude_session_id,
+    agent: row.agent === 'codex' ? 'codex' : 'claude',
+    claudeSessionId: row.agent_session_id ?? row.claude_session_id,
     cwd: row.cwd,
   };
 }
@@ -282,19 +252,17 @@ function buildPinsContext(sessionId: string): string {
 
 function updateClaudeSessionId(sessionId: string, claudeSessionId: string) {
   const db = getDb();
-  db.prepare('UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?').run(
-    claudeSessionId,
-    new Date().toISOString(),
-    sessionId,
-  );
+  // Dual-write to both columns until claude_session_id is fully retired.
+  db.prepare(
+    'UPDATE sessions SET agent_session_id = ?, claude_session_id = ?, updated_at = ? WHERE id = ?',
+  ).run(claudeSessionId, claudeSessionId, new Date().toISOString(), sessionId);
 }
 
 function clearClaudeSessionId(sessionId: string) {
   const db = getDb();
-  db.prepare('UPDATE sessions SET claude_session_id = NULL, updated_at = ? WHERE id = ?').run(
-    new Date().toISOString(),
-    sessionId,
-  );
+  db.prepare(
+    'UPDATE sessions SET agent_session_id = NULL, claude_session_id = NULL, updated_at = ? WHERE id = ?',
+  ).run(new Date().toISOString(), sessionId);
 }
 
 interface HistoryMessage {
@@ -448,32 +416,15 @@ async function runAttempt(
   abortController: AbortController,
   model?: string,
 ): Promise<string> {
-  const options: Record<string, unknown> = {
+  const adapter = getAgentAdapter(ctx.agent);
+  const run = adapter.run({
     cwd: ctx.cwd,
+    prompt,
+    images,
     systemPrompt,
-    // 100 is generous enough that legitimate codebase-exploration turns
-    // (grep + read + edit cycles) don't bump the ceiling, while still
-    // catching genuine runaway loops. The user can always abort sooner.
-    maxTurns: 100,
-    permissionMode: 'bypassPermissions',
-    allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
+    model,
+    resume: useResume ? ctx.claudeSessionId : null,
     abortController,
-    includePartialMessages: true,
-    thinking: { type: 'adaptive' },
-  };
-  if (useResume && ctx.claudeSessionId) {
-    options.resume = ctx.claudeSessionId;
-  }
-  if (model) {
-    options.model = model;
-  }
-
-  const promptValue =
-    images.length > 0 ? buildPromptIterable(prompt, images) : prompt;
-
-  const q = query({
-    prompt: promptValue as Parameters<typeof query>[0]['prompt'],
-    options: options as Parameters<typeof query>[0]['options'],
   });
 
   let totalText = '';
@@ -484,7 +435,6 @@ async function runAttempt(
   function closeStream() {
     if (!streamMsgId) return;
     const db = getDb();
-    // Persist final content + the model the SDK reported using.
     db.prepare(
       'UPDATE messages SET content = ?, model = COALESCE(?, model) WHERE id = ?',
     ).run(streamContent, streamModel, streamMsgId);
@@ -493,8 +443,6 @@ async function runAttempt(
       sessionId: ctx.id,
       messageId: streamMsgId,
     });
-    // Re-broadcast the row now that content + model are both finalized so the
-    // UI can show the model badge without losing the streamed content.
     const row = db
       .prepare('SELECT * FROM messages WHERE id = ?')
       .get(streamMsgId) as MessageRow;
@@ -522,164 +470,91 @@ async function runAttempt(
   }
 
   try {
-  for await (const message of q) {
-    if (abortController.signal.aborted) break;
-    const anyMsg = message as unknown as {
-      type: string;
-      event?: {
-        type: string;
-        index?: number;
-        delta?: {
-          type?: string;
-          text?: string;
-          partial_json?: string;
-          thinking?: string;
-        };
-        content_block?: { type?: string; text?: string; name?: string; input?: unknown };
-      };
-      message?: {
-        id?: string;
-        model?: string;
-        content?: Array<{ type: string; text?: string; name?: string; input?: unknown }>;
-      };
-      session_id?: string;
-    };
-
-    if (anyMsg.type === 'stream_event') {
-      // Partial message events emitted when `includePartialMessages: true`.
-      const ev = anyMsg.event;
-      if (!ev) continue;
-      if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
-        const delta = ev.delta.text ?? '';
-        if (!delta) continue;
-        const id = ensureStream();
-        streamContent += delta;
-        totalText += delta;
-        broadcast(`session:${ctx.id}`, {
-          type: 'stream_chunk',
-          sessionId: ctx.id,
-          messageId: id,
-          chunk: delta,
-        });
-      } else if (
-        ev.type === 'content_block_delta' &&
-        ev.delta?.type === 'thinking_delta'
-      ) {
-        const delta = ev.delta.thinking ?? '';
-        if (!delta) continue;
-        broadcast(`session:${ctx.id}`, {
-          type: 'thinking_chunk',
-          sessionId: ctx.id,
-          chunk: delta,
-        });
-      } else if (
-        ev.type === 'content_block_start' &&
-        ev.content_block?.type === 'thinking'
-      ) {
-        broadcast(`session:${ctx.id}`, {
-          type: 'thinking_start',
-          sessionId: ctx.id,
-        });
-      } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
-        closeStream();
-        // tool_use block just started — we'll get the full tool via the
-        // regular 'assistant' event later, so don't persist now.
-      } else if (ev.type === 'message_stop') {
-        closeStream();
-      }
-      continue;
-    }
-
-    if (anyMsg.type === 'assistant') {
-      if (anyMsg.session_id && anyMsg.session_id !== ctx.claudeSessionId) {
-        updateClaudeSessionId(ctx.id, anyMsg.session_id);
-        ctx.claudeSessionId = anyMsg.session_id;
-      }
-      // Capture the actual model the SDK used so we can stamp it on the row
-      // when the stream closes. Persisting earlier (mid-stream) would race
-      // with content accumulation and wipe the streamed text on reload.
-      const actualModel = anyMsg.message?.model;
-      if (actualModel && !streamModel) {
-        streamModel = actualModel;
-      }
-      // Text blocks here are duplicates of what we already streamed via
-      // `stream_event` partials (`includePartialMessages: true`) — skip them.
-      // Tool blocks must be handled here because partials don't carry full
-      // tool input arguments.
-      const content = anyMsg.message?.content ?? [];
-      for (const block of content) {
-        if (block.type === 'tool_use') {
+    for await (const ev of run.events) {
+      if (abortController.signal.aborted) break;
+      switch (ev.type) {
+        case 'session_id':
+          if (ev.id !== ctx.claudeSessionId) {
+            updateClaudeSessionId(ctx.id, ev.id);
+            ctx.claudeSessionId = ev.id;
+          }
+          break;
+        case 'text_delta': {
+          const id = ensureStream();
+          streamContent += ev.text;
+          totalText += ev.text;
+          broadcast(`session:${ctx.id}`, {
+            type: 'stream_chunk',
+            sessionId: ctx.id,
+            messageId: id,
+            chunk: ev.text,
+          });
+          break;
+        }
+        case 'thinking_start':
+          broadcast(`session:${ctx.id}`, {
+            type: 'thinking_start',
+            sessionId: ctx.id,
+          });
+          break;
+        case 'thinking_delta':
+          broadcast(`session:${ctx.id}`, {
+            type: 'thinking_chunk',
+            sessionId: ctx.id,
+            chunk: ev.text,
+          });
+          break;
+        case 'tool_use': {
           closeStream();
+          const summary = ev.summary ?? ev.name;
           persistMessage({
             sessionId: ctx.id,
             planItemId,
             role: 'tool',
-            content: summarizeToolCall(block),
-            toolUse: { name: block.name, input: block.input },
+            content: summary,
+            toolUse: { name: ev.name, input: ev.input },
           });
           broadcast(`session:${ctx.id}`, {
             type: 'run_log',
             sessionId: ctx.id,
             stream: 'stdout',
-            chunk: `$ ${summarizeToolCall(block)}\n`,
+            chunk: `$ ${summary}\n`,
           });
+          break;
         }
-      }
-    } else if (anyMsg.type === 'user') {
-      const msg = message as {
-        message?: {
-          content?: Array<{
-            type: string;
-            content?: unknown;
-            is_error?: boolean;
-          }>;
-        };
-      };
-      const content = msg.message?.content ?? [];
-      for (const block of content) {
-        if (block.type === 'tool_result') {
-          const text = toolResultText(block.content);
-          if (text) {
-            broadcast(`session:${ctx.id}`, {
-              type: 'run_log',
-              sessionId: ctx.id,
-              stream: block.is_error ? 'stderr' : 'stdout',
-              chunk: text.endsWith('\n') ? text : `${text}\n`,
-            });
-          }
+        case 'tool_result': {
+          const text = ev.text.endsWith('\n') ? ev.text : `${ev.text}\n`;
+          broadcast(`session:${ctx.id}`, {
+            type: 'run_log',
+            sessionId: ctx.id,
+            stream: ev.stream,
+            chunk: text,
+          });
+          break;
         }
-      }
-    } else if (anyMsg.type === 'result') {
-      const result = message as unknown as { subtype?: string; result?: string; session_id?: string };
-      if (result.session_id && result.session_id !== ctx.claudeSessionId) {
-        updateClaudeSessionId(ctx.id, result.session_id);
-      }
-      // If the result contains more text than we streamed (rare edge case),
-      // append the delta to the current stream so the final message is complete.
-      if (
-        result.subtype === 'success' &&
-        result.result &&
-        result.result.length > totalText.length
-      ) {
-        const delta = result.result.slice(totalText.length);
-        const id = ensureStream();
-        streamContent += delta;
-        totalText += delta;
-        broadcast(`session:${ctx.id}`, {
-          type: 'stream_chunk',
-          sessionId: ctx.id,
-          messageId: id,
-          chunk: delta,
-        });
+        case 'message_stop':
+          closeStream();
+          break;
+        case 'final_text_fallback': {
+          const id = ensureStream();
+          streamContent += ev.text;
+          totalText += ev.text;
+          broadcast(`session:${ctx.id}`, {
+            type: 'stream_chunk',
+            sessionId: ctx.id,
+            messageId: id,
+            chunk: ev.text,
+          });
+          break;
+        }
+        case 'model':
+          if (!streamModel) streamModel = ev.model;
+          break;
       }
     }
-  }
   } finally {
-    // Ensure the SDK subprocess and its file watchers are released, even on
-    // abort or mid-stream errors. Without this the CLI can linger holding fds.
     try {
-      const maybeClose = (q as unknown as { close?: () => void }).close;
-      if (typeof maybeClose === 'function') maybeClose.call(q);
+      run.close();
     } catch {
       // best-effort cleanup
     }

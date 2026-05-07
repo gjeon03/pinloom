@@ -164,6 +164,21 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(group_id, order_index);
     `,
   },
+  {
+    id: 13,
+    // Per-session agent kind ('claude' | 'codex'). agent_session_id replaces
+    // the Claude-specific claude_session_id for resume tokens — Codex calls
+    // these "thread_id"s, but the column stores either. We backfill from
+    // claude_session_id so existing Claude sessions still resume cleanly.
+    // claude_session_id stays for now to avoid breaking any in-flight reads;
+    // a future migration can drop it once all callers have moved over.
+    sql: `
+      ALTER TABLE sessions
+        ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
+      ALTER TABLE sessions ADD COLUMN agent_session_id TEXT;
+      UPDATE sessions SET agent_session_id = claude_session_id;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
