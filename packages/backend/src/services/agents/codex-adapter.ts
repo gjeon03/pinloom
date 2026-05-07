@@ -103,10 +103,20 @@ class CodexAdapterImpl implements AgentAdapter {
   readonly name = 'codex' as const;
 
   run(args: AgentRunArgs): AgentRun {
-    // Build argv. `--full-auto` enables workspace-write sandboxing — same
-    // tradeoff Claude's `bypassPermissions` makes for pinloom (we trust
-    // the user, expect destructive consent at the UI layer).
-    const cliArgs: string[] = ['exec', '--json', '--full-auto', '--skip-git-repo-check'];
+    // Build argv. We use `--dangerously-bypass-approvals-and-sandbox` so
+    // codex has the same effective capabilities as the Claude SDK runs in
+    // pinloom (which uses `permissionMode: 'bypassPermissions'`). Without
+    // this, codex's default workspace-write sandbox blocks ~/.gradle
+    // writes, outbound network (e.g. distribution downloads), and local
+    // TCP socket binds (Gradle daemon, dev servers, etc.) — Claude
+    // sessions can do all of those, so the agent picker should be the
+    // only meaningful difference. pinloom is local-only and single-user.
+    const cliArgs: string[] = [
+      'exec',
+      '--json',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--skip-git-repo-check',
+    ];
     if (args.resume) {
       // Format: codex exec resume <SESSION_ID> [PROMPT] --json …
       // The prompt is appended via stdin so newlines/special chars survive.
