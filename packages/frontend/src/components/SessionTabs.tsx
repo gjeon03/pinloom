@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { ExternalLink, Plus, X } from 'lucide-react';
-import type { Session } from '@pinloom/shared';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ExternalLink, Plus, X } from 'lucide-react';
+import type { AgentKind, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { AgentBadge } from './AgentBadge.js';
 
 interface Props {
   projectId: string;
@@ -31,13 +32,51 @@ export function SessionTabs({
   const [dropTarget, setDropTarget] = useState<
     { id: string; position: 'before' | 'after' } | null
   >(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerCoords, setPickerCoords] = useState<{ top: number; right: number } | null>(null);
+  const [codexAvailable, setCodexAvailable] = useState<boolean | null>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const pickerButtonRef = useRef<HTMLButtonElement>(null);
+
+  // One-shot health probe to know whether the Codex CLI is on PATH.
+  // We use this only to dim the picker option — even when codex looks
+  // unavailable the user can still try (the backend will report a clear
+  // spawn error if so).
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .health()
+      .then((h) => {
+        if (!cancelled) setCodexAvailable(h.agents?.codex?.installed ?? false);
+      })
+      .catch(() => {
+        if (!cancelled) setCodexAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Click-outside dismiss for the picker dropdown.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    function onClick(e: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setPickerOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [pickerOpen]);
 
   const canDelete = sessions.length > 1;
 
-  async function createTab() {
+  async function createTab(agent: AgentKind) {
+    setPickerOpen(false);
     try {
       const created = await api.createSession(projectId, {
-        title: 'New chat',
+        title: agent === 'codex' ? 'New codex chat' : 'New chat',
+        agent,
       });
       onCreate(created);
     } catch (err) {
@@ -199,6 +238,7 @@ export function SessionTabs({
                 setEditValue(s.title ?? '');
               }}
             >
+              <AgentBadge agent={s.agent} size="xs" />
               {editing ? (
                 <input
                   autoFocus
@@ -264,13 +304,67 @@ export function SessionTabs({
           />
         );
       })()}
-      <button
-        onClick={createTab}
-        className="ml-1 p-1.5 rounded text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
-        title="New tab"
-      >
-        <Plus size={14} />
-      </button>
+      <div ref={pickerRef} className="relative ml-1 shrink-0">
+        <button
+          ref={pickerButtonRef}
+          type="button"
+          onClick={() => {
+            // The tab bar uses overflow-x-auto, which (per CSS spec) implicitly
+            // clips overflow-y too. So we render the dropdown with position:fixed
+            // anchored to the button's screen rect to escape the clip.
+            const r = pickerButtonRef.current?.getBoundingClientRect();
+            if (r) {
+              setPickerCoords({
+                top: r.bottom + 4,
+                right: Math.max(0, window.innerWidth - r.right),
+              });
+            }
+            setPickerOpen((v) => !v);
+          }}
+          className="flex items-center gap-0.5 p-1.5 rounded text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+          title="New tab — pick agent"
+        >
+          <Plus size={14} />
+          <ChevronDown size={10} />
+        </button>
+        {pickerOpen && pickerCoords && (
+          <div
+            style={{
+              position: 'fixed',
+              top: pickerCoords.top,
+              right: pickerCoords.right,
+              zIndex: 50,
+            }}
+            className="min-w-[140px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs"
+          >
+            <button
+              type="button"
+              onClick={() => createTab('claude')}
+              className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left"
+            >
+              <AgentBadge agent="claude" />
+              <span className="flex-1">Claude</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => createTab('codex')}
+              disabled={codexAvailable === false}
+              className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left disabled:opacity-40 disabled:cursor-not-allowed"
+              title={
+                codexAvailable === false
+                  ? 'Codex CLI not detected on PATH — install or run `codex login`'
+                  : 'New Codex session'
+              }
+            >
+              <AgentBadge agent="codex" />
+              <span className="flex-1">Codex</span>
+              {codexAvailable === false && (
+                <span className="text-[9px] text-[var(--color-ink-muted)]">N/A</span>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
       {error && (
         <span className="ml-2 text-xs text-red-400 truncate max-w-[200px]" title={error}>
           {error}

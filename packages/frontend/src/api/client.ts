@@ -1,4 +1,5 @@
 import type {
+  AgentKind,
   HealthResponse,
   Message,
   Plan,
@@ -118,7 +119,11 @@ export const api = {
     request<Session[]>(`/api/projects/${projectId}/sessions`),
   createSession: (
     projectId: string,
-    body: { planId?: string | null; title?: string | null },
+    body: {
+      planId?: string | null;
+      title?: string | null;
+      agent?: AgentKind;
+    },
   ) =>
     request<Session>(`/api/projects/${projectId}/sessions`, {
       method: 'POST',

@@ -12,13 +12,14 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { Message, Session } from '@pinloom/shared';
+import type { AgentKind, Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
 import { ToolGroup } from './ToolGroup.js';
 import { Tooltip } from './Tooltip.js';
 import { ModelPicker, findModelLabel } from './ModelPicker.js';
+import { AgentBadge } from './AgentBadge.js';
 import { useNotifications } from '../stores/notifications.js';
 
 type AiRunState = 'ai' | null;
@@ -643,6 +644,7 @@ export function ChatView({ session, onPinChange }: Props) {
             <MessageBubble
               key={m.id}
               message={m}
+              sessionAgent={session.agent}
               onTogglePin={togglePin}
               streaming={streamingIds.has(m.id)}
             />
@@ -923,10 +925,12 @@ export function ChatView({ session, onPinChange }: Props) {
 
 function MessageBubble({
   message,
+  sessionAgent,
   onTogglePin,
   streaming,
 }: {
   message: Message;
+  sessionAgent: AgentKind;
   onTogglePin: (m: Message) => void;
   streaming: boolean;
 }) {
@@ -959,7 +963,12 @@ function MessageBubble({
           roleBg[message.role] ?? ''
         }`}
       >
-        <span>{message.role}</span>
+        <span className="flex items-center gap-1.5">
+          {message.role === 'assistant' && (
+            <AgentBadge agent={sessionAgent} size="xs" />
+          )}
+          {message.role}
+        </span>
         <div className="flex items-center gap-2">
           {message.role === 'assistant' && message.model && (
             <span
