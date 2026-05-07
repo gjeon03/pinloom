@@ -40,10 +40,15 @@ export interface PlanItem {
   updatedAt: string;
 }
 
+export type AgentKind = 'claude' | 'codex';
+
 export interface Session {
   id: string;
   projectId: string;
   planId: string | null;
+  agent: AgentKind;
+  agentSessionId: string | null;
+  /** @deprecated mirror of agentSessionId for legacy callers; will be removed. */
   claudeSessionId: string | null;
   title: string | null;
   nextImageNumber: number;
@@ -71,9 +76,14 @@ export interface Message {
 
 export interface HealthResponse {
   status: 'ok';
+  /** @deprecated mirror of cli.claude — read agents.{claude,codex} instead. */
   cli: {
     installed: boolean;
     version: string | null;
+  };
+  agents: {
+    claude: { installed: boolean; version: string | null };
+    codex: { installed: boolean; version: string | null };
   };
 }
 

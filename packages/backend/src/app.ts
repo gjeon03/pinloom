@@ -10,7 +10,7 @@ import { messageRoutes } from './routes/messages.js';
 import { fsRoutes } from './routes/fs.js';
 import { wikiRoutes } from './routes/wiki.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
-import { checkCli } from './services/cli-check.js';
+import { checkAgentClis } from './services/cli-check.js';
 
 export async function createApp() {
   // 100MB body limit — image-attached messages and wiki imports both ship
@@ -23,8 +23,12 @@ export async function createApp() {
   await app.register(websocket);
 
   app.get('/api/health', async () => {
-    const cli = await checkCli();
-    return { status: 'ok' as const, cli };
+    const agents = await checkAgentClis();
+    return {
+      status: 'ok' as const,
+      cli: agents.claude, // legacy mirror; remove after frontend stops reading
+      agents,
+    };
   });
 
   await app.register(projectRoutes);
