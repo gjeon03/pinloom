@@ -9,8 +9,10 @@ import { sessionRoutes } from './routes/sessions.js';
 import { messageRoutes } from './routes/messages.js';
 import { fsRoutes } from './routes/fs.js';
 import { wikiRoutes } from './routes/wiki.js';
+import { settingsRoutes } from './routes/settings.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
 import { checkAgentClis } from './services/cli-check.js';
+import { loadUserEnvIntoProcess } from './services/user-env.js';
 
 export async function createApp() {
   // 100MB body limit — image-attached messages and wiki imports both ship
@@ -18,6 +20,10 @@ export async function createApp() {
   const app = Fastify({ logger: true, bodyLimit: 100 * 1024 * 1024 });
 
   getDb();
+
+  // Mirror user-managed env vars into process.env so the very first agent
+  // spawn inherits them; subsequent upserts/deletes keep this in sync.
+  loadUserEnvIntoProcess();
 
   await app.register(cors, { origin: true });
   await app.register(websocket);
@@ -37,6 +43,7 @@ export async function createApp() {
   await app.register(messageRoutes);
   await app.register(fsRoutes);
   await app.register(wikiRoutes);
+  await app.register(settingsRoutes);
 
   app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket, request) => {

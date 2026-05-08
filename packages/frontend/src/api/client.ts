@@ -7,6 +7,8 @@ import type {
   Project,
   ProjectGroup,
   Session,
+  UserEnvVar,
+  UserEnvVarWithValue,
 } from '@pinloom/shared';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -247,6 +249,23 @@ export const api = {
     request<WikiImportSummary>('/api/wiki/import', {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+
+  // User-managed environment variables (Settings → Environment Variables).
+  listEnvVars: () => request<UserEnvVar[]>('/api/settings/env'),
+  getEnvVar: (key: string) =>
+    request<UserEnvVarWithValue>(`/api/settings/env/${encodeURIComponent(key)}`),
+  upsertEnvVar: (
+    key: string,
+    body: { value: string; description?: string | null; isSecret?: boolean },
+  ) =>
+    request<UserEnvVar>(`/api/settings/env/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteEnvVar: (key: string) =>
+    request<{ ok: true }>(`/api/settings/env/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
     }),
 };
 

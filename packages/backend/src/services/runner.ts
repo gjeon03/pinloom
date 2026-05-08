@@ -4,6 +4,7 @@ import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { getAgentAdapter } from './agents/index.js';
+import { listUserEnvVars } from './user-env.js';
 import type { ImageInput, ImageMediaType } from './runner-types.js';
 
 export type { ImageInput, ImageMediaType } from './runner-types.js';
@@ -222,6 +223,30 @@ interface PinRow {
   id: string;
   pin_title: string | null;
   content: string;
+}
+
+// Lists user-managed env vars (key + description only, never values) so the
+// agent knows what's available to it. The values themselves are exposed via
+// process.env, which the Bash tool inherits — the agent should reference
+// them as $VAR rather than asking the user to paste them in.
+function buildEnvVarsContext(): string {
+  const vars = listUserEnvVars();
+  if (vars.length === 0) return '';
+  const lines = vars.map((v) => {
+    const desc = v.description?.trim();
+    return `- \`${v.key}\`${desc ? ` — ${desc}` : ''}`;
+  });
+  return [
+    '',
+    '## Available environment variables',
+    '',
+    'The user has configured the following variables in pinloom Settings.',
+    'They are exposed to your shell as env vars — reference them as `$VAR`',
+    'in Bash commands. Never echo, log, or paste raw values into chat or',
+    'into files you write.',
+    '',
+    ...lines,
+  ].join('\n');
 }
 
 function buildPinsContext(sessionId: string): string {
@@ -575,10 +600,12 @@ async function runAssistant(
   broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
 
   const pinsContext = buildPinsContext(ctx.id);
+  const envVarsContext = buildEnvVarsContext();
   const systemPrompt =
     SYSTEM_PROMPT +
     buildPlanContext(planItems) +
     buildWikiContext(ctx.projectId) +
+    envVarsContext +
     (pinsContext ? `\n\n${pinsContext}` : '');
 
   const abortController = registerRun(ctx.id);
