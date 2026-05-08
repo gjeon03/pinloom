@@ -26,7 +26,6 @@ export async function createApp() {
     const agents = await checkAgentClis();
     return {
       status: 'ok' as const,
-      cli: agents.claude, // legacy mirror; remove after frontend stops reading
       agents,
     };
   });

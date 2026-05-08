@@ -76,11 +76,6 @@ export interface Message {
 
 export interface HealthResponse {
   status: 'ok';
-  /** @deprecated mirror of cli.claude — read agents.{claude,codex} instead. */
-  cli: {
-    installed: boolean;
-    version: string | null;
-  };
   agents: {
     claude: { installed: boolean; version: string | null };
     codex: { installed: boolean; version: string | null };
