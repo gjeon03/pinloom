@@ -74,6 +74,23 @@ export interface Message {
   createdAt: string;
 }
 
+// User-managed environment variable. Stored locally in pinloom's SQLite and
+// merged into the backend's process.env so every agent's Bash tool inherits
+// it. The list endpoint omits `value` (replaced by `hasValue`) so masked
+// values never round-trip through the wire when not needed.
+export interface UserEnvVar {
+  key: string;
+  description: string | null;
+  isSecret: boolean;
+  hasValue: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserEnvVarWithValue extends UserEnvVar {
+  value: string;
+}
+
 export interface HealthResponse {
   status: 'ok';
   agents: {

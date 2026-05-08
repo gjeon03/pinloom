@@ -179,6 +179,23 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       UPDATE sessions SET agent_session_id = claude_session_id;
     `,
   },
+  {
+    id: 14,
+    // User-managed environment variables exposed to every agent run.
+    // Loaded into process.env on backend startup and kept in sync on every
+    // upsert/delete, so the Bash tool sees them without any per-session
+    // wiring. is_secret=1 controls UI masking; not a security boundary.
+    sql: `
+      CREATE TABLE IF NOT EXISTS user_env (
+        key         TEXT PRIMARY KEY,
+        value       TEXT NOT NULL,
+        description TEXT,
+        is_secret   INTEGER NOT NULL DEFAULT 1,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
