@@ -24,11 +24,6 @@ function probe(bin: string, arg = '--version'): Promise<CliStatus> {
   });
 }
 
-/** @deprecated use checkAgentClis() */
-export async function checkCli(): Promise<CliStatus> {
-  return probe('claude');
-}
-
 export async function checkAgentClis(): Promise<{
   claude: CliStatus;
   codex: CliStatus;

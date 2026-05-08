@@ -3,6 +3,30 @@ import { X } from 'lucide-react';
 import type { HealthResponse } from '@pinloom/shared';
 import { api } from '../api/client.js';
 
+type CliStatus = HealthResponse['agents']['claude'];
+
+function CliRow({ label, status }: { label: string; status: CliStatus }) {
+  return (
+    <div className="flex items-baseline justify-between py-1.5">
+      <span className="text-sm">{label}</span>
+      <span className="text-sm flex items-baseline gap-2">
+        <span
+          className={
+            status.installed ? 'text-emerald-300' : 'text-red-400'
+          }
+        >
+          {status.installed ? 'installed' : 'not found'}
+        </span>
+        {status.version && (
+          <span className="text-[var(--color-ink-muted)] text-xs">
+            {status.version}
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,26 +56,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <section>
           <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-            Claude Code CLI
+            Agent CLIs
           </h3>
           {error && <p className="text-red-400 text-sm">{error}</p>}
+          {!error && !health && (
+            <p className="text-[var(--color-ink-muted)] text-sm">Checking…</p>
+          )}
           {health && (
-            <div className="text-sm">
-              <p>
-                Installed:{' '}
-                <span
-                  className={
-                    health.cli.installed ? 'text-emerald-300' : 'text-red-400'
-                  }
-                >
-                  {String(health.cli.installed)}
-                </span>
-              </p>
-              {health.cli.version && (
-                <p className="text-[var(--color-ink-muted)]">
-                  Version: {health.cli.version}
-                </p>
-              )}
+            <div className="divide-y divide-[var(--color-border)]">
+              <CliRow label="Claude Code" status={health.agents.claude} />
+              <CliRow label="Codex" status={health.agents.codex} />
             </div>
           )}
         </section>
