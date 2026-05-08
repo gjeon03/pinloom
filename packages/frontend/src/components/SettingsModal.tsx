@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type CSSProperties, useEffect, useState } from 'react';
 import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { HealthResponse, UserEnvVar } from '@pinloom/shared';
 import { api } from '../api/client.js';
@@ -195,6 +195,13 @@ function EnvVarsSection() {
       )}
 
       {draft && (
+        // The autocomplete="off" + 1password/lastpass opt-out attrs below
+        // exist so browsers don't fire their "save password?" prompt when
+        // the user is just typing an API token into a local-only tool.
+        // We keep the value field as type="text" (not type="password") for
+        // the same reason — Chrome treats password inputs as credential
+        // material no matter what autocomplete says — and mask visually via
+        // CSS instead.
         <div className="mt-3 border border-[var(--color-border)] rounded p-3 bg-[var(--color-surface-3)] space-y-2">
           <div>
             <label className="text-xs text-[var(--color-ink-muted)] block mb-1">
@@ -208,6 +215,9 @@ function EnvVarsSection() {
                 setDraft({ ...draft, key: e.target.value.trim() })
               }
               placeholder="ASANA_TOKEN"
+              autoComplete="off"
+              data-1p-ignore="true"
+              data-lpignore="true"
               className="w-full px-2 py-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-mono disabled:opacity-60"
             />
           </div>
@@ -222,10 +232,19 @@ function EnvVarsSection() {
             </label>
             <input
               autoFocus={draft.editingExisting}
-              type={draft.isSecret ? 'password' : 'text'}
+              type="text"
               value={draft.value}
               onChange={(e) => setDraft({ ...draft, value: e.target.value })}
               placeholder="paste token here"
+              autoComplete="off"
+              spellCheck={false}
+              data-1p-ignore="true"
+              data-lpignore="true"
+              style={
+                draft.isSecret
+                  ? ({ WebkitTextSecurity: 'disc' } as CSSProperties)
+                  : undefined
+              }
               className="w-full px-2 py-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-mono"
             />
           </div>
@@ -239,6 +258,7 @@ function EnvVarsSection() {
                 setDraft({ ...draft, description: e.target.value })
               }
               placeholder="e.g. Asana personal access token"
+              autoComplete="off"
               className="w-full px-2 py-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm"
             />
           </div>
