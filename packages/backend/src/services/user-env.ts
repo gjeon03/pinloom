@@ -8,6 +8,7 @@
 
 import type { UserEnvVar, UserEnvVarWithValue } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
+import { reloadSecretValues } from './redact.js';
 
 interface UserEnvRow {
   key: string;
@@ -95,6 +96,9 @@ export function upsertUserEnvVar(args: UpsertArgs): UserEnvVar {
   // Keep the live process env in sync so the change takes effect on the
   // next agent spawn without a backend restart.
   process.env[args.key] = args.value;
+  // Refresh the redaction list so the new (or updated) secret value is
+  // masked in any tool output that gets broadcast from this point on.
+  reloadSecretValues();
 
   const row = db
     .prepare('SELECT * FROM user_env WHERE key = ?')
@@ -107,6 +111,7 @@ export function deleteUserEnvVar(key: string): boolean {
   const result = db.prepare('DELETE FROM user_env WHERE key = ?').run(key);
   if (result.changes > 0) {
     delete process.env[key];
+    reloadSecretValues();
     return true;
   }
   return false;
@@ -123,4 +128,5 @@ export function loadUserEnvIntoProcess(): void {
   for (const row of rows) {
     process.env[row.key] = row.value;
   }
+  reloadSecretValues();
 }

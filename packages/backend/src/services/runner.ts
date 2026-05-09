@@ -12,6 +12,7 @@ import {
   enqueueMessage,
   listSessionsWithQueuedItems,
 } from './message-queue.js';
+import { redactSecrets } from './redact.js';
 import type { ImageInput, ImageMediaType } from './runner-types.js';
 
 export type { ImageInput, ImageMediaType } from './runner-types.js';
@@ -809,13 +810,17 @@ async function runAttempt(
           break;
         case 'text_delta': {
           const id = ensureStream();
-          streamContent += ev.text;
+          // Redact any user-marked secret value before it reaches the chat
+          // row OR the WS broadcast — the agent should never echo these,
+          // but if it does (printenv, debug logs, etc.), we strip them.
+          const safeText = redactSecrets(ev.text);
+          streamContent += safeText;
           producedAnyContent = true;
           broadcast(`session:${ctx.id}`, {
             type: 'stream_chunk',
             sessionId: ctx.id,
             messageId: id,
-            chunk: ev.text,
+            chunk: safeText,
           });
           break;
         }
@@ -829,12 +834,12 @@ async function runAttempt(
           broadcast(`session:${ctx.id}`, {
             type: 'thinking_chunk',
             sessionId: ctx.id,
-            chunk: ev.text,
+            chunk: redactSecrets(ev.text),
           });
           break;
         case 'tool_use': {
           closeStream();
-          const summary = ev.summary ?? ev.name;
+          const summary = redactSecrets(ev.summary ?? ev.name);
           persistMessage({
             sessionId: ctx.id,
             planItemId: active.currentPlanItemId,
@@ -852,7 +857,10 @@ async function runAttempt(
           break;
         }
         case 'tool_result': {
-          const text = ev.text.endsWith('\n') ? ev.text : `${ev.text}\n`;
+          const redactedText = redactSecrets(ev.text);
+          const text = redactedText.endsWith('\n')
+            ? redactedText
+            : `${redactedText}\n`;
           broadcast(`session:${ctx.id}`, {
             type: 'run_log',
             sessionId: ctx.id,
@@ -904,13 +912,14 @@ async function runAttempt(
           break;
         case 'final_text_fallback': {
           const id = ensureStream();
-          streamContent += ev.text;
+          const safeText = redactSecrets(ev.text);
+          streamContent += safeText;
           producedAnyContent = true;
           broadcast(`session:${ctx.id}`, {
             type: 'stream_chunk',
             sessionId: ctx.id,
             messageId: id,
-            chunk: ev.text,
+            chunk: safeText,
           });
           break;
         }
