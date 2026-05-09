@@ -263,7 +263,7 @@ class CodexAdapterImpl implements AgentAdapter {
               const msg = item as CodexAgentMessage;
               if (typeof msg.text === 'string' && msg.text.length > 0) {
                 yield { type: 'text_delta', text: msg.text };
-                yield { type: 'message_stop' };
+                yield { type: 'text_block_end' };
               }
               continue;
             }

@@ -816,23 +816,24 @@ async function runAttempt(
             stream: ev.stream,
             chunk: text,
           });
-          // Tool result is back, the agent is about to think about its next
-          // step — a natural break point to splice in any queued mid-task
-          // messages. Critical for tool-heavy turns where the agent never
-          // streams free text (e.g., "analyze the project" runs 10+ Reads
-          // in a row), so message_stop alone wouldn't trigger a drain.
+          // Tool result is back, the agent is about to think about its
+          // next step — a natural break point to splice in any queued
+          // mid-task messages. Critical for tool-heavy turns where the
+          // agent never streams free text (e.g., "analyze the project"
+          // runs 10+ Reads in a row), so text_block_end alone wouldn't
+          // trigger a drain.
           tryDrainQueue(ctx.id);
           break;
         }
-        case 'message_stop': {
-          // Only treat this as a "natural break" if we just closed a real
-          // assistant text stream. The Claude adapter also yields
-          // message_stop right before each tool_use block (so we close any
-          // in-flight text first); draining there interrupts the agent
-          // before the user has seen ANY output, which makes the first
-          // turn's work disappear from chat. Limit drains to post-text
-          // breaks — same shape as Claude Code's "agent said something,
-          // now is a fine time to splice in".
+        case 'text_block_end': {
+          // Only treat this as a "natural break" if we just closed a
+          // real assistant text stream. The Claude adapter also yields
+          // text_block_end right before each tool_use block (so we close
+          // any in-flight text first); draining there interrupts the
+          // agent before the user has seen ANY output, which makes the
+          // first turn's work disappear from chat. Limit drains to
+          // post-text breaks — same shape as Claude Code's "agent said
+          // something, now is a fine time to splice in".
           const justClosedText = streamMsgId !== null;
           closeStream();
           if (justClosedText) {
