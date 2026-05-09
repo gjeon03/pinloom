@@ -3,6 +3,7 @@ import { ChevronDown, Crown, ExternalLink, Plus, X } from 'lucide-react';
 import type { AgentKind, Session, Team } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from './AgentBadge.js';
+import { Tooltip } from './Tooltip.js';
 
 type TeamRole =
   | { kind: 'orchestrator'; teamName: string }
@@ -433,20 +434,18 @@ function TeamRoleBadge({ role }: { role: TeamRole | null }) {
   if (!role) return null;
   if (role.kind === 'orchestrator') {
     return (
-      <span
-        title={`Orchestrator of team "${role.teamName}"`}
-        className="inline-flex items-center text-[var(--color-accent)]"
-      >
-        <Crown size={12} />
-      </span>
+      <Tooltip label={`Orchestrator of team "${role.teamName}"`} side="bottom">
+        <span className="inline-flex items-center text-[var(--color-accent)]">
+          <Crown size={12} />
+        </span>
+      </Tooltip>
     );
   }
   return (
-    <span
-      title={`@${role.alias} in team "${role.teamName}"`}
-      className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-[1px] text-[10px] font-mono text-[var(--color-ink-muted)]"
-    >
-      @{role.alias}
-    </span>
+    <Tooltip label={`@${role.alias} in team "${role.teamName}"`} side="bottom">
+      <span className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-[1px] text-[10px] font-mono text-[var(--color-ink-muted)]">
+        @{role.alias}
+      </span>
+    </Tooltip>
   );
 }
