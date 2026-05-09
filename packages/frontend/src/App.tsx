@@ -4,6 +4,7 @@ import { NotificationCenter } from './components/NotificationCenter.js';
 import { ProjectPage } from './pages/ProjectPage.js';
 import { PinsPage } from './pages/PinsPage.js';
 import { SessionPage } from './pages/SessionPage.js';
+import { TeamsPage } from './pages/TeamsPage.js';
 import { WikiPage } from './pages/WikiPage.js';
 import { WikiDetailPage } from './pages/WikiDetailPage.js';
 
@@ -25,6 +26,14 @@ export function App() {
                   <div className="p-6 text-sm">Loading…</div>
                 )
               }
+            </AppShell>
+          }
+        />
+        <Route
+          path="/teams"
+          element={
+            <AppShell>
+              {() => <TeamsPage />}
             </AppShell>
           }
         />

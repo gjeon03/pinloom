@@ -147,6 +147,17 @@ export async function sessionRoutes(app: FastifyInstance) {
     },
   );
 
+  // Cross-project session list. Used by the Teams UI (and PR2's MCP
+  // server) to resolve session metadata without iterating projects.
+  app.get('/api/sessions', async () => {
+    const rows = db
+      .prepare(
+        'SELECT * FROM sessions ORDER BY project_id ASC, order_index ASC, created_at ASC',
+      )
+      .all() as SessionRow[];
+    return rows.map(toSession);
+  });
+
   app.post<{
     Params: { projectId: string };
     Body: {

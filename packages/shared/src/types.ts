@@ -102,6 +102,31 @@ export interface QueueItem {
   createdAt: string;
 }
 
+// A team groups one orchestrator session with N worker sessions. The
+// orchestrator addresses workers by `alias` via the pinloom MCP server.
+// Workers keep their own systemPrompt / agent / model and remain usable
+// as standalone sessions — team membership is purely additive.
+export interface TeamMember {
+  sessionId: string;
+  alias: string;
+  createdAt: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  /**
+   * The session whose agent orchestrates this team. Required: a team is
+   * unusable without an orchestrator since the MCP server attributes
+   * dispatch calls to it. Deleting the orchestrator session cascades
+   * the team away.
+   */
+  orchestratorSessionId: string;
+  members: TeamMember[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface HealthResponse {
   status: 'ok';
   agents: {

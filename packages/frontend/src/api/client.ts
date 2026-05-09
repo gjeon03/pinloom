@@ -8,6 +8,8 @@ import type {
   ProjectGroup,
   QueueItem,
   Session,
+  Team,
+  TeamMember,
   UserEnvVar,
   UserEnvVarWithValue,
 } from '@pinloom/shared';
@@ -308,6 +310,49 @@ export const api = {
     request<{ ok: true }>(`/api/settings/env/${encodeURIComponent(key)}`, {
       method: 'DELETE',
     }),
+
+  // Cross-project session list — used by Teams UI to populate pickers
+  // without an N+1 fetch per project.
+  listAllSessions: () => request<Session[]>('/api/sessions'),
+
+  // Teams — orchestrator + worker grouping. PR1 ships CRUD only;
+  // dispatch primitives (team_send / team_read / …) land in PR2.
+  listTeams: () => request<Team[]>('/api/teams'),
+  getTeam: (id: string) => request<Team>(`/api/teams/${id}`),
+  createTeam: (body: { name: string; orchestratorSessionId: string }) =>
+    request<Team>('/api/teams', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateTeam: (
+    id: string,
+    body: { name?: string; orchestratorSessionId?: string },
+  ) =>
+    request<Team>(`/api/teams/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteTeam: (id: string) =>
+    request<{ ok: true }>(`/api/teams/${id}`, { method: 'DELETE' }),
+  addTeamMember: (id: string, body: { sessionId: string; alias: string }) =>
+    request<TeamMember>(`/api/teams/${id}/members`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateTeamMember: (
+    id: string,
+    sessionId: string,
+    body: { alias: string },
+  ) =>
+    request<TeamMember>(
+      `/api/teams/${id}/members/${encodeURIComponent(sessionId)}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+    ),
+  removeTeamMember: (id: string, sessionId: string) =>
+    request<{ ok: true }>(
+      `/api/teams/${id}/members/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' },
+    ),
 };
 
 export interface WikiImportSummary {
