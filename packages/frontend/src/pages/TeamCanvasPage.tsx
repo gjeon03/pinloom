@@ -313,7 +313,7 @@ export function TeamCanvasPage({
   }
 
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col min-h-0 h-full">
       {showHeader && (
         <div className="flex items-center gap-3 pl-6 pr-16 py-4 border-b border-[var(--color-border)]">
           <Link
@@ -329,7 +329,7 @@ export function TeamCanvasPage({
           </span>
         </div>
       )}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative min-h-0">
         <ReactFlow
           nodes={nodes}
           edges={edges}
