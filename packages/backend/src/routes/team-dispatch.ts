@@ -25,6 +25,10 @@ import {
 } from '../services/message-queue.js';
 import { isAiRunning, tryDrainQueue, waitForIdle } from '../services/runner.js';
 import { resolveTeamByToken } from '../services/team-tokens.js';
+import {
+  emitDispatchEvent,
+  listRecentEvents,
+} from '../services/team-events.js';
 
 interface SessionRow {
   id: string;
@@ -79,6 +83,21 @@ function memberStatus(sessionId: string): DispatchMember['status'] {
 
 export async function teamDispatchRoutes(app: FastifyInstance) {
   const db = getDb();
+
+  // Backfill endpoint for the descriptive canvas: returns the in-memory
+  // ring buffer of recent dispatch events for this team. Open to the
+  // browser (no MCP token required) since the canvas is just observing
+  // already-public team state.
+  app.get<{
+    Params: { teamId: string };
+    Querystring: { limit?: string };
+  }>('/api/teams/:teamId/dispatch/events', async (req) => {
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit ?? '100', 10) || 100, 1),
+      500,
+    );
+    return listRecentEvents(req.params.teamId, limit);
+  });
 
   app.get<{ Params: { teamId: string } }>(
     '/api/teams/:teamId/dispatch/list',
@@ -146,6 +165,14 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       // prompt actually reaches its agent instead of sitting in the queue
       // until the worker happens to receive its next user message.
       tryDrainQueue(member.sessionId);
+      emitDispatchEvent({
+        type: 'dispatch_send',
+        teamId: req.params.teamId,
+        alias: member.alias,
+        sessionId: member.sessionId,
+        previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+        at: new Date().toISOString(),
+      });
       return { ok: true, queueItemId: item.id };
     } catch (err) {
       if (err instanceof SessionNotFoundError) {

@@ -13,6 +13,7 @@ import type {
 import { listUserEnvVars } from './user-env.js';
 import { getTeamByOrchestratorSessionId } from './teams.js';
 import { mintTeamToken } from './team-tokens.js';
+import { emitDispatchEvent } from './team-events.js';
 import {
   broadcastQueueState,
   drainQueue,
@@ -475,6 +476,30 @@ export function isAiRunning(sessionId: string): boolean {
 // check and their subscribe.
 const idleListeners = new Map<string, Set<() => void>>();
 
+// Emits a `worker_status` dispatch event if this session is a worker in
+// some team. Drives the descriptive canvas's node pulse (PR3). Lookup
+// is one SQLite hit; safe to call frequently.
+function emitWorkerStatusIfMember(sessionId: string): void {
+  const row = getDb()
+    .prepare(
+      `SELECT t.id AS team_id, m.alias AS alias
+       FROM team_members m
+       JOIN teams t ON t.id = m.team_id
+       WHERE m.session_id = ?`,
+    )
+    .get(sessionId) as { team_id: string; alias: string } | undefined;
+  if (!row) return;
+  emitDispatchEvent({
+    type: 'worker_status',
+    teamId: row.team_id,
+    alias: row.alias,
+    sessionId,
+    running: isAiRunning(sessionId),
+    queued: listQueueItems(sessionId).length,
+    at: new Date().toISOString(),
+  });
+}
+
 function notifySessionIdle(sessionId: string): void {
   const set = idleListeners.get(sessionId);
   if (!set) return;
@@ -902,6 +927,7 @@ async function runAttempt(
     inFlight: true,
   };
   activeRuns.set(ctx.id, active);
+  emitWorkerStatusIfMember(ctx.id);
 
   let streamMsgId: string | null = null;
   let streamContent = '';
@@ -1096,6 +1122,7 @@ async function runAttempt(
     // drain now while the session is verifiably idle.
     tryDrainQueue(ctx.id);
     notifySessionIdle(ctx.id);
+    emitWorkerStatusIfMember(ctx.id);
   }
 
   if (abortController.signal.aborted) {

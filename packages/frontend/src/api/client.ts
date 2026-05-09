@@ -9,6 +9,7 @@ import type {
   QueueItem,
   Session,
   Team,
+  TeamDispatchEvent,
   TeamMember,
   UserEnvVar,
   UserEnvVarWithValue,
@@ -352,6 +353,14 @@ export const api = {
     request<{ ok: true }>(
       `/api/teams/${id}/members/${encodeURIComponent(sessionId)}`,
       { method: 'DELETE' },
+    ),
+
+  // Backfill for the descriptive team-dispatch canvas. Returns recent
+  // events from the in-memory ring buffer; subscribe to the live stream
+  // via the `team:${teamId}` WS channel to get incremental updates.
+  listTeamDispatchEvents: (teamId: string, limit = 100) =>
+    request<TeamDispatchEvent[]>(
+      `/api/teams/${teamId}/dispatch/events?limit=${limit}`,
     ),
 };
 
