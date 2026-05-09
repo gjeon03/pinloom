@@ -434,7 +434,7 @@ function TeamRoleBadge({ role }: { role: TeamRole | null }) {
   if (!role) return null;
   if (role.kind === 'orchestrator') {
     return (
-      <Tooltip label={`Orchestrator of team "${role.teamName}"`} side="bottom">
+      <Tooltip label={`Orchestrator of team "${role.teamName}"`} side="top">
         <span className="inline-flex items-center text-[var(--color-accent)]">
           <Crown size={12} />
         </span>
@@ -442,7 +442,7 @@ function TeamRoleBadge({ role }: { role: TeamRole | null }) {
     );
   }
   return (
-    <Tooltip label={`@${role.alias} in team "${role.teamName}"`} side="bottom">
+    <Tooltip label={`@${role.alias} in team "${role.teamName}"`} side="top">
       <span className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-[1px] text-[10px] font-mono text-[var(--color-ink-muted)]">
         @{role.alias}
       </span>
