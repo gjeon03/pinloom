@@ -298,7 +298,7 @@ export function TeamCanvasPage() {
 
   return (
     <div className="flex-1 flex flex-col">
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-[var(--color-border)]">
+      <div className="flex items-center gap-3 pl-6 pr-16 py-3 border-b border-[var(--color-border)]">
         <Link
           to="/teams"
           className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
