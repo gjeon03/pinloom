@@ -1,4 +1,11 @@
-import { useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
 
 type Side = 'top' | 'bottom' | 'left' | 'right';
 
@@ -10,64 +17,75 @@ interface Props {
 
 const VIEWPORT_MARGIN = 8;
 
-const POSITION: Record<Side, CSSProperties> = {
-  top: { bottom: '100%', left: '50%', marginBottom: '6px' },
-  bottom: { top: '100%', left: '50%', marginTop: '6px' },
-  left: { right: '100%', top: '50%', marginRight: '6px' },
-  right: { left: '100%', top: '50%', marginLeft: '6px' },
-};
-
-function transformFor(side: Side, dx: number, dy: number): string {
-  if (side === 'top' || side === 'bottom') {
-    return `translate(calc(-50% + ${dx}px), ${dy}px)`;
-  }
-  return `translate(${dx}px, calc(-50% + ${dy}px))`;
-}
-
 export function Tooltip({ label, side = 'bottom', children }: Props) {
+  const anchorRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
-  const [shift, setShift] = useState({ x: 0, y: 0 });
-  // `visible` is true when the user is actively hovering / focusing.
+  // `visible` flips on hover/focus.
   const [visible, setVisible] = useState(false);
   // `suppressed` hides the tooltip after a click until the user re-enters
   // the element. Without this, hovering after pressing the button would
-  // keep the tooltip glued open even though the user already acted on it.
+  // keep the tooltip glued open even though the user already acted.
   const [suppressed, setSuppressed] = useState(false);
+  // Computed page-space coords for the tooltip body. Position-fixed lets
+  // us escape any ancestor `overflow: hidden|auto|scroll` (e.g. the tab
+  // strip) which would otherwise clip the body to the parent's box.
+  const [coords, setCoords] = useState<CSSProperties | null>(null);
 
   function recompute() {
-    const el = tooltipRef.current;
-    if (!el) return;
-    const previous = el.style.transform;
-    el.style.transform = transformFor(side, 0, 0);
-    const rect = el.getBoundingClientRect();
-    el.style.transform = previous;
-
-    let dx = 0;
-    let dy = 0;
-    if (rect.right > window.innerWidth - VIEWPORT_MARGIN) {
-      dx = window.innerWidth - VIEWPORT_MARGIN - rect.right;
-    } else if (rect.left < VIEWPORT_MARGIN) {
-      dx = VIEWPORT_MARGIN - rect.left;
+    const anchor = anchorRef.current;
+    const tip = tooltipRef.current;
+    if (!anchor || !tip) return;
+    const aRect = anchor.getBoundingClientRect();
+    const tRect = tip.getBoundingClientRect();
+    const gap = 6;
+    let top = 0;
+    let left = 0;
+    if (side === 'top') {
+      top = aRect.top - tRect.height - gap;
+      left = aRect.left + aRect.width / 2 - tRect.width / 2;
+    } else if (side === 'bottom') {
+      top = aRect.bottom + gap;
+      left = aRect.left + aRect.width / 2 - tRect.width / 2;
+    } else if (side === 'left') {
+      top = aRect.top + aRect.height / 2 - tRect.height / 2;
+      left = aRect.left - tRect.width - gap;
+    } else {
+      top = aRect.top + aRect.height / 2 - tRect.height / 2;
+      left = aRect.right + gap;
     }
-    if (rect.bottom > window.innerHeight - VIEWPORT_MARGIN) {
-      dy = window.innerHeight - VIEWPORT_MARGIN - rect.bottom;
-    } else if (rect.top < VIEWPORT_MARGIN) {
-      dy = VIEWPORT_MARGIN - rect.top;
-    }
-    if (dx !== shift.x || dy !== shift.y) {
-      setShift({ x: dx, y: dy });
-    }
+    // Clamp inside viewport
+    const maxLeft = window.innerWidth - tRect.width - VIEWPORT_MARGIN;
+    const maxTop = window.innerHeight - tRect.height - VIEWPORT_MARGIN;
+    left = Math.min(Math.max(left, VIEWPORT_MARGIN), Math.max(maxLeft, VIEWPORT_MARGIN));
+    top = Math.min(Math.max(top, VIEWPORT_MARGIN), Math.max(maxTop, VIEWPORT_MARGIN));
+    setCoords({ position: 'fixed', top, left });
   }
+
+  // Reposition on every visibility flip and on viewport changes while open.
+  useLayoutEffect(() => {
+    if (!visible || suppressed) return;
+    recompute();
+    function onScrollOrResize() {
+      recompute();
+    }
+    window.addEventListener('resize', onScrollOrResize);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    return () => {
+      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, suppressed, side, label]);
 
   const showing = visible && !suppressed;
 
   return (
     <span
+      ref={anchorRef}
       className="relative inline-flex"
       onMouseEnter={() => {
         setSuppressed(false);
         setVisible(true);
-        recompute();
       }}
       onMouseLeave={() => {
         setVisible(false);
@@ -75,26 +93,23 @@ export function Tooltip({ label, side = 'bottom', children }: Props) {
       }}
       onMouseDown={() => setSuppressed(true)}
       onFocus={() => {
-        if (!suppressed) {
-          setVisible(true);
-          recompute();
-        }
+        if (!suppressed) setVisible(true);
       }}
       onBlur={() => setVisible(false)}
     >
       {children}
-      <span
-        ref={tooltipRef}
-        role="tooltip"
-        style={{
-          ...POSITION[side],
-          transform: transformFor(side, shift.x, shift.y),
-          opacity: showing ? 1 : 0,
-        }}
-        className="pointer-events-none absolute z-50 whitespace-nowrap rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[11px] text-[var(--color-ink)] shadow-lg transition-opacity duration-150"
-      >
-        {label}
-      </span>
+      {showing &&
+        createPortal(
+          <span
+            ref={tooltipRef}
+            role="tooltip"
+            style={coords ?? { position: 'fixed', top: -9999, left: -9999 }}
+            className="pointer-events-none z-[100] whitespace-nowrap rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[11px] text-[var(--color-ink)] shadow-lg"
+          >
+            {label}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 }
