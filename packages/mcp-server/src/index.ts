@@ -74,7 +74,7 @@ function teamUrl(suffix: string): string {
 interface MemberStatus {
   alias: string;
   agent: 'claude' | 'codex';
-  model: string | null;
+  lastModel: string | null;
   projectName: string | null;
   status: 'idle' | 'running' | 'queued' | 'mixed';
   queued: number;
@@ -113,7 +113,7 @@ server.registerTool(
     }
     const lines = members.map(
       (m) =>
-        `@${m.alias}\t${m.agent}${m.model ? `:${m.model}` : ''}\tproject=${
+        `@${m.alias}\t${m.agent}${m.lastModel ? `:${m.lastModel}` : ''}\tproject=${
           m.projectName ?? '?'
         }\tstatus=${m.status}\tqueued=${m.queued}`,
     );

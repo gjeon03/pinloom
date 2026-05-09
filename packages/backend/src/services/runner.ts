@@ -298,25 +298,17 @@ function buildTeamContext(sessionId: string): string {
   const workerLines: string[] = [];
   for (const m of team.members) {
     const session = db
-      .prepare(
-        'SELECT agent, model, project_id, title FROM sessions WHERE id = ?',
-      )
+      .prepare('SELECT agent, project_id FROM sessions WHERE id = ?')
       .get(m.sessionId) as
-      | {
-          agent: 'claude' | 'codex' | null;
-          model: string | null;
-          project_id: string;
-          title: string | null;
-        }
+      | { agent: 'claude' | 'codex' | null; project_id: string }
       | undefined;
     if (!session) continue;
     const project = db
       .prepare('SELECT name FROM projects WHERE id = ?')
       .get(session.project_id) as { name: string } | undefined;
     const agent = session.agent ?? 'claude';
-    const modelPart = session.model ? `:${session.model}` : '';
     const projectPart = project ? `, project ${project.name}` : '';
-    workerLines.push(`- **@${m.alias}** (${agent}${modelPart}${projectPart})`);
+    workerLines.push(`- **@${m.alias}** (${agent}${projectPart})`);
   }
   return [
     '',

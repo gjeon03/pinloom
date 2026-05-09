@@ -56,7 +56,10 @@ function authorize(req: FastifyRequest, reply: FastifyReply): string | null {
 interface DispatchMember {
   alias: string;
   agent: 'claude' | 'codex';
-  model: string | null;
+  /** Last model the worker actually responded with, if any. We surface
+   *  the most recent value because pinloom's `model` is per-message
+   *  (each turn can use a different one), not a session-level default. */
+  lastModel: string | null;
   projectName: string | null;
   status: 'idle' | 'running' | 'queued' | 'mixed';
   queued: number;
@@ -87,19 +90,24 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       for (const m of team.members) {
         const session = db
           .prepare(
-            'SELECT id, project_id, agent, model FROM sessions WHERE id = ?',
+            'SELECT id, project_id, agent FROM sessions WHERE id = ?',
           )
-          .get(m.sessionId) as
-          | (SessionRow & { model: string | null })
-          | undefined;
+          .get(m.sessionId) as SessionRow | undefined;
         if (!session) continue;
         const project = db
           .prepare('SELECT name FROM projects WHERE id = ?')
           .get(session.project_id) as { name: string } | undefined;
+        const lastModelRow = db
+          .prepare(
+            `SELECT model FROM messages
+             WHERE session_id = ? AND model IS NOT NULL
+             ORDER BY created_at DESC LIMIT 1`,
+          )
+          .get(m.sessionId) as { model: string | null } | undefined;
         result.push({
           alias: m.alias,
           agent: session.agent ?? 'claude',
-          model: session.model ?? null,
+          lastModel: lastModelRow?.model ?? null,
           projectName: project?.name ?? null,
           status: memberStatus(m.sessionId),
           queued: listQueueItems(m.sessionId).length,
