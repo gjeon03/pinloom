@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ExternalLink, Plus, X } from 'lucide-react';
+import { ChevronDown, Crown, ExternalLink, Plus, X } from 'lucide-react';
 import type { AgentKind, Session, Team } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from './AgentBadge.js';
@@ -425,18 +425,19 @@ export function SessionTabs({
   );
 }
 
-// Pill that surfaces a session's role inside a team. Orchestrator gets a
-// neutral "orchestrator" pill; workers get "@alias". Tooltip carries the
-// team name so the user knows which crew the session belongs to.
+// Surfaces a session's role inside a team. Orchestrator gets a crown
+// icon; workers get a "@alias" pill. The native title attribute carries
+// the team name so the user can hover for full context without the
+// badge eating tab width.
 function TeamRoleBadge({ role }: { role: TeamRole | null }) {
   if (!role) return null;
   if (role.kind === 'orchestrator') {
     return (
       <span
         title={`Orchestrator of team "${role.teamName}"`}
-        className="rounded border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-1 py-[1px] text-[10px] font-medium text-[var(--color-accent)] uppercase tracking-wide"
+        className="inline-flex items-center text-[var(--color-accent)]"
       >
-        orch
+        <Crown size={12} />
       </span>
     );
   }
