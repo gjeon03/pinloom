@@ -153,20 +153,24 @@ server.registerTool(
   'team_read',
   {
     description:
-      "Read a worker's recent messages. Returns assistant + user messages in order. Use sinceMessageId to paginate; pass the last id you saw to get only newer messages.",
+      "Read messages from a worker. Default: most recent N messages (chronological order). Pass sinceMessageId to instead get messages newer than that id (forward pagination). Returns user + assistant messages only.",
     inputSchema: {
       alias: z.string().describe('Worker alias (without leading @)'),
       sinceMessageId: z
         .string()
         .optional()
-        .describe('Return only messages newer than this id'),
+        .describe(
+          'If set, return only messages strictly newer than this id (chronological forward).',
+        ),
       limit: z
         .number()
         .int()
         .min(1)
         .max(200)
         .optional()
-        .describe('Max number of messages to return (default 20)'),
+        .describe(
+          'Max number of messages to return (default 20). When sinceMessageId is unset, this is "latest N".',
+        ),
     },
   },
   async (args) => {
@@ -221,16 +225,18 @@ server.registerTool(
   'team_wait',
   {
     description:
-      "Block until a worker becomes idle (i.e. its current run finishes and the queue drains). Returns when idle or when timeoutMs elapses. Default timeout 60s, hard-capped server-side.",
+      "Block until a worker becomes idle (i.e. its current run finishes and its queue drains). Returns immediately if already idle. Default and max wait is 5 minutes (300000ms) — long enough for typical reviews/investigations without forcing a polling loop. The server returns early the moment the worker idles.",
     inputSchema: {
       alias: z.string().describe('Worker alias (without leading @)'),
       timeoutMs: z
         .number()
         .int()
         .min(100)
-        .max(60000)
+        .max(300000)
         .optional()
-        .describe('Max wait in ms (default 60000, capped at 60000)'),
+        .describe(
+          'Max wait in ms (default 300000, capped at 300000). The wait returns sooner the moment the worker idles.',
+        ),
     },
   },
   async (args) => {

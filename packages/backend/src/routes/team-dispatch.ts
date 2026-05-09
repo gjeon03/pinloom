@@ -33,7 +33,10 @@ interface SessionRow {
 }
 
 // Hard cap so a buggy MCP client can't pin a connection open for hours.
-const MAX_WAIT_MS = 60_000;
+// 5 minutes covers the common review/investigation case without forcing
+// the orchestrator into a polling loop. AbortSignal still releases the
+// wait the moment the client disconnects.
+const MAX_WAIT_MS = 5 * 60_000;
 
 function authorize(req: FastifyRequest, reply: FastifyReply): string | null {
   const presented = req.headers['x-pinloom-team-token'];
@@ -176,15 +179,18 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
       ? Math.min(Math.max(Math.floor(requestedLimit), 1), 200)
       : 20;
-    let baseSql =
-      "SELECT id, role, content, created_at FROM messages WHERE session_id = ? AND role IN ('user','assistant')";
-    const sqlArgs: Array<string | number> = [member.sessionId];
+    type MessageRow = {
+      id: string;
+      role: string;
+      content: string;
+      created_at: string;
+    };
+    let rows: MessageRow[];
     if (req.query.sinceMessageId) {
-      // "messages newer than X" is implemented by created_at because
-      // the messages table uses ISO timestamps and string-collation
-      // ordering matches lexicographic ISO sort. Scope the lookup to
-      // the same session so a confused caller can't probe across
-      // sessions by trying random ids.
+      // Chronological forward pagination: "give me everything after X".
+      // ISO created_at + lexicographic compare is enough. Scope the
+      // sinceRow lookup to the same session so a caller can't probe ids
+      // across other sessions.
       const sinceRow = db
         .prepare(
           'SELECT created_at FROM messages WHERE id = ? AND session_id = ?',
@@ -198,17 +204,30 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
           error: `sinceMessageId not found in worker @${alias}'s history`,
         };
       }
-      baseSql += ' AND created_at > ?';
-      sqlArgs.push(sinceRow.created_at);
+      rows = db
+        .prepare(
+          `SELECT id, role, content, created_at FROM messages
+           WHERE session_id = ? AND role IN ('user','assistant')
+             AND created_at > ?
+           ORDER BY created_at ASC, id ASC
+           LIMIT ?`,
+        )
+        .all(member.sessionId, sinceRow.created_at, limit) as MessageRow[];
+    } else {
+      // Default: "latest N messages". The 99% case for an orchestrator
+      // is "what did the worker just say" — chronological-forward with
+      // no anchor was returning persona-setup turns instead. Fetch
+      // newest-first then reverse so the response stays chronological.
+      const newest = db
+        .prepare(
+          `SELECT id, role, content, created_at FROM messages
+           WHERE session_id = ? AND role IN ('user','assistant')
+           ORDER BY created_at DESC, id DESC
+           LIMIT ?`,
+        )
+        .all(member.sessionId, limit) as MessageRow[];
+      rows = newest.reverse();
     }
-    baseSql += ' ORDER BY created_at ASC, id ASC LIMIT ?';
-    sqlArgs.push(limit);
-    const rows = db.prepare(baseSql).all(...sqlArgs) as Array<{
-      id: string;
-      role: string;
-      content: string;
-      created_at: string;
-    }>;
     return rows.map((r) => ({
       id: r.id,
       role: r.role,
@@ -253,7 +272,10 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       reply.code(404);
       return { error: `no worker with alias "${alias}" in this team` };
     }
-    const requested = parseInt(req.query.timeoutMs ?? '60000', 10) || 60_000;
+    // Default to the upper cap so a caller that doesn't care about the
+    // exact ceiling gets the longest sensible wait without explicit
+    // tuning. AbortSignal still ends it the moment the client disconnects.
+    const requested = parseInt(req.query.timeoutMs ?? String(MAX_WAIT_MS), 10) || MAX_WAIT_MS;
     const timeoutMs = Math.min(Math.max(requested, 100), MAX_WAIT_MS);
 
     // Tie the wait to the underlying socket so a disconnected MCP shim

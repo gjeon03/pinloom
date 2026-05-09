@@ -326,7 +326,7 @@ function buildTeamContext(sessionId: string): string {
     '- `team_send(alias, text)` — enqueue a prompt to a worker (returns immediately)',
     '- `team_read(alias, sinceMessageId?)` — read a worker\'s recent reply',
     '- `team_status(alias)` — check if a worker is idle/running',
-    '- `team_wait(alias, timeoutMs?)` — block until a worker is idle (max 60s)',
+    '- `team_wait(alias, timeoutMs?)` — block until a worker is idle (returns the moment it idles; max 5min)',
     '',
     'Typical pattern: `team_send` → `team_wait` → `team_read` (with the last',
     'message id you saw, to get only the new reply). Workers don\'t see each',
