@@ -39,14 +39,29 @@ export const CODEX_MODELS: ModelOption[] = [
     description: "Use whatever your local Codex CLI is configured for (~/.codex/config.toml)",
   },
   {
-    id: 'gpt-5.4',
-    label: 'GPT-5.4',
-    description: 'Frontier general-purpose model',
+    id: 'gpt-5.5',
+    label: 'GPT-5.5',
+    description: 'Frontier model for complex coding, research, and real-world work',
   },
   {
-    id: 'o3',
-    label: 'o3',
-    description: 'Reasoning model — slower, better at hard logic',
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+    description: 'Strong model for everyday coding',
+  },
+  {
+    id: 'gpt-5.4-mini',
+    label: 'GPT-5.4 mini',
+    description: 'Small, fast, cost-efficient — good for simpler tasks',
+  },
+  {
+    id: 'gpt-5.3-codex',
+    label: 'GPT-5.3 Codex',
+    description: 'Coding-optimized model',
+  },
+  {
+    id: 'gpt-5.2',
+    label: 'GPT-5.2',
+    description: 'Optimized for professional work and long-running agents',
   },
 ];
 
