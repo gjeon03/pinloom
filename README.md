@@ -20,7 +20,12 @@ Most AI coding UIs treat the plan as a throwaway artifact. pinloom treats it as 
   version manager you prefer — or skip if your system Node already meets
   the requirement.
 - **pnpm** (enable via `corepack enable` if you don't have it)
-- **Claude Code CLI** installed and authenticated locally (`claude --version` should work)
+- **At least one agent CLI** installed and authenticated locally:
+  - **Claude Code CLI** — `claude --version` should work
+  - **Codex CLI** (optional alternative) — `codex --version` should work
+
+  Sessions can use either agent; pick per-session in the UI. Install whichever
+  you have access to.
 
 ## Quick start
 
