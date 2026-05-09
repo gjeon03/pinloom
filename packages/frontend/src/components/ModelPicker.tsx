@@ -16,19 +16,24 @@ export const CLAUDE_MODELS: ModelOption[] = [
     description: 'Use whatever your local Claude Code CLI is configured for',
   },
   {
-    id: 'claude-opus-4-7',
-    label: 'Opus 4.7',
-    description: 'Most capable, best for hard refactors / planning',
+    id: 'claude-opus-4-7[1m]',
+    label: 'Opus 4.7 (1M)',
+    description: 'Most capable — 1M context, best for complex work',
   },
   {
     id: 'claude-sonnet-4-6',
     label: 'Sonnet 4.6',
-    description: 'Balanced speed/quality, default for most edits',
+    description: 'Best for everyday tasks',
+  },
+  {
+    id: 'claude-sonnet-4-6[1m]',
+    label: 'Sonnet 4.6 (1M)',
+    description: '1M context — billed as extra usage ($3/$15 per Mtok)',
   },
   {
     id: 'claude-haiku-4-5-20251001',
     label: 'Haiku 4.5',
-    description: 'Fastest + cheapest, good for quick lookups',
+    description: 'Fastest for quick answers',
   },
 ];
 
@@ -39,14 +44,29 @@ export const CODEX_MODELS: ModelOption[] = [
     description: "Use whatever your local Codex CLI is configured for (~/.codex/config.toml)",
   },
   {
-    id: 'gpt-5.4',
-    label: 'GPT-5.4',
-    description: 'Frontier general-purpose model',
+    id: 'gpt-5.5',
+    label: 'GPT-5.5',
+    description: 'Frontier model for complex coding, research, and real-world work',
   },
   {
-    id: 'o3',
-    label: 'o3',
-    description: 'Reasoning model — slower, better at hard logic',
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+    description: 'Strong model for everyday coding',
+  },
+  {
+    id: 'gpt-5.4-mini',
+    label: 'GPT-5.4 mini',
+    description: 'Small, fast, cost-efficient — good for simpler tasks',
+  },
+  {
+    id: 'gpt-5.3-codex',
+    label: 'GPT-5.3 Codex',
+    description: 'Coding-optimized model',
+  },
+  {
+    id: 'gpt-5.2',
+    label: 'GPT-5.2',
+    description: 'Optimized for professional work and long-running agents',
   },
 ];
 
