@@ -5,15 +5,20 @@ import {
   AliasTakenError,
   createTeam,
   deleteTeam,
+  getMemberBySessionId,
   getTeam,
   InvalidAliasError,
+  InvalidTagError,
   listBoundSessionIds,
   listTeams,
   OrchestratorWorkerConflictError,
+  PersonaTooLongError,
   removeMember,
   SessionAlreadyInTeamError,
   SessionNotFoundError,
   TeamNotFoundError,
+  TooManyTagsError,
+  updateMember,
   updateMemberAlias,
   updateTeam,
 } from './teams.js';
@@ -298,5 +303,229 @@ describe('cascade behavior', () => {
     expect(getTeam(t.id)).toBeNull();
     // The worker session itself survives — only its team binding is gone.
     expect(listBoundSessionIds().has('s2')).toBe(false);
+  });
+});
+
+describe('persona and tags', () => {
+  it('addMember stores persona and tags', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'crew', orchestratorSessionId: 'o' });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w',
+      alias: 'be',
+      persona: 'Backend reviewer',
+      tags: ['backend', 'tests'],
+    });
+    const team = getTeam(t.id);
+    expect(team?.members[0].persona).toBe('Backend reviewer');
+    expect(team?.members[0].tags).toEqual(['backend', 'tests']);
+  });
+
+  it('addMember normalizes/dedupes/trims tags', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w',
+      alias: 'be',
+      tags: [' backend ', 'backend', '', 'tests'],
+    });
+    expect(getTeam(t.id)?.members[0].tags).toEqual(['backend', 'tests']);
+  });
+
+  it('addMember treats empty/whitespace persona as null', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w',
+      alias: 'be',
+      persona: '   ',
+    });
+    expect(getTeam(t.id)?.members[0].persona).toBeNull();
+  });
+
+  it('rejects invalid tag tokens', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    expect(() =>
+      addMember({
+        teamId: t.id,
+        sessionId: 'w',
+        alias: 'be',
+        tags: ['Backend'], // uppercase
+      }),
+    ).toThrow(InvalidTagError);
+  });
+
+  it('rejects too many tags', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    expect(() =>
+      addMember({
+        teamId: t.id,
+        sessionId: 'w',
+        alias: 'be',
+        tags: Array.from({ length: 17 }, (_, i) => `t${i}`),
+      }),
+    ).toThrow(TooManyTagsError);
+  });
+
+  it('rejects persona over the length cap', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    expect(() =>
+      addMember({
+        teamId: t.id,
+        sessionId: 'w',
+        alias: 'be',
+        persona: 'x'.repeat(5000),
+      }),
+    ).toThrow(PersonaTooLongError);
+  });
+
+  it('updateMember edits persona/tags partially without touching alias', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be' });
+    updateMember({
+      teamId: t.id,
+      sessionId: 'w',
+      persona: 'Edited',
+      tags: ['x'],
+    });
+    const m = getTeam(t.id)?.members[0];
+    expect(m?.alias).toBe('be');
+    expect(m?.persona).toBe('Edited');
+    expect(m?.tags).toEqual(['x']);
+  });
+
+  it('updateMember can clear persona by passing null', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w',
+      alias: 'be',
+      persona: 'initial',
+    });
+    updateMember({ teamId: t.id, sessionId: 'w', persona: null });
+    expect(getTeam(t.id)?.members[0].persona).toBeNull();
+  });
+
+  it('updateMember leaves persona/tags untouched when omitted', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w',
+      alias: 'be',
+      persona: 'keep',
+      tags: ['t'],
+    });
+    updateMember({ teamId: t.id, sessionId: 'w', alias: 'fe' });
+    const m = getTeam(t.id)?.members[0];
+    expect(m?.alias).toBe('fe');
+    expect(m?.persona).toBe('keep');
+    expect(m?.tags).toEqual(['t']);
+  });
+
+  it('updateMemberAlias still works (back-compat wrapper)', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be' });
+    updateMemberAlias({ teamId: t.id, sessionId: 'w', alias: 'fe' });
+    expect(getTeam(t.id)?.members[0].alias).toBe('fe');
+  });
+
+  it('getMemberBySessionId returns persona/tags for a worker', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w',
+      alias: 'be',
+      persona: 'Reviewer',
+      tags: ['backend'],
+    });
+    const m = getMemberBySessionId('w');
+    expect(m?.alias).toBe('be');
+    expect(m?.persona).toBe('Reviewer');
+    expect(m?.tags).toEqual(['backend']);
+  });
+
+  it('getMemberBySessionId returns null for free sessions', () => {
+    seedSession('free');
+    expect(getMemberBySessionId('free')).toBeNull();
+  });
+
+  it('getMemberBySessionId returns null for an orchestrator session id', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be' });
+    // The runner relies on this distinction: orchestrator gets
+    // buildTeamContext, members get buildWorkerPersonaContext, never both.
+    expect(getMemberBySessionId('o')).toBeNull();
+  });
+
+  it('reads a row whose persona/tags are NULL (pre-mig-17 / cleared)', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be' });
+    // Simulate a row that predates migration 17: both columns NULL.
+    getDb()
+      .prepare(
+        'UPDATE team_members SET persona = NULL, tags = NULL WHERE session_id = ?',
+      )
+      .run('w');
+    const m = getMemberBySessionId('w');
+    expect(m?.persona).toBeNull();
+    expect(m?.tags).toEqual([]);
+  });
+
+  it('parseTags tolerates corrupt JSON (returns empty)', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be' });
+    // Hand-edit the row to a non-JSON string. parseTags swallows the
+    // error and warns; the read path stays alive.
+    getDb()
+      .prepare('UPDATE team_members SET tags = ? WHERE session_id = ?')
+      .run('not-json', 'w');
+    expect(getMemberBySessionId('w')?.tags).toEqual([]);
+  });
+
+  it('updateMember can clear tags via empty array (stored as NULL)', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w',
+      alias: 'be',
+      tags: ['backend'],
+    });
+    updateMember({ teamId: t.id, sessionId: 'w', tags: [] });
+    expect(getTeam(t.id)?.members[0].tags).toEqual([]);
+    // Storage-level: empty arrays are stored as NULL (avoids '[]' churn)
+    const raw = getDb()
+      .prepare('SELECT tags FROM team_members WHERE session_id = ?')
+      .get('w') as { tags: string | null };
+    expect(raw.tags).toBeNull();
   });
 });

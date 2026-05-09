@@ -343,7 +343,15 @@ export const api = {
     }),
   deleteTeam: (id: string) =>
     request<{ ok: true }>(`/api/teams/${id}`, { method: 'DELETE' }),
-  addTeamMember: (id: string, body: { sessionId: string; alias: string }) =>
+  addTeamMember: (
+    id: string,
+    body: {
+      sessionId: string;
+      alias: string;
+      persona?: string | null;
+      tags?: string[];
+    },
+  ) =>
     request<TeamMember>(`/api/teams/${id}/members`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -351,7 +359,12 @@ export const api = {
   updateTeamMember: (
     id: string,
     sessionId: string,
-    body: { alias: string },
+    body: {
+      alias?: string;
+      // Pass null to clear; omit to leave unchanged.
+      persona?: string | null;
+      tags?: string[];
+    },
   ) =>
     request<TeamMember>(
       `/api/teams/${id}/members/${encodeURIComponent(sessionId)}`,

@@ -109,6 +109,22 @@ export interface QueueItem {
 export interface TeamMember {
   sessionId: string;
   alias: string;
+  /**
+   * Optional short markdown blurb describing the worker's role / system-
+   * prompt-style persona. Injected into the worker's systemPrompt at
+   * run time so the chat agent actually plays the role, and shown to
+   * the orchestrator in its team context block so it knows when to
+   * route work to this alias. Null = generalist worker (no extra
+   * prompt injection).
+   */
+  persona: string | null;
+  /**
+   * Short, lowercase identifiers (e.g. "backend", "tests") used to
+   * group workers. For now they're metadata — surfaced in the
+   * orchestrator's team context and the canvas — and a future PR can
+   * layer broadcast-by-tag dispatch on top without a schema change.
+   */
+  tags: string[];
   createdAt: string;
 }
 

@@ -137,6 +137,14 @@ describe('runMigrations', () => {
     }
   });
 
+  it('team_members has persona and tags after migration 17', () => {
+    const db = freshDb();
+    runMigrations(db);
+    const cols = tableInfo(db, 'team_members');
+    expect(cols).toContain('persona');
+    expect(cols).toContain('tags');
+  });
+
   it('projects has order_index after migration 5', () => {
     const db = freshDb();
     runMigrations(db);
