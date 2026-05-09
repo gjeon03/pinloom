@@ -1,18 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
+import type { AgentKind } from '@pinloom/shared';
 
 export interface ModelOption {
-  /** SDK model id; null/undefined → CLI default */
+  /** SDK / CLI model id; null/undefined → CLI default */
   id: string | null;
   label: string;
   description?: string;
 }
 
-export const MODEL_OPTIONS: ModelOption[] = [
+export const CLAUDE_MODELS: ModelOption[] = [
   {
     id: null,
     label: 'CLI default',
-    description: "Use whatever your local Claude Code CLI is configured for",
+    description: 'Use whatever your local Claude Code CLI is configured for',
   },
   {
     id: 'claude-opus-4-7',
@@ -31,14 +32,42 @@ export const MODEL_OPTIONS: ModelOption[] = [
   },
 ];
 
+export const CODEX_MODELS: ModelOption[] = [
+  {
+    id: null,
+    label: 'CLI default',
+    description: "Use whatever your local Codex CLI is configured for (~/.codex/config.toml)",
+  },
+  {
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+    description: 'Frontier general-purpose model',
+  },
+  {
+    id: 'o3',
+    label: 'o3',
+    description: 'Reasoning model — slower, better at hard logic',
+  },
+];
+
+export function modelsFor(agent: AgentKind): ModelOption[] {
+  return agent === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
+}
+
+// Resolve a model id to a human label by searching every agent's curated
+// list. Falls back to the raw id (for custom-entered models) or "CLI default"
+// when null/empty.
 export function findModelLabel(id: string | null | undefined): string {
-  const opt = MODEL_OPTIONS.find((m) => m.id === (id ?? null));
-  return opt?.label ?? id ?? 'CLI default';
+  if (id == null || id === '') return 'CLI default';
+  const all = [...CLAUDE_MODELS, ...CODEX_MODELS];
+  const opt = all.find((m) => m.id === id);
+  return opt?.label ?? id;
 }
 
 interface Props {
   value: string | null;
   onChange: (next: string | null) => void;
+  agent: AgentKind;
   side?: 'top' | 'bottom';
   disabled?: boolean;
 }
@@ -54,10 +83,25 @@ interface FixedCoords {
 
 const GAP = 6;
 
-export function ModelPicker({ value, onChange, side = 'top', disabled = false }: Props) {
+export function ModelPicker({
+  value,
+  onChange,
+  agent,
+  side = 'top',
+  disabled = false,
+}: Props) {
+  const options = modelsFor(agent);
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<FixedCoords | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // The currently-selected value may be a custom string that's not in this
+  // agent's curated list (or even from a different agent's list — sessions
+  // own their model independently). We surface it as "Custom: <id>" with a
+  // check, and seed the custom-input box with it when the dropdown opens.
+  const isCurated = value === null || options.some((m) => m.id === value);
+  const customInitial = !isCurated && value ? value : '';
+  const [customDraft, setCustomDraft] = useState(customInitial);
 
   function recompute() {
     const el = wrapperRef.current;
@@ -71,19 +115,20 @@ export function ModelPicker({ value, onChange, side = 'top', disabled = false }:
     }
   }
 
-  // Recompute on open + on resize/scroll while open so the dropdown follows
-  // any layout changes.
+  // Reset the draft to the current custom value whenever the dropdown opens
+  // so the input always reflects the live state.
   useLayoutEffect(() => {
     if (!open) return;
+    setCustomDraft(customInitial);
     recompute();
-    function onChange() {
+    function onScrollOrResize() {
       recompute();
     }
-    window.addEventListener('resize', onChange);
-    window.addEventListener('scroll', onChange, true);
+    window.addEventListener('resize', onScrollOrResize);
+    window.addEventListener('scroll', onScrollOrResize, true);
     return () => {
-      window.removeEventListener('resize', onChange);
-      window.removeEventListener('scroll', onChange, true);
+      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', onScrollOrResize, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, side]);
@@ -102,7 +147,19 @@ export function ModelPicker({ value, onChange, side = 'top', disabled = false }:
     return () => document.removeEventListener('mousedown', onDocMouseDown);
   }, [open]);
 
-  const current = MODEL_OPTIONS.find((m) => m.id === (value ?? null)) ?? MODEL_OPTIONS[0];
+  const currentLabel = isCurated
+    ? (options.find((m) => m.id === (value ?? null))?.label ?? 'CLI default')
+    : `Custom: ${value}`;
+  const currentDescription = isCurated
+    ? options.find((m) => m.id === (value ?? null))?.description
+    : `Custom model id passed verbatim to ${agent}`;
+
+  function commitCustom() {
+    const trimmed = customDraft.trim();
+    if (trimmed.length === 0) return;
+    onChange(trimmed);
+    setOpen(false);
+  }
 
   return (
     <div ref={wrapperRef} className="relative inline-flex">
@@ -110,10 +167,10 @@ export function ModelPicker({ value, onChange, side = 'top', disabled = false }:
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
-        title={current.description}
+        title={currentDescription}
         className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        <span className="font-medium">{current.label}</span>
+        <span className="font-medium">{currentLabel}</span>
         <ChevronDown size={10} />
       </button>
       {open && coords && (
@@ -128,7 +185,7 @@ export function ModelPicker({ value, onChange, side = 'top', disabled = false }:
           className="z-50 w-64 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl"
         >
           <ul className="divide-y divide-[var(--color-border)]/40">
-            {MODEL_OPTIONS.map((opt) => {
+            {options.map((opt) => {
               const selected = (opt.id ?? null) === (value ?? null);
               return (
                 <li key={opt.id ?? 'default'}>
@@ -157,7 +214,56 @@ export function ModelPicker({ value, onChange, side = 'top', disabled = false }:
                 </li>
               );
             })}
+            {!isCurated && (
+              <li>
+                <div
+                  className="w-full text-left px-3 py-2 text-xs flex items-start gap-2 bg-[var(--color-surface-3)]/50"
+                >
+                  <div className="shrink-0 w-3 mt-0.5">
+                    <Check size={12} className="text-[var(--color-accent)]" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-[var(--color-ink)]">Custom: {value}</div>
+                    <div className="text-[var(--color-ink-muted)] text-[10px] mt-0.5">
+                      Custom model id passed verbatim to {agent}
+                    </div>
+                  </div>
+                </div>
+              </li>
+            )}
           </ul>
+          <div className="px-3 py-2 border-t border-[var(--color-border)]/40 space-y-1.5">
+            <label className="block text-[10px] text-[var(--color-ink-muted)] uppercase tracking-wide">
+              Custom model id
+            </label>
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                value={customDraft}
+                onChange={(e) => setCustomDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitCustom();
+                  } else if (e.key === 'Escape') {
+                    setOpen(false);
+                  }
+                }}
+                placeholder={agent === 'codex' ? 'e.g. gpt-5.4-codex' : 'e.g. claude-opus-5'}
+                spellCheck={false}
+                autoComplete="off"
+                className="flex-1 min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[11px] text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-accent)]"
+              />
+              <button
+                type="button"
+                onClick={commitCustom}
+                disabled={customDraft.trim().length === 0}
+                className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Set
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
