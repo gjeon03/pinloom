@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   BookPlus,
@@ -12,7 +12,12 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { AgentKind, Message, QueueItem, Session } from '@pinloom/shared';
+import type {
+  AgentKind,
+  Message,
+  QueueItem,
+  Session,
+} from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
@@ -20,6 +25,7 @@ import { ToolGroup } from './ToolGroup.js';
 import { Tooltip } from './Tooltip.js';
 import { ModelPicker, findModelLabel } from './ModelPicker.js';
 import { AgentBadge } from './AgentBadge.js';
+import { MentionPopup, type MentionWorker } from './MentionPopup.js';
 import { useNotifications } from '../stores/notifications.js';
 
 type AiRunState = 'ai' | null;
@@ -166,6 +172,144 @@ export function ChatView({ session, onPinChange }: Props) {
   const notifications = useNotifications();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
+
+  // Mention autocomplete: fetch the team this session orchestrates (if
+  // any) so we can suggest workers when the user types "@". Refetches
+  // when the user mutates team membership in the Teams page (we listen
+  // to the same window event SessionTabs uses).
+  const [mentionWorkers, setMentionWorkers] = useState<MentionWorker[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    async function reload() {
+      try {
+        const [teams, sessions, projects] = await Promise.all([
+          api.listTeams(),
+          api.listAllSessions(),
+          api.listProjects(),
+        ]);
+        if (cancelled) return;
+        const team = teams.find((t) => t.orchestratorSessionId === session.id);
+        if (!team) {
+          setMentionWorkers([]);
+          return;
+        }
+        const sessionsById = new Map(sessions.map((s) => [s.id, s]));
+        const projectsById = new Map(projects.map((p) => [p.id, p]));
+        setMentionWorkers(
+          team.members.map((m) => {
+            const s = sessionsById.get(m.sessionId) ?? null;
+            const project = s ? projectsById.get(s.projectId) : null;
+            return {
+              member: m,
+              session: s,
+              projectName: project?.name ?? null,
+            };
+          }),
+        );
+      } catch {
+        if (!cancelled) setMentionWorkers([]);
+      }
+    }
+    reload();
+    function onTeamsChanged() {
+      reload();
+    }
+    window.addEventListener('pinloom:teams-changed', onTeamsChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('pinloom:teams-changed', onTeamsChanged);
+    };
+  }, [session.id]);
+
+  // Mention popup state. `range` is the [start, end) span in `input`
+  // currently being mentioned; `query` is the lowercased text after the
+  // "@". Null when no popup should be visible.
+  const [mention, setMention] = useState<{
+    start: number;
+    end: number;
+    query: string;
+  } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  const filteredMentions = useMemo(() => {
+    if (!mention) return [];
+    const q = mention.query.toLowerCase();
+    return mentionWorkers.filter((w) =>
+      w.member.alias.toLowerCase().startsWith(q),
+    );
+  }, [mention, mentionWorkers]);
+
+  // Keep the highlight in bounds as the filter shrinks.
+  useEffect(() => {
+    if (mentionIndex >= filteredMentions.length) {
+      setMentionIndex(Math.max(0, filteredMentions.length - 1));
+    }
+  }, [filteredMentions, mentionIndex]);
+
+  function detectMentionAtCursor(value: string, cursor: number) {
+    // Walk back from the cursor to find a "@" preceded by start-of-text
+    // or whitespace. Stop on whitespace/newline before finding one — no
+    // mention in progress then.
+    let i = cursor - 1;
+    while (i >= 0) {
+      const ch = value[i];
+      if (ch === '@') {
+        const prev = i > 0 ? value[i - 1] : '';
+        if (i === 0 || /\s/.test(prev)) {
+          const query = value.slice(i + 1, cursor);
+          // Reject if the partial contains whitespace (commit boundary).
+          if (/\s/.test(query)) return null;
+          return { start: i, end: cursor, query };
+        }
+        return null;
+      }
+      if (/\s/.test(ch)) return null;
+      i -= 1;
+    }
+    return null;
+  }
+
+  function updateMentionFromTextarea() {
+    if (mentionWorkers.length === 0) {
+      if (mention) setMention(null);
+      return;
+    }
+    const el = textareaRef.current;
+    if (!el) return;
+    const cursor = el.selectionStart ?? input.length;
+    const next = detectMentionAtCursor(input, cursor);
+    if (!next) {
+      if (mention) setMention(null);
+      return;
+    }
+    if (
+      !mention ||
+      next.start !== mention.start ||
+      next.end !== mention.end ||
+      next.query !== mention.query
+    ) {
+      setMention(next);
+      setMentionIndex(0);
+    }
+  }
+
+  function pickMention(worker: MentionWorker) {
+    if (!mention) return;
+    const before = input.slice(0, mention.start);
+    const after = input.slice(mention.end);
+    const inserted = `@${worker.member.alias} `;
+    const next = before + inserted + after;
+    setInput(next);
+    setMention(null);
+    // Restore cursor right after the inserted alias.
+    queueMicrotask(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const pos = before.length + inserted.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -890,10 +1034,29 @@ export function ChatView({ session, onPinChange }: Props) {
           >
             <ImagePlus size={14} />
           </button>
+          <div className="flex-1 relative">
+            {mention && filteredMentions.length > 0 && (
+              <MentionPopup
+                workers={filteredMentions}
+                highlightIndex={mentionIndex}
+                onPick={pickMention}
+                onHover={setMentionIndex}
+              />
+            )}
           <textarea
             ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Defer until after the value commits so cursor reads are
+              // accurate (some browsers update selection lazily).
+              queueMicrotask(updateMentionFromTextarea);
+            }}
+            onSelect={updateMentionFromTextarea}
+            onBlur={() => {
+              // Delay so a click on a popup row still fires.
+              setTimeout(() => setMention(null), 100);
+            }}
             onPaste={(e) => {
               if (isShellMode) return;
               const items = Array.from(e.clipboardData?.items ?? []);
@@ -913,6 +1076,33 @@ export function ChatView({ session, onPinChange }: Props) {
               }
             }}
             onKeyDown={(e) => {
+              // Mention popup keyboard navigation takes precedence so
+              // Enter/Tab pick a worker instead of submitting the chat.
+              if (mention && filteredMentions.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setMentionIndex((i) =>
+                    Math.min(i + 1, filteredMentions.length - 1),
+                  );
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setMentionIndex((i) => Math.max(i - 1, 0));
+                  return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  if (e.nativeEvent.isComposing) return;
+                  e.preventDefault();
+                  pickMention(filteredMentions[mentionIndex]);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setMention(null);
+                  return;
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 send();
@@ -926,12 +1116,13 @@ export function ChatView({ session, onPinChange }: Props) {
                   : 'Message the AI (Shift+Enter for newline · paste/attach images · start with ! to run a shell command)'
             }
             rows={1}
-            className={`flex-1 resize-none rounded border px-3 py-2 text-sm leading-snug ${
+            className={`w-full resize-none rounded border px-3 py-2 text-sm leading-snug ${
               isShellMode
                 ? 'bg-[var(--color-tool-bg)] border-[var(--color-tool-border)] font-mono text-[var(--color-tool-ink)]'
                 : 'bg-[var(--color-surface-2)] border-[var(--color-border)]'
             }`}
           />
+          </div>
           <button
             type="submit"
             disabled={(!input.trim() && attachments.length === 0) || uploadingAttachments}
