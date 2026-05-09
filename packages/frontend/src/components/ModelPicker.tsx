@@ -13,22 +13,22 @@ export const CLAUDE_MODELS: ModelOption[] = [
   {
     id: null,
     label: 'CLI default',
-    description: 'Use whatever your local Claude Code CLI is configured for',
-  },
-  {
-    id: 'claude-opus-4-7',
-    label: 'Opus 4.7',
-    description: 'Most capable, best for hard refactors / planning',
+    description: 'Opus 4.7 with 1M context — most capable for complex work',
   },
   {
     id: 'claude-sonnet-4-6',
     label: 'Sonnet 4.6',
-    description: 'Balanced speed/quality, default for most edits',
+    description: 'Best for everyday tasks',
+  },
+  {
+    id: 'claude-sonnet-4-6[1m]',
+    label: 'Sonnet 4.6 (1M)',
+    description: '1M context — billed as extra usage ($3/$15 per Mtok)',
   },
   {
     id: 'claude-haiku-4-5-20251001',
     label: 'Haiku 4.5',
-    description: 'Fastest + cheapest, good for quick lookups',
+    description: 'Fastest for quick answers',
   },
 ];
 
