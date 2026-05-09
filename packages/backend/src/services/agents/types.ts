@@ -41,6 +41,16 @@ export type NormalizedEvent =
   // Actual model the agent reported using; stamped on the assistant row.
   | { type: 'model'; model: string };
 
+// Stdio-transport MCP server config — matches what `claude-agent-sdk`
+// expects in its `mcpServers` Options field, and what we render into a
+// generated TOML for Codex CLI. Adapters translate from this single
+// shape to their vendor-specific surface.
+export interface McpStdioServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
 export interface AgentRunArgs {
   cwd: string;
   systemPrompt: string;
@@ -50,6 +60,10 @@ export interface AgentRunArgs {
   abortController: AbortController;
   /** First user message that kicks the run off. */
   initialPrompt: UserPrompt;
+  /** MCP servers to expose to this agent run. Keyed by user-facing name
+   *  (e.g. "pinloom"). Only set for orchestrator sessions; workers run
+   *  with vanilla agent config. */
+  mcpServers?: Record<string, McpStdioServerConfig>;
 }
 
 export interface AgentRun {

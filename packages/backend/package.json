@@ -16,6 +16,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.96",
     "@fastify/cors": "^10.0.2",
     "@fastify/websocket": "^11.0.2",
+    "@pinloom/mcp-server": "workspace:*",
     "@pinloom/shared": "workspace:*",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^16.4.7",
@@ -26,6 +27,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.5",
     "tsx": "^4.19.3",

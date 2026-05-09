@@ -1,15 +1,23 @@
+import { createRequire } from 'node:module';
 import { nanoid } from 'nanoid';
 import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { getAgentAdapter } from './agents/index.js';
-import type { AgentRun, NormalizedEvent } from './agents/types.js';
+import type {
+  AgentRun,
+  McpStdioServerConfig,
+  NormalizedEvent,
+} from './agents/types.js';
 import { listUserEnvVars } from './user-env.js';
+import { getTeamByOrchestratorSessionId } from './teams.js';
+import { mintTeamToken } from './team-tokens.js';
 import {
   broadcastQueueState,
   drainQueue,
   enqueueMessage,
+  listQueueItems,
   listSessionsWithQueuedItems,
 } from './message-queue.js';
 import { redactSecrets } from './redact.js';
@@ -269,6 +277,63 @@ function buildEnvVarsContext(): string {
   ].join('\n');
 }
 
+// If `sessionId` is the orchestrator of a team, return a markdown block
+// describing the workers and the dispatch tools available via the
+// pinloom MCP server. Empty string for non-orchestrator sessions —
+// they don't get the MCP wired up either, so the prompt stays clean.
+function buildTeamContext(sessionId: string): string {
+  const team = getTeamByOrchestratorSessionId(sessionId);
+  if (!team) return '';
+  if (team.members.length === 0) {
+    return [
+      '',
+      '## Team orchestration',
+      '',
+      `You are the orchestrator of team **${team.name}**, but no workers are`,
+      'attached yet. Ask the user to add workers via the Teams page before',
+      'attempting to dispatch.',
+    ].join('\n');
+  }
+  const db = getDb();
+  const workerLines: string[] = [];
+  for (const m of team.members) {
+    const session = db
+      .prepare('SELECT agent, project_id FROM sessions WHERE id = ?')
+      .get(m.sessionId) as
+      | { agent: 'claude' | 'codex' | null; project_id: string }
+      | undefined;
+    if (!session) continue;
+    const project = db
+      .prepare('SELECT name FROM projects WHERE id = ?')
+      .get(session.project_id) as { name: string } | undefined;
+    const agent = session.agent ?? 'claude';
+    const projectPart = project ? `, project ${project.name}` : '';
+    workerLines.push(`- **@${m.alias}** (${agent}${projectPart})`);
+  }
+  return [
+    '',
+    `## Team orchestration — you are the orchestrator of team "${team.name}"`,
+    '',
+    'You can dispatch tasks to the workers below by calling the pinloom MCP',
+    'tools. Each worker is its own session with its own agent, model, and',
+    'project — pick the right alias for the job.',
+    '',
+    'Workers:',
+    ...workerLines,
+    '',
+    'Available tools (auto-injected via MCP):',
+    '- `team_list()` — re-fetch worker status if needed',
+    '- `team_send(alias, text)` — enqueue a prompt to a worker (returns immediately)',
+    '- `team_read(alias, sinceMessageId?)` — read a worker\'s recent reply',
+    '- `team_status(alias)` — check if a worker is idle/running',
+    '- `team_wait(alias, timeoutMs?)` — block until a worker is idle (returns the moment it idles; max 5min)',
+    '',
+    'Typical pattern: `team_send` → `team_wait` → `team_read` (with the last',
+    'message id you saw, to get only the new reply). Workers don\'t see each',
+    'other; you are the only one that can synthesize across them.',
+  ].join('\n');
+}
+
 function buildPinsContext(sessionId: string): string {
   const db = getDb();
   const pins = db
@@ -385,6 +450,10 @@ function stopRun(sessionId: string, opts: { silent: boolean }): boolean {
   } catch {
     // best-effort
   }
+  // Loud cancel still surfaces as "idle" to team_wait subscribers; silent
+  // cancel does too because the runner immediately starts a fresh attempt
+  // so the listener will re-check isAiRunning and stay subscribed.
+  notifySessionIdle(sessionId);
   return true;
 }
 
@@ -395,6 +464,92 @@ export function cancelAiRun(sessionId: string): boolean {
 export function isAiRunning(sessionId: string): boolean {
   const run = activeRuns.get(sessionId);
   return !!run && run.inFlight;
+}
+
+// Promise-based "wait until session is idle" helper — primarily used by
+// the team-dispatch routes for `team_wait`. Resolves with `true` when
+// the session is idle, `false` on timeout or abort. Hooks into a tiny
+// per-session listener Set that's notified by the run-attempt loop's
+// finally block when a run wraps up. Subscribers register *before*
+// checking inFlight to avoid a race where the run ends between their
+// check and their subscribe.
+const idleListeners = new Map<string, Set<() => void>>();
+
+function notifySessionIdle(sessionId: string): void {
+  const set = idleListeners.get(sessionId);
+  if (!set) return;
+  // Snapshot first — listeners may unsubscribe synchronously inside the
+  // callback, mutating the set we'd otherwise be iterating.
+  const callbacks = [...set];
+  for (const cb of callbacks) {
+    try {
+      cb();
+    } catch {
+      // best-effort — one bad listener shouldn't break the rest
+    }
+  }
+}
+
+export function waitForIdle(
+  sessionId: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const set = idleListeners.get(sessionId) ?? new Set<() => void>();
+    idleListeners.set(sessionId, set);
+
+    function cleanup() {
+      clearTimeout(timer);
+      set.delete(onIdle);
+      if (set.size === 0) idleListeners.delete(sessionId);
+      signal?.removeEventListener('abort', onAbort);
+    }
+    function onIdle() {
+      // Re-check actual state — the listener fires on every run end but
+      // there may still be queued items waiting to be drained.
+      if (isAiRunning(sessionId) || getQueueDepthFor(sessionId) > 0) return;
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(true);
+    }
+    function onAbort() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    }
+
+    // CRITICAL ORDER: subscribe BEFORE the early-out check. If we
+    // checked first and the run completed between the check and the
+    // subscribe, our listener would be registered too late and we'd
+    // hang for the full timeout.
+    set.add(onIdle);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    }, timeoutMs);
+
+    // Now safe to fast-path resolve if already idle.
+    if (!isAiRunning(sessionId) && getQueueDepthFor(sessionId) === 0) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(true);
+    }
+  });
+}
+
+// Tiny indirection so the queue depth lookup doesn't need to import
+// message-queue at module load time (would create a cycle with runner →
+// message-queue → broadcast → … in some refactors).
+function getQueueDepthFor(sessionId: string): number {
+  return listQueueItems(sessionId).length;
 }
 
 // Called once on backend startup. The message_queue table survives backend
@@ -673,6 +828,49 @@ interface AttemptResult {
   silent: boolean;
 }
 
+// Resolve the bundled MCP server entry once at module load. createRequire
+// looks up `@pinloom/mcp-server` against this file's URL — works in both
+// dev (tsx watching src/) and prod (built dist/) layouts because the
+// package has a `main` pointing at its built entry. Returns null if the
+// package isn't installed (defensive — pnpm workspace should always
+// resolve it, but a missing build shouldn't crash the runner).
+const requireFromHere = createRequire(import.meta.url);
+function resolveMcpServerEntry(): string | null {
+  try {
+    return requireFromHere.resolve('@pinloom/mcp-server');
+  } catch {
+    return null;
+  }
+}
+const MCP_SERVER_ENTRY = resolveMcpServerEntry();
+
+// If the given session is an orchestrator, mint a fresh per-run token
+// and return the MCP server config to inject. Workers and untethered
+// sessions get null — they don't need MCP wiring.
+function buildOrchestratorMcpConfig(
+  sessionId: string,
+): Record<string, McpStdioServerConfig> | undefined {
+  if (!MCP_SERVER_ENTRY) return undefined;
+  const team = getTeamByOrchestratorSessionId(sessionId);
+  if (!team) return undefined;
+  const token = mintTeamToken(team.id);
+  return {
+    pinloom: {
+      command: process.execPath, // current Node binary
+      args: [MCP_SERVER_ENTRY],
+      env: {
+        PINLOOM_TEAM_ID: team.id,
+        PINLOOM_TEAM_TOKEN: token,
+        // Default backend URL is fine for local dev; expose an override
+        // hook in case the user runs pinloom on a non-standard port.
+        ...(process.env.PINLOOM_MCP_BACKEND_URL
+          ? { PINLOOM_BACKEND_URL: process.env.PINLOOM_MCP_BACKEND_URL }
+          : {}),
+      },
+    },
+  };
+}
+
 async function runAttempt(
   ctx: SessionContext,
   prompt: string,
@@ -681,6 +879,7 @@ async function runAttempt(
   systemPrompt: string,
   useResume: boolean,
   model?: string,
+  mcpServers?: Record<string, McpStdioServerConfig>,
 ): Promise<AttemptResult> {
   const adapter = getAgentAdapter(ctx.agent);
   const abortController = new AbortController();
@@ -691,6 +890,7 @@ async function runAttempt(
     resume: useResume ? ctx.claudeSessionId : null,
     abortController,
     initialPrompt: { text: prompt, images },
+    mcpServers,
   });
 
   const active: ActiveRun = {
@@ -890,6 +1090,12 @@ async function runAttempt(
     if (activeRuns.get(ctx.id) === active) {
       activeRuns.delete(ctx.id);
     }
+    // A team_send dispatch that arrived during the dying tail (after the
+    // last event-loop drain trigger but before activeRuns.delete) would
+    // otherwise sit in the queue until the next user message. Try to
+    // drain now while the session is verifiably idle.
+    tryDrainQueue(ctx.id);
+    notifySessionIdle(ctx.id);
   }
 
   if (abortController.signal.aborted) {
@@ -922,12 +1128,22 @@ async function runAssistant(
 
   const pinsContext = buildPinsContext(ctx.id);
   const envVarsContext = buildEnvVarsContext();
+  const teamContext = buildTeamContext(ctx.id);
   const systemPrompt =
     SYSTEM_PROMPT +
     buildPlanContext(planItems) +
     buildWikiContext(ctx.projectId) +
     envVarsContext +
+    teamContext +
     (pinsContext ? `\n\n${pinsContext}` : '');
+
+  // Mint the orchestrator's MCP token ONCE per turn (i.e. per
+  // runAssistant call), not once per runAttempt. Resume + fallback
+  // attempts share the same token so the still-spawned child process
+  // from the first attempt — if any — keeps authenticating until it
+  // exits. Per-attempt minting would 403 the first attempt's child the
+  // moment the fallback ran.
+  const mcpServers = buildOrchestratorMcpConfig(ctx.id);
 
   let result: AttemptResult = { shouldFallback: false, cancelled: false, silent: false };
 
@@ -942,6 +1158,7 @@ async function runAssistant(
           systemPrompt,
           true,
           model,
+          mcpServers,
         );
       } catch (err) {
         // Hard error after the attempt produced output — surface as runner
@@ -990,6 +1207,7 @@ async function runAssistant(
         systemPrompt,
         false,
         model,
+        mcpServers,
       );
     }
 

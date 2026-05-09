@@ -92,6 +92,10 @@ export function TeamsPage() {
       setProjects(p);
       setProjectGroups(g);
       setAllSessions(s);
+      // Notify any session-tab strip currently mounted in the app so its
+      // "@alias" / "orchestrator" badges stay in sync without the user
+      // having to navigate.
+      window.dispatchEvent(new CustomEvent('pinloom:teams-changed'));
     } catch (err) {
       if (seq !== refreshSeqRef.current) return;
       setError(err instanceof Error ? err.message : String(err));

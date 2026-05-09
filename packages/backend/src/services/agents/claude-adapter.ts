@@ -143,6 +143,12 @@ class ClaudeAdapterImpl implements AgentAdapter {
     };
     if (args.resume) options.resume = args.resume;
     if (args.model) options.model = args.model;
+    if (args.mcpServers) {
+      // SDK accepts McpStdioServerConfig literally, plus an optional
+      // `type: 'stdio'` discriminator. Sticking to {command, args, env}
+      // matches the adapter-agnostic shape we get from runner.ts.
+      options.mcpServers = args.mcpServers;
+    }
 
     const q = query({
       prompt: sdkPromptIterable() as Parameters<typeof query>[0]['prompt'],

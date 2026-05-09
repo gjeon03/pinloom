@@ -11,6 +11,7 @@ import { fsRoutes } from './routes/fs.js';
 import { wikiRoutes } from './routes/wiki.js';
 import { settingsRoutes } from './routes/settings.js';
 import { teamRoutes } from './routes/teams.js';
+import { teamDispatchRoutes } from './routes/team-dispatch.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
 import { checkAgentClis } from './services/cli-check.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
@@ -52,6 +53,7 @@ export async function createApp() {
   await app.register(wikiRoutes);
   await app.register(settingsRoutes);
   await app.register(teamRoutes);
+  await app.register(teamDispatchRoutes);
 
   app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket, request) => {
