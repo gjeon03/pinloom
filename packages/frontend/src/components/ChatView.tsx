@@ -960,6 +960,7 @@ export function ChatView({ session, onPinChange }: Props) {
                   <ModelPicker
                     value={model}
                     onChange={changeModel}
+                    agent={session.agent}
                     side="top"
                     disabled={aiRunning}
                   />
