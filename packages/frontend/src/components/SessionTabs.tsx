@@ -548,7 +548,7 @@ export function SessionTabs({
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-[var(--color-ink)]"
               >
                 <ExternalLink size={12} />
-                <span className="flex-1">Open chat in new tab</span>
+                <span className="flex-1">Open chat in browser tab</span>
               </a>
               <button
                 type="button"
