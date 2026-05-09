@@ -16,6 +16,11 @@ export const CLAUDE_MODELS: ModelOption[] = [
     description: 'Use whatever your local Claude Code CLI is configured for',
   },
   {
+    id: 'claude-opus-4-7[1m]',
+    label: 'Opus 4.7 (1M)',
+    description: 'Most capable — 1M context, best for complex work',
+  },
+  {
     id: 'claude-sonnet-4-6',
     label: 'Sonnet 4.6',
     description: 'Best for everyday tasks',
