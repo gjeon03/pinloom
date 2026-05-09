@@ -15,7 +15,13 @@ import {
   Check,
   ExternalLink,
 } from 'lucide-react';
-import type { Project, Session, Team, TeamMember } from '@pinloom/shared';
+import type {
+  Project,
+  ProjectGroup,
+  Session,
+  Team,
+  TeamMember,
+} from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from '../components/AgentBadge.js';
 import { DirectoryPicker } from '../components/DirectoryPicker.js';
@@ -29,6 +35,9 @@ function basenameOfPath(path: string): string {
 interface SessionLookup {
   sessionsById: Record<string, Session>;
   projectsById: Record<string, Project>;
+  /** Project groups, included so the inline "create new project" form can
+   *  let users pick a group instead of always landing in Ungrouped. */
+  projectGroups: ProjectGroup[];
   /** Sessions bound to any team (orchestrator OR worker). */
   boundSessionIds: Set<string>;
 }
@@ -62,6 +71,7 @@ function formatSessionLabel(
 export function TeamsPage() {
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectGroups, setProjectGroups] = useState<ProjectGroup[]>([]);
   const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Guards against an in-flight refresh being clobbered by an older one
@@ -71,14 +81,16 @@ export function TeamsPage() {
   const refresh = useCallback(async () => {
     const seq = ++refreshSeqRef.current;
     try {
-      const [t, p, s] = await Promise.all([
+      const [t, p, g, s] = await Promise.all([
         api.listTeams(),
         api.listProjects(),
+        api.listProjectGroups(),
         api.listAllSessions(),
       ]);
       if (seq !== refreshSeqRef.current) return;
       setTeams(t);
       setProjects(p);
+      setProjectGroups(g);
       setAllSessions(s);
     } catch (err) {
       if (seq !== refreshSeqRef.current) return;
@@ -100,8 +112,13 @@ export function TeamsPage() {
       bound.add(team.orchestratorSessionId);
       for (const m of team.members) bound.add(m.sessionId);
     }
-    return { sessionsById, projectsById, boundSessionIds: bound };
-  }, [allSessions, projects, teams]);
+    return {
+      sessionsById,
+      projectsById,
+      projectGroups,
+      boundSessionIds: bound,
+    };
+  }, [allSessions, projects, projectGroups, teams]);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -619,6 +636,7 @@ function SessionPickerModal({
       {creating ? (
         <NewSessionForm
           projects={Object.values(lookup.projectsById)}
+          projectGroups={lookup.projectGroups}
           onCancel={() => setCreating(false)}
           onCreated={(s) => onPick(s.id)}
         />
@@ -746,6 +764,7 @@ function AddMemberModal({
           {creating ? (
             <NewSessionForm
               projects={Object.values(lookup.projectsById)}
+              projectGroups={lookup.projectGroups}
               onCancel={() => setCreating(false)}
               onCreated={(s) => {
                 setExtras((prev) => [...prev, s]);
@@ -821,6 +840,7 @@ function AddMemberModal({
 
 interface NewSessionFormProps {
   projects: Project[];
+  projectGroups: ProjectGroup[];
   onCancel: () => void;
   onCreated: (session: Session) => void;
 }
@@ -830,8 +850,14 @@ interface NewSessionFormProps {
 // form is intentionally minimal — project + agent + optional title; the
 // session inherits everything else from the project's defaults. If the
 // user has no projects yet (or wants a new one for this session), the
-// "+ New project" button opens the same DirectoryPicker the sidebar uses.
-function NewSessionForm({ projects, onCancel, onCreated }: NewSessionFormProps) {
+// "+ New project" button opens the same DirectoryPicker the sidebar uses
+// and lets them assign the new project to a group (defaults to Ungrouped).
+function NewSessionForm({
+  projects,
+  projectGroups,
+  onCancel,
+  onCreated,
+}: NewSessionFormProps) {
   // Local copy so a project created inline is immediately visible in the
   // dropdown without round-tripping through the parent.
   const [localProjects, setLocalProjects] = useState<Project[]>(projects);
@@ -865,6 +891,21 @@ function NewSessionForm({ projects, onCancel, onCreated }: NewSessionFormProps) 
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showDirPicker, setShowDirPicker] = useState(false);
+  // Two-step "+ New project" mini-flow: clicking the button reveals a
+  // group select and a "Pick directory…" button. We don't open the
+  // DirectoryPicker until the user confirms group choice so they can't
+  // forget it.
+  const [creatingProject, setCreatingProject] = useState(false);
+  // null = Ungrouped. Persisted across the DirectoryPicker round-trip so
+  // the user picks the group BEFORE the directory and we apply it after.
+  const [newProjectGroupId, setNewProjectGroupId] = useState<string | null>(
+    null,
+  );
+
+  const sortedGroups = useMemo(
+    () => [...projectGroups].sort((a, b) => a.orderIndex - b.orderIndex),
+    [projectGroups],
+  );
 
   async function submit() {
     if (!projectId || submitting) return;
@@ -888,24 +929,56 @@ function NewSessionForm({ projects, onCancel, onCreated }: NewSessionFormProps) 
     setErr(null);
     try {
       const name = basenameOfPath(cwd);
-      const created = await api.createProject({ name, cwd, groupId: null });
+      const created = await api.createProject({
+        name,
+        cwd,
+        groupId: newProjectGroupId,
+      });
       setLocalProjects((prev) => [created, ...prev]);
       setProjectId(created.id);
+      setCreatingProject(false);
+      setNewProjectGroupId(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
   }
 
-  // Empty state: no projects exist yet → show a single CTA that opens
-  // the directory picker. After creation we drop into the regular form.
+  // Reusable: group select + "Pick directory…" button. Both the empty-
+  // state panel and the regular form's "+ New project" use this so the
+  // group decision is made consistently before the picker opens.
+  const newProjectControls = (
+    <div className="space-y-2">
+      <div>
+        <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+          Group <span className="text-[10px]">(optional)</span>
+        </label>
+        <select
+          value={newProjectGroupId ?? ''}
+          onChange={(e) => setNewProjectGroupId(e.target.value || null)}
+          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
+        >
+          <option value="">Ungrouped</option>
+          {sortedGroups.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+
+  // Empty state: no projects exist yet → show a CTA panel with group +
+  // pick directory.
   if (sortedProjects.length === 0) {
     return (
       <>
-        <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2 text-xs">
+        <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2.5 text-xs">
           <p className="text-[var(--color-ink-muted)]">
             No projects yet. Pick a directory to start one — pinloom uses it as
             the session's working directory.
           </p>
+          {newProjectControls}
           {err && <p className="text-red-400">{err}</p>}
           <div className="flex justify-end gap-1.5">
             <button
@@ -954,17 +1027,47 @@ function NewSessionForm({ projects, onCancel, onCreated }: NewSessionFormProps) 
               </option>
             ))}
           </select>
-          <button
-            type="button"
-            onClick={() => setShowDirPicker(true)}
-            title="Create new project"
-            aria-label="Create new project"
-            className="rounded border border-[var(--color-border)] px-2 py-1.5 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1"
-          >
-            <Plus size={11} />
-            New
-          </button>
+          {!creatingProject && (
+            <button
+              type="button"
+              onClick={() => setCreatingProject(true)}
+              title="Create new project"
+              aria-label="Create new project"
+              className="rounded border border-[var(--color-border)] px-2 py-1.5 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1"
+            >
+              <Plus size={11} />
+              New
+            </button>
+          )}
         </div>
+        {creatingProject && (
+          <div className="mt-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 space-y-2 text-xs">
+            <p className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+              New project
+            </p>
+            {newProjectControls}
+            <div className="flex justify-end gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreatingProject(false);
+                  setNewProjectGroupId(null);
+                }}
+                className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDirPicker(true)}
+                className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium flex items-center gap-1"
+              >
+                <Plus size={11} />
+                Pick directory…
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       <div>
         <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
