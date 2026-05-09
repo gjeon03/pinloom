@@ -91,6 +91,17 @@ export interface UserEnvVarWithValue extends UserEnvVar {
   value: string;
 }
 
+// One pending user message held by the backend until the agent reaches a
+// turn boundary, then drained as a single combined prompt. The chat UI
+// just renders these — it doesn't own the state.
+export interface QueueItem {
+  id: string;
+  sessionId: string;
+  content: string;
+  model: string | null;
+  createdAt: string;
+}
+
 export interface HealthResponse {
   status: 'ok';
   agents: {
@@ -109,4 +120,8 @@ export type WsEvent =
   | { type: 'thinking_chunk'; sessionId: string; chunk: string }
   | { type: 'plan_item_updated'; planId: string; item: PlanItem }
   | { type: 'run_log'; sessionId: string; stream: 'stdout' | 'stderr'; chunk: string }
+  // Backend-owned message queue state. The chat UI mirrors this list; it
+  // does not maintain its own copy. Broadcast on every enqueue, dequeue,
+  // and drain (turn-boundary auto-drain).
+  | { type: 'queue_updated'; sessionId: string; items: QueueItem[] }
   | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string };

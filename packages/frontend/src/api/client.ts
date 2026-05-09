@@ -6,6 +6,7 @@ import type {
   PlanItem,
   Project,
   ProjectGroup,
+  QueueItem,
   Session,
   UserEnvVar,
   UserEnvVarWithValue,
@@ -146,6 +147,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  sendMessages: (
+    sessionId: string,
+    body: {
+      messages: Array<{
+        content: string;
+        planItemId?: string | null;
+        images?: Array<{ mimeType: string; base64: string }>;
+      }>;
+      model?: string;
+      // When true the backend silently aborts any in-flight run before
+      // starting a new one with these messages — used by the chat UI's
+      // mid-task queue drain.
+      interrupt?: boolean;
+    },
+  ) =>
+    request<Message[]>(`/api/sessions/${sessionId}/messages/batch`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   execShell: (sessionId: string, command: string) =>
     request<{ userMessage: Message; toolMessage: Message }>(
       `/api/sessions/${sessionId}/exec`,
@@ -249,6 +269,23 @@ export const api = {
     request<WikiImportSummary>('/api/wiki/import', {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+
+  // Pending message queue (backend-owned). The chat UI mirrors WS
+  // broadcasts; this HTTP path is only for initial load + manual remove.
+  listQueue: (sessionId: string) =>
+    request<QueueItem[]>(`/api/sessions/${sessionId}/queue`),
+  enqueueMessage: (
+    sessionId: string,
+    body: { content: string; model?: string | null },
+  ) =>
+    request<QueueItem>(`/api/sessions/${sessionId}/queue`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  removeQueueItem: (sessionId: string, itemId: string) =>
+    request<{ ok: true }>(`/api/sessions/${sessionId}/queue/${itemId}`, {
+      method: 'DELETE',
     }),
 
   // User-managed environment variables (Settings → Environment Variables).

@@ -196,6 +196,26 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 15,
+    // Per-session pending message queue. The chat UI enqueues here when the
+    // user types while an agent run is in flight; the runner drains this
+    // table at every turn boundary (intra-turn natural break + end-of-turn)
+    // and splices the queued messages into the agent via silent abort +
+    // resume. Lives in SQLite so it survives backend restarts and tab
+    // switches — the frontend just mirrors the table via WS broadcasts.
+    sql: `
+      CREATE TABLE IF NOT EXISTS message_queue (
+        id          TEXT PRIMARY KEY,
+        session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        content     TEXT NOT NULL,
+        model       TEXT,
+        created_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_message_queue_session
+        ON message_queue(session_id, created_at);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

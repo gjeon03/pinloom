@@ -4,7 +4,14 @@ import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { getAgentAdapter } from './agents/index.js';
+import type { AgentRun, NormalizedEvent } from './agents/types.js';
 import { listUserEnvVars } from './user-env.js';
+import {
+  broadcastQueueState,
+  drainQueue,
+  enqueueMessage,
+  listSessionsWithQueuedItems,
+} from './message-queue.js';
 import type { ImageInput, ImageMediaType } from './runner-types.js';
 
 export type { ImageInput, ImageMediaType } from './runner-types.js';
@@ -108,7 +115,19 @@ Rules:
 - You are scoped to ONE project on disk (cwd is set for you). Operate on files there.
 - The user is iterating on a living plan. Prefer incremental changes over rewrites.
 - If the user references a plan item (by title or by @id), ground your response in that item.
-- Be concise. Show code blocks only when useful. Use Korean if the user writes in Korean.`;
+- Be concise. Show code blocks only when useful. Use Korean if the user writes in Korean.
+- Before kicking off multi-tool work on a substantive task (analysis, refactor,
+  deep search), lead with one short line so the user sees something is
+  happening. For trivial replies (a greeting, yes/no, a tiny answer), skip
+  the preamble.
+- A user message wrapped with "[Interrupted mid-task ...]" arrived while
+  you were working on a previous task. Reply naturally to the new messages,
+  then add ONE short sentence saying the previous task is paused and ask
+  whether to resume or switch. Refer to the paused work generically (e.g.,
+  "the previous task is paused"). Do NOT: quote the original prompt back,
+  use temporal back-references ("earlier", "previously", or their
+  equivalents in any language), wrap the notice in parentheses, or repeat
+  the interruption marker.`;
 
 function buildWikiContext(projectId: string): string {
   const slug = getProjectWikiSlugByProjectId(projectId);
@@ -310,32 +329,123 @@ function loadRecentHistory(sessionId: string, excludeId: string, limit = 40): Hi
   return rows.reverse();
 }
 
-const activeAbortControllers = new Map<string, AbortController>();
-
-export function registerRun(sessionId: string): AbortController {
-  const prior = activeAbortControllers.get(sessionId);
-  if (prior) prior.abort();
-  const controller = new AbortController();
-  activeAbortControllers.set(sessionId, controller);
-  return controller;
+// One long-lived agent run per session. New user messages route through
+// `pushMessage` so the agent picks them up at the next turn boundary instead
+// of being torn down and restarted. The run lives until cancelled, errored,
+// or the agent's event stream ends naturally (mock-driven test paths only).
+interface ActiveRun {
+  agentRun: AgentRun;
+  abortController: AbortController;
+  // The plan item id events should be tagged with right now.
+  currentPlanItemId: string | null;
+  // Set by sendUserMessage when a new prompt is queued mid-run; adopted by
+  // the event loop on the next `turn_complete` so events flowing in for the
+  // queued prompt land under the correct plan item.
+  pendingPlanItemId: string | null;
+  hasPendingPlanItem: boolean;
+  // True while the agent is producing output — flips on push, off on
+  // turn_complete. Drives `isAiRunning` for the run-status endpoint.
+  inFlight: boolean;
+  // Set when the orchestrator wants to abort this run mid-turn purely to
+  // splice in queued user messages. Suppresses the "[cancelled by user]"
+  // chat row and the run_status:error broadcast so the UI seamlessly rolls
+  // into the new run instead of showing an interruption.
+  silentCancel: boolean;
 }
 
-export function clearRun(sessionId: string, controller: AbortController) {
-  if (activeAbortControllers.get(sessionId) === controller) {
-    activeAbortControllers.delete(sessionId);
-  }
-}
+const activeRuns = new Map<string, ActiveRun>();
 
 export function cancelAiRun(sessionId: string): boolean {
-  const controller = activeAbortControllers.get(sessionId);
-  if (!controller) return false;
-  controller.abort();
-  activeAbortControllers.delete(sessionId);
+  const run = activeRuns.get(sessionId);
+  if (!run) return false;
+  // Deregister immediately so a follow-up sendUserMessage(s) — typically the
+  // queue-drain that triggered this cancel — sees an empty slot and starts a
+  // fresh run instead of pushing into the dying one. The consumer loop's
+  // `finally` is race-safe (it checks identity before deleting).
+  activeRuns.delete(sessionId);
+  run.abortController.abort();
+  try {
+    run.agentRun.close();
+  } catch {
+    // best-effort
+  }
   return true;
 }
 
 export function isAiRunning(sessionId: string): boolean {
-  return activeAbortControllers.has(sessionId);
+  const run = activeRuns.get(sessionId);
+  return !!run && run.inFlight;
+}
+
+// Called once on backend startup. The message_queue table survives backend
+// restarts but `activeRuns` doesn't, so any session that had queued items
+// from a previous process would otherwise sit idle forever — its drain
+// triggers (runner events) only fire while a run is alive. Walk every
+// stranded session and kick off a drain so the user's typed-but-never-sent
+// messages actually reach the agent on next boot.
+export function drainStrandedQueuesOnBoot(): void {
+  for (const sessionId of listSessionsWithQueuedItems()) {
+    if (!isAiRunning(sessionId)) {
+      tryDrainQueue(sessionId);
+    }
+  }
+}
+
+// Atomically drain the session's pending message queue and route the
+// drained items into the agent. Called at every turn boundary by the
+// runner's event loop, and immediately after enqueue when the user
+// types into an idle session.
+//
+// - inFlight === true → silent abort + restart with combined prompt
+// - inFlight === false (idle) or no active run → just push (or start fresh)
+//
+// Schedules itself off the call stack via queueMicrotask so the runner's
+// event handler can return before sendUserMessages tears down the run
+// it's still consuming events from.
+export function tryDrainQueue(sessionId: string): void {
+  const items = drainQueue(sessionId);
+  if (items.length === 0) return;
+  broadcastQueueState(sessionId);
+
+  const active = activeRuns.get(sessionId);
+  const interrupt = active?.inFlight === true;
+  // Use the most recently queued model — that's the user's freshest
+  // intent. null falls through to the session's existing model.
+  const model = items[items.length - 1]?.model ?? undefined;
+
+  queueMicrotask(() => {
+    void sendUserMessages(
+      sessionId,
+      items.map((i) => ({ content: i.content })),
+      model,
+      { interrupt },
+    ).catch((err) => {
+      // Send failed before the agent run was kicked off — re-enqueue the
+      // drained items so the user's typed messages aren't lost. Order is
+      // preserved by re-inserting in the original sequence; any items the
+      // user enqueued in the meantime stay after these.
+      for (const item of items) {
+        try {
+          enqueueMessage({
+            sessionId,
+            content: item.content,
+            model: item.model,
+          });
+        } catch {
+          // best-effort — if re-enqueue itself fails (e.g., session
+          // deleted mid-flight), there's nothing useful left to do.
+        }
+      }
+      broadcastQueueState(sessionId);
+      const msg = err instanceof Error ? err.message : String(err);
+      broadcast(`session:${sessionId}`, {
+        type: 'run_status',
+        sessionId,
+        status: 'error',
+        error: msg,
+      });
+    });
+  });
 }
 
 export function buildFallbackPrompt(history: HistoryMessage[], currentUserMessage: string): string {
@@ -355,11 +465,6 @@ export function buildFallbackPrompt(history: HistoryMessage[], currentUserMessag
   lines.push('');
   lines.push('Continue the conversation.');
   return lines.join('\n');
-}
-
-interface AssistantStream {
-  session_id?: string;
-  message?: { content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> };
 }
 
 const MENTION_PATTERN = /@([A-Za-z0-9_-]{10,})/g;
@@ -412,6 +517,32 @@ export async function sendUserMessage(
       .run(images.length, sessionId);
   }
 
+  const existing = activeRuns.get(sessionId);
+  if (existing) {
+    // Mid-run injection. The plan-item rollover depends on whether a turn
+    // is currently in flight: if yes, queue the new id and let the next
+    // `turn_complete` adopt it (so events for the current turn keep the old
+    // tag); if no (we're idle between turns), adopt immediately because no
+    // turn_complete will fire before the queued message's events arrive.
+    if (existing.inFlight) {
+      existing.pendingPlanItemId = resolvedPlanItemId;
+      existing.hasPendingPlanItem = true;
+    } else {
+      existing.currentPlanItemId = resolvedPlanItemId;
+      existing.pendingPlanItemId = null;
+      existing.hasPendingPlanItem = false;
+    }
+    existing.inFlight = true;
+    existing.agentRun.pushMessage({ text: content, images });
+    broadcast(`session:${sessionId}`, {
+      type: 'run_status',
+      sessionId,
+      status: 'started',
+    });
+    return userMsg;
+  }
+
+  // No active run — start a fresh one.
   runAssistant(ctx, content, resolvedPlanItemId, planItems, images, model).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     persistMessage({
@@ -431,31 +562,201 @@ export async function sendUserMessage(
   return userMsg;
 }
 
+interface BatchMessage {
+  content: string;
+  planItemId?: string | null;
+  images?: ImageInput[];
+}
+
+// Sends multiple queued user messages as ONE agent turn. Each message is
+// persisted separately (so the chat shows N USER bubbles) but we push a
+// single combined prompt to the AgentRun, so the agent answers all of them
+// in one response — matching Claude Code's "drained-at-turn-boundary" UX.
+//
+// Use the existing sendUserMessage for the single-message case; this is
+// only called by the frontend's queue-drain when the user has stacked
+// multiple prompts during a long-running turn.
+export async function sendUserMessages(
+  sessionId: string,
+  messages: BatchMessage[],
+  model?: string,
+  options?: { interrupt?: boolean },
+): Promise<Message[]> {
+  if (messages.length === 0) {
+    throw new Error('messages must be a non-empty array');
+  }
+
+  const ctx = loadSession(sessionId);
+  if (!ctx) throw new Error(`session ${sessionId} not found`);
+
+  // Interrupt mode: the chat UI saw an intra-turn `turn_milestone` and wants
+  // to splice these queued messages in *now* instead of waiting for the full
+  // multi-tool turn to finish. Silently abort the in-flight run so the
+  // [cancelled by user] row isn't persisted; the new run we start below
+  // resumes from the same agent_session_id and the agent picks up where it
+  // left off + the new prompts.
+  if (options?.interrupt) {
+    const inflight = activeRuns.get(sessionId);
+    if (inflight) {
+      inflight.silentCancel = true;
+      activeRuns.delete(sessionId);
+      inflight.abortController.abort();
+      try {
+        inflight.agentRun.close();
+      } catch {
+        // best-effort
+      }
+    }
+  }
+
+  if (messages.length === 1 && !options?.interrupt) {
+    const m = messages[0];
+    const single = await sendUserMessage(
+      sessionId,
+      m.content,
+      m.planItemId ?? null,
+      m.images ?? [],
+      model,
+    );
+    return [single];
+  }
+
+  const planItems = loadPlanItems(ctx.planId);
+
+  const persisted: Message[] = [];
+  const resolvedIds: (string | null)[] = [];
+  let totalImages = 0;
+  for (const m of messages) {
+    const pid = m.planItemId ?? resolveMentionedItem(m.content, planItems);
+    resolvedIds.push(pid);
+    persisted.push(
+      persistMessage({
+        sessionId,
+        planItemId: pid,
+        role: 'user',
+        content: m.content,
+      }),
+    );
+    totalImages += m.images?.length ?? 0;
+  }
+
+  if (totalImages > 0) {
+    getDb()
+      .prepare(
+        'UPDATE sessions SET next_image_number = next_image_number + ? WHERE id = ?',
+      )
+      .run(totalImages, sessionId);
+  }
+
+  // Combine into a single agent prompt. Each message keeps its own paragraph;
+  // the agent reads them as the user's stacked input over the previous turn.
+  // For interrupt-mode (mid-task drains), prepend a small marker so the
+  // system prompt's "natural aside" rule kicks in — without it the model
+  // doesn't know the previous task got paused, so it just answers tersely
+  // and forgets to offer to resume.
+  const joinedMessages = messages.map((m) => m.content).join('\n\n');
+  const combinedText = options?.interrupt
+    ? `[Interrupted mid-task]\n\n${joinedMessages}`
+    : joinedMessages;
+  const combinedImages = messages.flatMap((m) => m.images ?? []);
+  // Pin the agent's response to the LAST queued message — the most recent
+  // intent is the most likely owner of any tool/plan changes that follow.
+  const lastPlanItemId = resolvedIds[resolvedIds.length - 1];
+
+  const existing = activeRuns.get(sessionId);
+  if (existing) {
+    if (existing.inFlight) {
+      existing.pendingPlanItemId = lastPlanItemId;
+      existing.hasPendingPlanItem = true;
+    } else {
+      existing.currentPlanItemId = lastPlanItemId;
+      existing.pendingPlanItemId = null;
+      existing.hasPendingPlanItem = false;
+    }
+    existing.inFlight = true;
+    existing.agentRun.pushMessage({ text: combinedText, images: combinedImages });
+    broadcast(`session:${sessionId}`, {
+      type: 'run_status',
+      sessionId,
+      status: 'started',
+    });
+    return persisted;
+  }
+
+  // No active run — kick one off with the combined prompt.
+  runAssistant(
+    ctx,
+    combinedText,
+    lastPlanItemId,
+    planItems,
+    combinedImages,
+    model,
+  ).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    persistMessage({
+      sessionId,
+      planItemId: lastPlanItemId,
+      role: 'system',
+      content: `[runner error] ${message}`,
+    });
+    broadcast(`session:${sessionId}`, {
+      type: 'run_status',
+      sessionId,
+      status: 'error',
+      error: message,
+    });
+  });
+
+  return persisted;
+}
+
+interface AttemptResult {
+  // True when the attempt threw before producing useful output and a fallback
+  // (no-resume) attempt should be tried next. False when the attempt either
+  // succeeded, was cancelled, or errored after streaming started.
+  shouldFallback: boolean;
+  cancelled: boolean;
+  // Mirrors ActiveRun.silentCancel — a cancellation initiated to splice in
+  // queued messages, not by the user pressing Stop. runAssistant uses this
+  // to suppress the chat-visible "[cancelled by user]" row + error event.
+  silent: boolean;
+}
+
 async function runAttempt(
   ctx: SessionContext,
   prompt: string,
   images: ImageInput[],
-  planItemId: string | null,
+  initialPlanItemId: string | null,
   systemPrompt: string,
   useResume: boolean,
-  abortController: AbortController,
   model?: string,
-): Promise<string> {
+): Promise<AttemptResult> {
   const adapter = getAgentAdapter(ctx.agent);
-  const run = adapter.run({
+  const abortController = new AbortController();
+  const agentRun = adapter.run({
     cwd: ctx.cwd,
-    prompt,
-    images,
     systemPrompt,
     model,
     resume: useResume ? ctx.claudeSessionId : null,
     abortController,
+    initialPrompt: { text: prompt, images },
   });
 
-  let totalText = '';
+  const active: ActiveRun = {
+    agentRun,
+    abortController,
+    currentPlanItemId: initialPlanItemId,
+    pendingPlanItemId: null,
+    hasPendingPlanItem: false,
+    inFlight: true,
+    silentCancel: false,
+  };
+  activeRuns.set(ctx.id, active);
+
   let streamMsgId: string | null = null;
   let streamContent = '';
   let streamModel: string | null = null;
+  let producedAnyContent = false;
 
   function closeStream() {
     if (!streamMsgId) return;
@@ -485,7 +786,7 @@ async function runAttempt(
     if (streamMsgId) return streamMsgId;
     const created = persistMessage({
       sessionId: ctx.id,
-      planItemId,
+      planItemId: active.currentPlanItemId,
       role: 'assistant',
       content: '',
     });
@@ -494,8 +795,10 @@ async function runAttempt(
     return created.id;
   }
 
+  let attemptError: unknown = null;
+
   try {
-    for await (const ev of run.events) {
+    for await (const ev of agentRun.events as AsyncIterable<NormalizedEvent>) {
       if (abortController.signal.aborted) break;
       switch (ev.type) {
         case 'session_id':
@@ -507,7 +810,7 @@ async function runAttempt(
         case 'text_delta': {
           const id = ensureStream();
           streamContent += ev.text;
-          totalText += ev.text;
+          producedAnyContent = true;
           broadcast(`session:${ctx.id}`, {
             type: 'stream_chunk',
             sessionId: ctx.id,
@@ -534,11 +837,12 @@ async function runAttempt(
           const summary = ev.summary ?? ev.name;
           persistMessage({
             sessionId: ctx.id,
-            planItemId,
+            planItemId: active.currentPlanItemId,
             role: 'tool',
             content: summary,
             toolUse: { name: ev.name, input: ev.input },
           });
+          producedAnyContent = true;
           broadcast(`session:${ctx.id}`, {
             type: 'run_log',
             sessionId: ctx.id,
@@ -555,15 +859,53 @@ async function runAttempt(
             stream: ev.stream,
             chunk: text,
           });
+          // Tool result is back, the agent is about to think about its next
+          // step — a natural break point to splice in any queued mid-task
+          // messages. Critical for tool-heavy turns where the agent never
+          // streams free text (e.g., "analyze the project" runs 10+ Reads
+          // in a row), so message_stop alone wouldn't trigger a drain.
+          tryDrainQueue(ctx.id);
           break;
         }
-        case 'message_stop':
+        case 'message_stop': {
+          // Only treat this as a "natural break" if we just closed a real
+          // assistant text stream. The Claude adapter also yields
+          // message_stop right before each tool_use block (so we close any
+          // in-flight text first); draining there interrupts the agent
+          // before the user has seen ANY output, which makes the first
+          // turn's work disappear from chat. Limit drains to post-text
+          // breaks — same shape as Claude Code's "agent said something,
+          // now is a fine time to splice in".
+          const justClosedText = streamMsgId !== null;
           closeStream();
+          if (justClosedText) {
+            tryDrainQueue(ctx.id);
+          }
+          break;
+        }
+        case 'turn_complete':
+          closeStream();
+          // Adopt the next queued plan item (if any) so events for the
+          // upcoming turn land under it.
+          if (active.hasPendingPlanItem) {
+            active.currentPlanItemId = active.pendingPlanItemId;
+            active.pendingPlanItemId = null;
+            active.hasPendingPlanItem = false;
+          }
+          active.inFlight = false;
+          broadcast(`session:${ctx.id}`, {
+            type: 'run_status',
+            sessionId: ctx.id,
+            status: 'finished',
+          });
+          // Anything the user typed during this turn now goes into the
+          // next one — no interrupt needed, the run is idle.
+          tryDrainQueue(ctx.id);
           break;
         case 'final_text_fallback': {
           const id = ensureStream();
           streamContent += ev.text;
-          totalText += ev.text;
+          producedAnyContent = true;
           broadcast(`session:${ctx.id}`, {
             type: 'stream_chunk',
             sessionId: ctx.id,
@@ -577,22 +919,42 @@ async function runAttempt(
           break;
       }
     }
+  } catch (err) {
+    attemptError = err;
   } finally {
+    closeStream();
     try {
-      run.close();
+      agentRun.close();
     } catch {
       // best-effort cleanup
     }
+    if (activeRuns.get(ctx.id) === active) {
+      activeRuns.delete(ctx.id);
+    }
   }
 
-  closeStream();
-  return totalText;
+  if (abortController.signal.aborted) {
+    return {
+      shouldFallback: false,
+      cancelled: true,
+      silent: active.silentCancel,
+    };
+  }
+  if (attemptError) {
+    // Fall back only when resume was being attempted AND we never streamed
+    // any meaningful output (the resume token was stale on the agent side).
+    if (useResume && !producedAnyContent) {
+      return { shouldFallback: true, cancelled: false, silent: false };
+    }
+    throw attemptError;
+  }
+  return { shouldFallback: false, cancelled: false, silent: false };
 }
 
 async function runAssistant(
   ctx: SessionContext,
   prompt: string,
-  planItemId: string | null,
+  initialPlanItemId: string | null,
   planItems: PlanItemLite[],
   images: ImageInput[] = [],
   model?: string,
@@ -608,26 +970,28 @@ async function runAssistant(
     envVarsContext +
     (pinsContext ? `\n\n${pinsContext}` : '');
 
-  const abortController = registerRun(ctx.id);
+  let result: AttemptResult = { shouldFallback: false, cancelled: false, silent: false };
 
   try {
-    let finalText = '';
-
     if (ctx.claudeSessionId) {
       try {
-        finalText = await runAttempt(
+        result = await runAttempt(
           ctx,
           prompt,
           images,
-          planItemId,
+          initialPlanItemId,
           systemPrompt,
           true,
-          abortController,
           model,
         );
       } catch (err) {
-        if (abortController.signal.aborted) throw err;
-        const errMsg = err instanceof Error ? err.message : String(err);
+        // Hard error after the attempt produced output — surface as runner
+        // error rather than fall back blindly.
+        throw err;
+      }
+
+      if (result.shouldFallback) {
+        const errMsg = '(stale resume token)';
         broadcast(`session:${ctx.id}`, {
           type: 'run_log',
           sessionId: ctx.id,
@@ -639,7 +1003,16 @@ async function runAssistant(
       }
     }
 
-    if (!ctx.claudeSessionId && !abortController.signal.aborted) {
+    if (!ctx.claudeSessionId && !result.cancelled) {
+      // Fallback race guard: between the first attempt's deregister and the
+      // second attempt's register, an interrupt path may have spliced in a
+      // brand-new run for this session (silent-cancel saw nothing in
+      // activeRuns to abort, so it just started fresh). If that happened,
+      // the new run is already handling the user's current intent — bail
+      // out instead of starting a competing fallback.
+      if (activeRuns.has(ctx.id)) {
+        return;
+      }
       const userMsgRow = getDb()
         .prepare(
           'SELECT id FROM messages WHERE session_id = ? AND role = ? ORDER BY created_at DESC LIMIT 1',
@@ -647,23 +1020,28 @@ async function runAssistant(
         .get(ctx.id, 'user') as { id: string } | undefined;
       const history = loadRecentHistory(ctx.id, userMsgRow?.id ?? '');
       const fallbackPrompt =
-        history.length > 0 ? buildFallbackPrompt(history, prompt) : prompt;
-      finalText = await runAttempt(
+        history.length > 0 && result.shouldFallback
+          ? buildFallbackPrompt(history, prompt)
+          : prompt;
+      result = await runAttempt(
         ctx,
         fallbackPrompt,
         images,
-        planItemId,
+        initialPlanItemId,
         systemPrompt,
         false,
-        abortController,
         model,
       );
     }
 
-    if (abortController.signal.aborted) {
+    if (result.cancelled) {
+      // Silent cancel = orchestrator interrupted us to splice in queued
+      // messages. The replacement run is already starting; suppress chat
+      // noise so the UI looks like one seamless conversation.
+      if (result.silent) return;
       persistMessage({
         sessionId: ctx.id,
-        planItemId,
+        planItemId: initialPlanItemId,
         role: 'system',
         content: '[cancelled by user]',
       });
@@ -675,36 +1053,21 @@ async function runAssistant(
       });
       return;
     }
-
-    // Streaming already persisted the assistant message in runAttempt.
-    // finalText is retained for possible callers but no extra persist here.
-    void finalText;
-
+    // Run-level `finished` covers the case where the agent's event stream
+    // ended without a `turn_complete` (mock SDK in tests, or rare SDK edge
+    // cases). Per-turn `finished` is already broadcast inside `runAttempt`
+    // on `turn_complete`, so this is a safety net rather than a duplicate
+    // in normal production flow.
     broadcast(`session:${ctx.id}`, {
       type: 'run_status',
       sessionId: ctx.id,
       status: 'finished',
     });
   } catch (err) {
-    if (abortController.signal.aborted) {
-      persistMessage({
-        sessionId: ctx.id,
-        planItemId,
-        role: 'system',
-        content: '[cancelled by user]',
-      });
-      broadcast(`session:${ctx.id}`, {
-        type: 'run_status',
-        sessionId: ctx.id,
-        status: 'error',
-        error: 'cancelled',
-      });
-      return;
-    }
     const errorMsg = err instanceof Error ? err.message : String(err);
     persistMessage({
       sessionId: ctx.id,
-      planItemId,
+      planItemId: initialPlanItemId,
       role: 'system',
       content: `[runner error] ${errorMsg}`,
     });
@@ -714,7 +1077,5 @@ async function runAssistant(
       status: 'error',
       error: errorMsg,
     });
-  } finally {
-    clearRun(ctx.id, abortController);
   }
 }

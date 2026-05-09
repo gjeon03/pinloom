@@ -128,6 +128,25 @@ const sdk = {
   },
 };
 
+// Mock that consumes the runner's prompt AsyncIterable just like the real SDK
+// does. Lets us assert that mid-run pushMessage queues into the same query()
+// invocation instead of starting a fresh one.
+function streamConsumingPrompts(
+  handler: (prompt: unknown, idx: number) => unknown[],
+): QueryImpl {
+  return (args: QueryArgs) => {
+    const promptIter = args.prompt as AsyncIterable<unknown>;
+    return (async function* () {
+      let idx = 0;
+      for await (const p of promptIter) {
+        const messages = handler(p, idx);
+        idx++;
+        for (const m of messages) yield m;
+      }
+    })() as unknown as QueryReturn;
+  };
+}
+
 function abortAwaitingStream(args: QueryArgs): QueryReturn {
   // Hangs forever until the abortController fires, then rejects so the runner
   // exits its for-await loop. Models the SDK's expected abort semantics.
@@ -243,8 +262,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Safety net so a leaked in-flight run can't poison the next test.
-  // (Tests are expected to wait for run_status finished/error themselves.)
+  // The activeRuns map is module-private state and persists across tests.
+  // Cancel any leftover run so the next test starts with a clean slate
+  // (otherwise a queued mid-run mock would receive the next test's prompts).
+  cancelAiRun('s1');
 });
 
 describe('sendUserMessage — user message persistence', () => {
@@ -781,6 +802,210 @@ describe('runAssistant — resume + fallback path', () => {
         e.type === 'run_log' && e.chunk.includes('[resume failed'),
     );
     expect(fallbackLog?.stream).toBe('stderr');
+    cap.stop();
+  });
+});
+
+describe('sendUserMessage — mid-run message injection', () => {
+  it('queues the second message into the same SDK call instead of restarting', async () => {
+    // Two back-to-back sendUserMessage calls should reuse a single query()
+    // invocation: the runner pushes the second prompt onto the AsyncIterable
+    // the SDK is already consuming. The original "abort + restart" model
+    // would have produced two query() calls.
+    const promptsSeen: string[] = [];
+    setQueryImpl(
+      streamConsumingPrompts((p, idx) => {
+        const block = (p as { message?: { content?: Array<{ text?: string }> } })
+          .message?.content?.[0];
+        if (block?.text) promptsSeen.push(block.text);
+        return [
+          sdk.textDelta(`reply-${idx}`),
+          sdk.messageStop(),
+          sdk.result({ text: `reply-${idx}` }),
+        ];
+      }),
+    );
+    seedProject('p1');
+    seedSession('s1', 'p1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'first');
+    // Wait for the first turn to finish (turn_complete fires `finished`).
+    await waitFor(
+      () =>
+        cap.events.filter(
+          (e) => e.type === 'run_status' && e.status === 'finished',
+        ).length >= 1,
+    );
+
+    await sendUserMessage('s1', 'second');
+    await waitFor(
+      () =>
+        cap.events.filter(
+          (e) => e.type === 'run_status' && e.status === 'finished',
+        ).length >= 2,
+    );
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(promptsSeen).toEqual(['first', 'second']);
+
+    const replies = getDb()
+      .prepare(
+        `SELECT content FROM messages WHERE session_id = ? AND role = 'assistant' ORDER BY created_at ASC`,
+      )
+      .all('s1') as { content: string }[];
+    expect(replies.map((r) => r.content)).toEqual(['reply-0', 'reply-1']);
+    cap.stop();
+  });
+
+  it('rolls over plan_item_id at turn_complete so the queued message owns its responses', async () => {
+    // Mid-run injection must not bleed events from the previous turn into the
+    // new plan item. The runner adopts the queued planItemId only at
+    // turn_complete, so events between push and turn_complete still belong to
+    // the in-flight turn.
+    setQueryImpl(
+      streamConsumingPrompts((_p, idx) => {
+        return [
+          sdk.assistant({
+            blocks: [
+              {
+                type: 'tool_use',
+                name: 'Bash',
+                input: { command: `echo ${idx}` },
+              },
+            ],
+          }),
+          sdk.toolResult(`out ${idx}`),
+          sdk.textDelta(`reply-${idx}`),
+          sdk.messageStop(),
+          sdk.result({ text: `reply-${idx}` }),
+        ];
+      }),
+    );
+    seedProject('p1');
+    seedPlan('pl1', 'p1');
+    seedPlanItem('itemAAAAAA', 'pl1', 'A');
+    seedPlanItem('itemBBBBBB', 'pl1', 'B');
+    seedSession('s1', 'p1', 'pl1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'turn 1', 'itemAAAAAA');
+    await waitFor(
+      () =>
+        cap.events.filter(
+          (e) => e.type === 'run_status' && e.status === 'finished',
+        ).length >= 1,
+    );
+
+    await sendUserMessage('s1', 'turn 2', 'itemBBBBBB');
+    await waitFor(
+      () =>
+        cap.events.filter(
+          (e) => e.type === 'run_status' && e.status === 'finished',
+        ).length >= 2,
+    );
+
+    const rows = getDb()
+      .prepare(
+        `SELECT role, content, plan_item_id FROM messages
+         WHERE session_id = ? ORDER BY created_at ASC`,
+      )
+      .all('s1') as Array<{ role: string; content: string; plan_item_id: string | null }>;
+
+    const turn1Tool = rows.find((r) => r.role === 'tool' && r.content === 'Bash: echo 0');
+    const turn1Reply = rows.find((r) => r.role === 'assistant' && r.content === 'reply-0');
+    const turn2Tool = rows.find((r) => r.role === 'tool' && r.content === 'Bash: echo 1');
+    const turn2Reply = rows.find((r) => r.role === 'assistant' && r.content === 'reply-1');
+
+    expect(turn1Tool?.plan_item_id).toBe('itemAAAAAA');
+    expect(turn1Reply?.plan_item_id).toBe('itemAAAAAA');
+    expect(turn2Tool?.plan_item_id).toBe('itemBBBBBB');
+    expect(turn2Reply?.plan_item_id).toBe('itemBBBBBB');
+    cap.stop();
+  });
+
+  it('keeps in-flight events under the old plan item when a push lands mid-turn', async () => {
+    // Push while inFlight=true: pending id is queued, and the runner only
+    // adopts it on the NEXT turn_complete. Events that fire between push and
+    // turn_complete must still belong to the in-flight turn's plan item.
+    const turn1Gate = { resolve: (() => {}) as () => void };
+    const turn1Wait = new Promise<void>((r) => {
+      turn1Gate.resolve = r;
+    });
+
+    setQueryImpl((args) => {
+      const promptIter = args.prompt as AsyncIterable<unknown>;
+      return (async function* () {
+        let idx = 0;
+        for await (const _p of promptIter) {
+          if (idx === 0) {
+            // Mid-turn-1 events: the test pushes turn 2 in between these.
+            yield sdk.assistant({
+              blocks: [
+                { type: 'tool_use', name: 'Bash', input: { command: 'echo turn1-tool' } },
+              ],
+            });
+            // Hand control back so the test can push turn 2 while turn 1 is
+            // still streaming.
+            await turn1Wait;
+            yield sdk.textDelta('reply-turn1');
+            yield sdk.messageStop();
+            yield sdk.result({ text: 'reply-turn1' });
+          } else {
+            yield sdk.textDelta('reply-turn2');
+            yield sdk.messageStop();
+            yield sdk.result({ text: 'reply-turn2' });
+          }
+          idx++;
+        }
+      })() as unknown as QueryReturn;
+    });
+
+    seedProject('p1');
+    seedPlan('pl1', 'p1');
+    seedPlanItem('itemAAAAAA', 'pl1', 'A');
+    seedPlanItem('itemBBBBBB', 'pl1', 'B');
+    seedSession('s1', 'p1', 'pl1');
+
+    const cap = captureEvents('session:s1');
+    await sendUserMessage('s1', 'turn 1', 'itemAAAAAA');
+
+    // Wait until the tool message for turn 1 is persisted — that's our cue
+    // that we're solidly mid-turn.
+    await waitFor(() =>
+      cap.events.some(
+        (e) => e.type === 'message' && e.message.role === 'tool',
+      ),
+    );
+
+    await sendUserMessage('s1', 'turn 2', 'itemBBBBBB');
+    // Now release turn 1 to finish.
+    turn1Gate.resolve();
+
+    await waitFor(
+      () =>
+        cap.events.filter(
+          (e) => e.type === 'run_status' && e.status === 'finished',
+        ).length >= 2,
+    );
+
+    const rows = getDb()
+      .prepare(
+        `SELECT role, content, plan_item_id FROM messages
+         WHERE session_id = ? ORDER BY created_at ASC`,
+      )
+      .all('s1') as Array<{ role: string; content: string; plan_item_id: string | null }>;
+
+    const tool = rows.find((r) => r.role === 'tool');
+    const turn1Reply = rows.find((r) => r.role === 'assistant' && r.content === 'reply-turn1');
+    const turn2Reply = rows.find((r) => r.role === 'assistant' && r.content === 'reply-turn2');
+
+    // Tool fired BEFORE the push → must stay under A.
+    expect(tool?.plan_item_id).toBe('itemAAAAAA');
+    // Turn 1 reply fired AFTER the push but before turn_complete → still A.
+    expect(turn1Reply?.plan_item_id).toBe('itemAAAAAA');
+    // Turn 2 reply fired AFTER turn_complete → B.
+    expect(turn2Reply?.plan_item_id).toBe('itemBBBBBB');
     cap.stop();
   });
 });

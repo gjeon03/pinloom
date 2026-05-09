@@ -4,6 +4,7 @@
 // agnostic.
 
 import type { ImageInput } from '../runner-types.js';
+import type { UserPrompt } from './message-stream.js';
 
 export type NormalizedEvent =
   // Tells us the resume token / thread id the agent is using. Persisted to
@@ -12,14 +13,9 @@ export type NormalizedEvent =
   // Incremental text — Claude streams these as text_delta. Multiple events
   // accumulate into a single assistant message.
   | { type: 'text_delta'; text: string }
-  // Whole text emitted in one shot (Codex agent_message). Treated as a
-  // single text_delta + message_stop equivalent at the orchestrator layer.
-  | { type: 'text_complete'; text: string }
   | { type: 'thinking_start' }
   | { type: 'thinking_delta'; text: string }
-  // Tool the agent is invoking (Bash/Read/Edit/Write etc). `name` and
-  // `input` mirror Claude's shape; the codex adapter packs its
-  // file_change / command_execution events into the same shape.
+  // Tool the agent is invoking (Bash/Read/Edit/Write etc).
   | {
       type: 'tool_use';
       name: string;
@@ -28,9 +24,14 @@ export type NormalizedEvent =
     }
   // Output from a tool call. `stream` mirrors Claude's stdout/stderr split.
   | { type: 'tool_result'; text: string; stream: 'stdout' | 'stderr' }
-  // Marks the end of an in-flight assistant message (Claude message_stop or
-  // Codex turn.completed). Orchestrator finalizes the streamed row here.
+  // Marks the end of an in-flight assistant message block (Claude
+  // message_stop or each agent_message in Codex). Multiple of these can fire
+  // within a single turn — finalize the streaming row, but stay running.
   | { type: 'message_stop' }
+  // Marks the end of a full turn — the agent has nothing more to say until
+  // the next user prompt arrives. Used by the runner to roll over the
+  // pending plan item id of a queued mid-run message.
+  | { type: 'turn_complete' }
   // Rare Claude case: the SDK's final `result` event reports more text than
   // we accumulated via deltas. Orchestrator appends the missing tail.
   | { type: 'final_text_fallback'; text: string }
@@ -39,21 +40,32 @@ export type NormalizedEvent =
 
 export interface AgentRunArgs {
   cwd: string;
-  prompt: string;
-  images?: ImageInput[];
   systemPrompt: string;
   model?: string;
   /** Prior session/thread id; null = start fresh. */
   resume?: string | null;
   abortController: AbortController;
+  /** First user message that kicks the run off. */
+  initialPrompt: UserPrompt;
 }
 
 export interface AgentRun {
+  /** Stream of normalized events from the agent. Ends when the run stops. */
   events: AsyncIterable<NormalizedEvent>;
-  close: () => void;
+  /** Inject another user message mid-run (no abort, no restart). */
+  pushMessage(prompt: UserPrompt): void;
+  /**
+   * Signal "no more messages will arrive" — adapter wraps up after the
+   * current turn finishes. Idempotent.
+   */
+  close(): void;
 }
 
 export interface AgentAdapter {
   readonly name: 'claude' | 'codex';
   run(args: AgentRunArgs): AgentRun;
 }
+
+// Re-export so callers don't need to know which file ImageInput lives in.
+export type { ImageInput };
+export type { UserPrompt };
