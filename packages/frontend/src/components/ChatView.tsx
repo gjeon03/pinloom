@@ -772,12 +772,10 @@ export function ChatView({ session, onPinChange }: Props) {
               <button
                 type="button"
                 onClick={() => {
-                  // Remove every queued item one by one. Backend broadcasts
-                  // queue_updated after each delete, so the UI updates as
-                  // they drop.
-                  for (const item of queue) {
-                    void api.removeQueueItem(session.id, item.id).catch(() => {});
-                  }
+                  // Single bulk DELETE: backend wipes the table for this
+                  // session and fires one queue_updated broadcast instead
+                  // of N parallel ones.
+                  void api.clearQueue(session.id).catch(() => {});
                 }}
                 className="hover:text-red-400"
               >
@@ -797,11 +795,18 @@ export function ChatView({ session, onPinChange }: Props) {
                 </span>
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
+                    // Await removal first so the item never appears both in
+                    // the queue and in the textarea — if the DELETE fails
+                    // (network/404), keep the queue intact and surface the
+                    // error rather than silently double-staging the text.
+                    try {
+                      await api.removeQueueItem(session.id, item.id);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : String(err));
+                      return;
+                    }
                     setInput(item.content);
-                    void api
-                      .removeQueueItem(session.id, item.id)
-                      .catch(() => {});
                   }}
                   className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-[11px]"
                   title="Move back to input to edit"

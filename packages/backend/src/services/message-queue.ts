@@ -63,9 +63,43 @@ interface EnqueueArgs {
   model?: string | null;
 }
 
+// Cap a single queued message at ~200KB. The combined drain joins items
+// with `\n\n`, so unbounded content here is what the agent sees in a
+// single turn; pathological pastes (megabyte logs, etc.) shouldn't be
+// silently accepted.
+const MAX_QUEUE_CONTENT_BYTES = 200 * 1024;
+
+// Distinct error types so the route layer can map to the right HTTP code.
+export class SessionNotFoundError extends Error {
+  constructor(public readonly sessionId: string) {
+    super(`session ${sessionId} not found`);
+    this.name = 'SessionNotFoundError';
+  }
+}
+
+export class InvalidQueueContentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidQueueContentError';
+  }
+}
+
 export function enqueueMessage(args: EnqueueArgs): QueueItem {
   if (args.content.trim().length === 0) {
-    throw new Error('content must be non-empty');
+    throw new InvalidQueueContentError('content must be non-empty');
+  }
+  if (Buffer.byteLength(args.content, 'utf8') > MAX_QUEUE_CONTENT_BYTES) {
+    throw new InvalidQueueContentError(
+      `content exceeds ${MAX_QUEUE_CONTENT_BYTES} bytes`,
+    );
+  }
+  // Verify the session exists up front: an FK violation here would surface
+  // as an opaque 500 from Fastify, but the right answer is 404.
+  const sessionRow = getDb()
+    .prepare('SELECT 1 FROM sessions WHERE id = ?')
+    .get(args.sessionId);
+  if (!sessionRow) {
+    throw new SessionNotFoundError(args.sessionId);
   }
   const id = nanoid();
   const now = new Date().toISOString();
