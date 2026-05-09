@@ -18,6 +18,13 @@ import {
 import type { Project, Session, Team, TeamMember } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from '../components/AgentBadge.js';
+import { DirectoryPicker } from '../components/DirectoryPicker.js';
+
+function basenameOfPath(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  const parts = trimmed.split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? 'project';
+}
 
 interface SessionLookup {
   sessionsById: Record<string, Session>;
@@ -821,19 +828,43 @@ interface NewSessionFormProps {
 // Inline session creation surfaced inside the orchestrator/worker pickers
 // so users don't have to navigate to a project page and come back. The
 // form is intentionally minimal — project + agent + optional title; the
-// session inherits everything else from the project's defaults.
+// session inherits everything else from the project's defaults. If the
+// user has no projects yet (or wants a new one for this session), the
+// "+ New project" button opens the same DirectoryPicker the sidebar uses.
 function NewSessionForm({ projects, onCancel, onCreated }: NewSessionFormProps) {
+  // Local copy so a project created inline is immediately visible in the
+  // dropdown without round-tripping through the parent.
+  const [localProjects, setLocalProjects] = useState<Project[]>(projects);
+  useEffect(() => {
+    setLocalProjects((prev) => {
+      // Merge — prefer local state for any project we just created so a
+      // re-prop from the parent doesn't drop our optimistic addition.
+      const ids = new Set(prev.map((p) => p.id));
+      const merged = [...prev];
+      for (const p of projects) if (!ids.has(p.id)) merged.push(p);
+      return merged;
+    });
+  }, [projects]);
+
   const sortedProjects = useMemo(
-    () => [...projects].sort((a, b) => a.name.localeCompare(b.name)),
-    [projects],
+    () => [...localProjects].sort((a, b) => a.name.localeCompare(b.name)),
+    [localProjects],
   );
   const [projectId, setProjectId] = useState<string>(
     sortedProjects[0]?.id ?? '',
   );
+  // Keep selection in sync as projects change (e.g., user creates one).
+  useEffect(() => {
+    if (!projectId && sortedProjects[0]) {
+      setProjectId(sortedProjects[0].id);
+    }
+  }, [sortedProjects, projectId]);
+
   const [agent, setAgent] = useState<'claude' | 'codex'>('claude');
   const [title, setTitle] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [showDirPicker, setShowDirPicker] = useState(false);
 
   async function submit() {
     if (!projectId || submitting) return;
@@ -852,42 +883,88 @@ function NewSessionForm({ projects, onCancel, onCreated }: NewSessionFormProps) 
     }
   }
 
+  async function handleDirChosen(cwd: string) {
+    setShowDirPicker(false);
+    setErr(null);
+    try {
+      const name = basenameOfPath(cwd);
+      const created = await api.createProject({ name, cwd, groupId: null });
+      setLocalProjects((prev) => [created, ...prev]);
+      setProjectId(created.id);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Empty state: no projects exist yet → show a single CTA that opens
+  // the directory picker. After creation we drop into the regular form.
   if (sortedProjects.length === 0) {
     return (
-      <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
-        <p className="text-[var(--color-ink-muted)]">
-          Create a project first — sessions are scoped to a project.
-        </p>
-        <div className="mt-2 flex justify-end">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-          >
-            Back
-          </button>
+      <>
+        <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2 text-xs">
+          <p className="text-[var(--color-ink-muted)]">
+            No projects yet. Pick a directory to start one — pinloom uses it as
+            the session's working directory.
+          </p>
+          {err && <p className="text-red-400">{err}</p>}
+          <div className="flex justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDirPicker(true)}
+              className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium flex items-center gap-1"
+            >
+              <Plus size={11} />
+              Pick directory…
+            </button>
+          </div>
         </div>
-      </div>
+        {showDirPicker && (
+          <DirectoryPicker
+            onSelect={handleDirChosen}
+            onClose={() => setShowDirPicker(false)}
+          />
+        )}
+      </>
     );
   }
 
   return (
+    <>
     <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2.5">
       <div>
         <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
           Project
         </label>
-        <select
-          value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
-        >
-          {sortedProjects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+        <div className="flex gap-1.5">
+          <select
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
+          >
+            {sortedProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setShowDirPicker(true)}
+            title="Create new project"
+            aria-label="Create new project"
+            className="rounded border border-[var(--color-border)] px-2 py-1.5 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1"
+          >
+            <Plus size={11} />
+            New
+          </button>
+        </div>
       </div>
       <div>
         <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
@@ -944,6 +1021,13 @@ function NewSessionForm({ projects, onCancel, onCreated }: NewSessionFormProps) 
         </button>
       </div>
     </div>
+    {showDirPicker && (
+      <DirectoryPicker
+        onSelect={handleDirChosen}
+        onClose={() => setShowDirPicker(false)}
+      />
+    )}
+    </>
   );
 }
 
