@@ -7,6 +7,7 @@ import {
   FolderInput,
   MoreVertical,
   Network,
+  Pencil,
   Plus,
   Trash2,
   UserMinus,
@@ -21,7 +22,29 @@ import { Tooltip } from './Tooltip.js';
 
 type TeamRole =
   | { kind: 'orchestrator'; teamId: string; teamName: string }
-  | { kind: 'worker'; teamId: string; teamName: string; alias: string };
+  | {
+      kind: 'worker';
+      teamId: string;
+      teamName: string;
+      alias: string;
+      persona: string | null;
+      tags: string[];
+    };
+
+// Splits a comma-separated tags input into a clean array. Trims, drops
+// empties, dedupes — server-side validation still applies pattern rules
+// (lowercase, alnum + - / _) so a bad token surfaces an error there.
+function parseTagsInput(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[,\s]+/)) {
+    const t = part.trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
 
 function buildTeamRoles(teams: Team[]): Map<string, TeamRole> {
   const map = new Map<string, TeamRole>();
@@ -37,6 +60,8 @@ function buildTeamRoles(teams: Team[]): Map<string, TeamRole> {
         teamId: team.id,
         teamName: team.name,
         alias: m.alias,
+        persona: m.persona,
+        tags: m.tags,
       });
     }
   }
@@ -110,6 +135,14 @@ export function SessionTabs({
   const [addWorkerModal, setAddWorkerModal] = useState<{
     teamId: string;
     teamName: string;
+  } | null>(null);
+  const [editWorkerModal, setEditWorkerModal] = useState<{
+    teamId: string;
+    teamName: string;
+    sessionId: string;
+    alias: string;
+    persona: string | null;
+    tags: string[];
   } | null>(null);
   const navigate = useNavigate();
 
@@ -618,42 +651,72 @@ export function SessionTabs({
                   </a>
                 </>
               )}
-              {role?.kind === 'worker' && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const confirmed = confirm(
-                      `Remove @${role.alias} from "${role.teamName}"? The chat session stays intact and can be re-added later.`,
-                    );
-                    if (!confirmed) return;
-                    setTabMenu(null);
-                    try {
-                      await api.removeTeamMember(
-                        role.teamId,
-                        tabMenu.sessionId,
-                      );
-                      // Refresh badges/sidebar/canvas — the team membership
-                      // change is invisible to the strip otherwise.
-                      window.dispatchEvent(
-                        new Event('pinloom:teams-changed'),
-                      );
-                    } catch (err) {
-                      setError(
-                        err instanceof Error ? err.message : String(err),
-                      );
-                    }
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
-                >
-                  <UserMinus size={12} />
-                  <span className="flex-1">
-                    Remove from team
-                    <span className="ml-1 text-[var(--color-ink-muted)]">
-                      ({role.teamName})
-                    </span>
-                  </span>
-                </button>
-              )}
+              {role?.kind === 'worker' &&
+                (() => {
+                  // Resolve full membership row (persona/tags) from the
+                  // teams cache the strip already keeps in state.
+                  const team = teams.find((t) => t.id === role.teamId);
+                  const member = team?.members.find(
+                    (m) => m.sessionId === tabMenu.sessionId,
+                  );
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!member) return;
+                          setEditWorkerModal({
+                            teamId: role.teamId,
+                            teamName: role.teamName,
+                            sessionId: tabMenu.sessionId,
+                            alias: member.alias,
+                            persona: member.persona,
+                            tags: member.tags,
+                          });
+                          setTabMenu(null);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
+                      >
+                        <Pencil size={12} />
+                        <span className="flex-1">Edit persona &amp; tags…</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const confirmed = confirm(
+                            `Remove @${role.alias} from "${role.teamName}"? The chat session stays intact and can be re-added later.`,
+                          );
+                          if (!confirmed) return;
+                          setTabMenu(null);
+                          try {
+                            await api.removeTeamMember(
+                              role.teamId,
+                              tabMenu.sessionId,
+                            );
+                            window.dispatchEvent(
+                              new Event('pinloom:teams-changed'),
+                            );
+                          } catch (err) {
+                            setError(
+                              err instanceof Error
+                                ? err.message
+                                : String(err),
+                            );
+                          }
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
+                      >
+                        <UserMinus size={12} />
+                        <span className="flex-1">
+                          Remove from team
+                          <span className="ml-1 text-[var(--color-ink-muted)]">
+                            ({role.teamName})
+                          </span>
+                        </span>
+                      </button>
+                    </>
+                  );
+                })()}
               {canDelete && session && (
                 <>
                   <div className="my-1 border-t border-[var(--color-border)]/50" />
@@ -674,6 +737,21 @@ export function SessionTabs({
             </div>
           );
         })()}
+      {editWorkerModal && (
+        <EditWorkerModal
+          teamId={editWorkerModal.teamId}
+          teamName={editWorkerModal.teamName}
+          sessionId={editWorkerModal.sessionId}
+          initialAlias={editWorkerModal.alias}
+          initialPersona={editWorkerModal.persona}
+          initialTags={editWorkerModal.tags}
+          onClose={() => setEditWorkerModal(null)}
+          onSaved={() => {
+            setEditWorkerModal(null);
+            window.dispatchEvent(new Event('pinloom:teams-changed'));
+          }}
+        />
+      )}
       {addWorkerModal && (
         <AddWorkerFromTabModal
           teamId={addWorkerModal.teamId}
@@ -884,6 +962,8 @@ function AddWorkerFromTabModal({
   const [boundIds, setBoundIds] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [alias, setAlias] = useState('');
+  const [persona, setPersona] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   // Errors stay inside the modal so the user sees them where they took
@@ -954,7 +1034,12 @@ function AddWorkerFromTabModal({
     setError(null);
     setSubmitting(true);
     try {
-      await api.addTeamMember(teamId, { sessionId: selected, alias: a });
+      await api.addTeamMember(teamId, {
+        sessionId: selected,
+        alias: a,
+        persona: persona.trim() || null,
+        tags: parseTagsInput(tagsInput),
+      });
       onAdded();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1028,6 +1113,37 @@ function AddWorkerFromTabModal({
             />
             <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
               Used by orchestrator as <span className="font-mono">@alias</span>.
+            </p>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+              Persona <span className="normal-case text-[10px]">(optional)</span>
+            </label>
+            <textarea
+              value={persona}
+              onChange={(e) => setPersona(e.target.value)}
+              rows={3}
+              placeholder="e.g. You're the backend reviewer. Focus on schema, query plans, and migration safety."
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm resize-y"
+            />
+            <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
+              Injected into this worker's system prompt at run time.
+            </p>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+              Tags <span className="normal-case text-[10px]">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
+              placeholder="e.g. backend, tests"
+              spellCheck={false}
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
+            />
+            <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
+              Comma-separated. Lowercase letters/digits/dash/underscore.
             </p>
           </div>
           <div>
@@ -1164,6 +1280,163 @@ function AddWorkerFromTabModal({
             >
               <Plus size={12} />
               Add worker
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Edits an existing worker's alias / persona / tags without leaving the
+// project page. Mirrors the AddWorker form, minus session selection
+// (the session is fixed) and minus inline session creation.
+function EditWorkerModal({
+  teamId,
+  teamName,
+  sessionId,
+  initialAlias,
+  initialPersona,
+  initialTags,
+  onClose,
+  onSaved,
+}: {
+  teamId: string;
+  teamName: string;
+  sessionId: string;
+  initialAlias: string;
+  initialPersona: string | null;
+  initialTags: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [alias, setAlias] = useState(initialAlias);
+  const [persona, setPersona] = useState(initialPersona ?? '');
+  const [tagsInput, setTagsInput] = useState(initialTags.join(', '));
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (submitting) return;
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, submitting]);
+
+  async function submit() {
+    const a = alias.trim();
+    if (!a || submitting) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      await api.updateTeamMember(teamId, sessionId, {
+        alias: a,
+        persona: persona.trim() || null,
+        tags: parseTagsInput(tagsInput),
+      });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Edit worker"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--color-border)]/40 px-4 py-2">
+          <h2 className="text-sm font-medium truncate">
+            Edit worker · {teamName}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+              Alias
+            </label>
+            <input
+              autoFocus
+              type="text"
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+              placeholder="e.g. backend"
+              spellCheck={false}
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+              Persona <span className="normal-case text-[10px]">(optional)</span>
+            </label>
+            <textarea
+              value={persona}
+              onChange={(e) => setPersona(e.target.value)}
+              rows={4}
+              placeholder="e.g. You're the backend reviewer. Focus on schema, query plans, and migration safety."
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm resize-y"
+            />
+            <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
+              Injected into this worker's system prompt at run time.
+            </p>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+              Tags <span className="normal-case text-[10px]">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
+              placeholder="e.g. backend, tests"
+              spellCheck={false}
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
+            />
+            <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
+              Comma-separated. Lowercase letters/digits/dash/underscore.
+            </p>
+          </div>
+          {error && (
+            <p
+              className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-300"
+              role="alert"
+            >
+              {error}
+            </p>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={alias.trim().length === 0 || submitting}
+              className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+            >
+              Save
             </button>
           </div>
         </div>
@@ -1314,8 +1587,25 @@ function TeamRoleBadge({ role }: { role: TeamRole | null }) {
       </Tooltip>
     );
   }
+  // Compose tooltip from team name + tags + truncated persona so the
+  // user can scan a worker's role without opening its tab. Tooltip
+  // renders as one line (whitespace-nowrap), so we use ' · ' as a
+  // soft separator and truncate long personas hard.
+  const segments: string[] = [
+    `@${role.alias} in team "${role.teamName}"`,
+  ];
+  if (role.tags.length > 0) {
+    segments.push(role.tags.map((t) => `#${t}`).join(' '));
+  }
+  if (role.persona) {
+    const truncated =
+      role.persona.length > 120
+        ? role.persona.slice(0, 120) + '…'
+        : role.persona;
+    segments.push(truncated.replace(/\s+/g, ' '));
+  }
   return (
-    <Tooltip label={`@${role.alias} in team "${role.teamName}"`} side="top">
+    <Tooltip label={segments.join(' · ')} side="top">
       <span className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-[1px] text-[10px] font-mono text-[var(--color-ink-muted)]">
         @{role.alias}
       </span>

@@ -56,6 +56,10 @@ interface CanvasNodeData extends Record<string, unknown> {
   running?: boolean;
   queued?: number;
   edgeFresh?: boolean;
+  /** Worker-only — surfaced on the canvas so the user can see at a
+   *  glance who plays which role without opening each tab. */
+  persona?: string | null;
+  tags?: string[];
 }
 
 function statusColor(s: WorkerState): string {
@@ -265,6 +269,8 @@ export function TeamCanvasPage({
           sessionId: m.sessionId,
           running: state?.running ?? false,
           queued: state?.queued ?? 0,
+          persona: m.persona,
+          tags: m.tags,
         },
       };
     });
@@ -430,6 +436,26 @@ function CanvasNode({ data }: CanvasNodeProps) {
       {data.projectName && (
         <div className="text-[10px] text-[var(--color-ink-muted)] truncate">
           {data.projectName}
+        </div>
+      )}
+      {!isOrch && data.tags && data.tags.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {data.tags.map((t) => (
+            <span
+              key={t}
+              className="rounded bg-[var(--color-surface-3)] px-1 text-[9px] font-mono text-[var(--color-ink-muted)]"
+            >
+              #{t}
+            </span>
+          ))}
+        </div>
+      )}
+      {!isOrch && data.persona && (
+        <div
+          className="mt-1 text-[9px] text-[var(--color-ink-muted)] line-clamp-2"
+          title={data.persona}
+        >
+          {data.persona}
         </div>
       )}
       {!isOrch && (

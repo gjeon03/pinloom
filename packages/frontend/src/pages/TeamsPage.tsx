@@ -547,11 +547,23 @@ function MemberRow({
 }: MemberRowProps) {
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState(member.alias);
+  // Persona / tags edit happens in a small inline panel below the row
+  // so users don't lose their place in the team list.
+  const [editingExtras, setEditingExtras] = useState(false);
+  const [personaDraft, setPersonaDraft] = useState(member.persona ?? '');
+  const [tagsDraft, setTagsDraft] = useState(member.tags.join(', '));
+  const [savingExtras, setSavingExtras] = useState(false);
   const meta = formatSessionLabel(member.sessionId, lookup);
 
   useEffect(() => {
     setAliasDraft(member.alias);
   }, [member.alias]);
+  useEffect(() => {
+    if (!editingExtras) {
+      setPersonaDraft(member.persona ?? '');
+      setTagsDraft(member.tags.join(', '));
+    }
+  }, [member.persona, member.tags, editingExtras]);
 
   async function saveAlias() {
     const next = aliasDraft.trim();
@@ -569,69 +581,181 @@ function MemberRow({
     }
   }
 
+  async function saveExtras() {
+    if (savingExtras) return;
+    setSavingExtras(true);
+    try {
+      await api.updateTeamMember(teamId, member.sessionId, {
+        persona: personaDraft.trim() || null,
+        tags: parseTags(tagsDraft),
+      });
+      setEditingExtras(false);
+      onChanged();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingExtras(false);
+    }
+  }
+
   return (
-    <li className="flex items-center justify-between gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs">
-      <div className="flex items-center gap-2 min-w-0">
-        {editingAlias ? (
-          <input
-            type="text"
-            value={aliasDraft}
-            onChange={(e) => setAliasDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') saveAlias();
-              if (e.key === 'Escape') {
-                setEditingAlias(false);
-                setAliasDraft(member.alias);
-              }
-            }}
-            autoFocus
-            spellCheck={false}
-            className="w-32 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-xs font-mono"
-          />
-        ) : (
+    <li className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] text-xs">
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+        <div className="flex items-center gap-2 min-w-0">
+          {editingAlias ? (
+            <input
+              type="text"
+              value={aliasDraft}
+              onChange={(e) => setAliasDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveAlias();
+                if (e.key === 'Escape') {
+                  setEditingAlias(false);
+                  setAliasDraft(member.alias);
+                }
+              }}
+              autoFocus
+              spellCheck={false}
+              className="w-32 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-xs font-mono"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditingAlias(true)}
+              title="Edit alias"
+              className="font-mono text-[var(--color-accent)] hover:underline shrink-0"
+            >
+              @{member.alias}
+            </button>
+          )}
+          {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
+          <span className="truncate">{meta.title}</span>
+          <span className="text-[var(--color-ink-muted)] shrink-0">
+            · {meta.subtitle}
+          </span>
+          {member.tags.length > 0 && !editingExtras && (
+            <span className="ml-1 flex flex-wrap gap-1 min-w-0">
+              {member.tags.map((t) => (
+                <span
+                  key={t}
+                  className="rounded bg-[var(--color-surface-2)] px-1 text-[10px] font-mono text-[var(--color-ink-muted)]"
+                >
+                  #{t}
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
           <button
             type="button"
-            onClick={() => setEditingAlias(true)}
-            title="Edit alias"
-            className="font-mono text-[var(--color-accent)] hover:underline shrink-0"
+            onClick={() => setEditingExtras((v) => !v)}
+            aria-label="Edit persona and tags"
+            title="Edit persona and tags"
+            className={`text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] ${
+              editingExtras ? 'text-[var(--color-accent)]' : ''
+            }`}
           >
-            @{member.alias}
+            <Pencil size={11} />
           </button>
-        )}
-        {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
-        <span className="truncate">{meta.title}</span>
-        <span className="text-[var(--color-ink-muted)] shrink-0">
-          · {meta.subtitle}
-        </span>
+          <Link
+            to={`/s/${member.sessionId}`}
+            aria-label="Open session"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
+            title="Open session"
+          >
+            <ExternalLink size={11} />
+          </Link>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await api.removeTeamMember(teamId, member.sessionId);
+                onChanged();
+              } catch (err) {
+                onError(err instanceof Error ? err.message : String(err));
+              }
+            }}
+            aria-label="Remove worker"
+            title="Remove worker"
+            className="text-[var(--color-ink-muted)] hover:text-red-400"
+          >
+            <X size={12} />
+          </button>
+        </div>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        <Link
-          to={`/s/${member.sessionId}`}
-          aria-label="Open session"
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-          title="Open session"
-        >
-          <ExternalLink size={11} />
-        </Link>
-        <button
-          type="button"
-          onClick={async () => {
-            try {
-              await api.removeTeamMember(teamId, member.sessionId);
-              onChanged();
-            } catch (err) {
-              onError(err instanceof Error ? err.message : String(err));
-            }
-          }}
-          aria-label="Remove worker"
-          title="Remove worker"
-          className="text-[var(--color-ink-muted)] hover:text-red-400"
-        >
-          <X size={12} />
-        </button>
-      </div>
+      {!editingExtras && member.persona && (
+        <div className="px-3 pb-1.5 text-[10px] text-[var(--color-ink-muted)] line-clamp-2">
+          {member.persona}
+        </div>
+      )}
+      {editingExtras && (
+        <div className="border-t border-[var(--color-border)]/50 px-3 py-2 space-y-2">
+          <div>
+            <label className="block text-[9px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-0.5">
+              Persona
+            </label>
+            <textarea
+              value={personaDraft}
+              onChange={(e) => setPersonaDraft(e.target.value)}
+              rows={3}
+              placeholder="Optional system-prompt-style blurb."
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs resize-y"
+            />
+          </div>
+          <div>
+            <label className="block text-[9px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-0.5">
+              Tags
+            </label>
+            <input
+              type="text"
+              value={tagsDraft}
+              onChange={(e) => setTagsDraft(e.target.value)}
+              placeholder="comma, separated"
+              spellCheck={false}
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs font-mono"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setEditingExtras(false);
+                setPersonaDraft(member.persona ?? '');
+                setTagsDraft(member.tags.join(', '));
+              }}
+              className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={saveExtras}
+              disabled={savingExtras}
+              className="rounded bg-[var(--color-accent)] text-black px-2 py-1 text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
     </li>
   );
+}
+
+// Same comma/whitespace-tolerant tag splitter as the SessionTabs side
+// uses. Server-side validation owns the final pattern check; this just
+// keeps the request body clean and de-duplicated.
+function parseTags(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[,\s]+/)) {
+    const t = part.trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
 }
 
 interface SessionPickerModalProps {

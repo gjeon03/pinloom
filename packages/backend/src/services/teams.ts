@@ -21,6 +21,13 @@ import { clearTeamToken } from './team-tokens.js';
 import { clearTeamEvents } from './team-events.js';
 
 const ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+// Tags reuse the alias-style restriction for predictability and to keep
+// future "broadcast to @tag:foo" parsing unambiguous; they don't need to
+// be unique within a team.
+const TAG_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const MAX_TAGS_PER_MEMBER = 16;
+// Plenty for system-prompt persona blurbs without becoming an essay box.
+const MAX_PERSONA_LENGTH = 4000;
 
 export class TeamNotFoundError extends Error {
   constructor(id: string) {
@@ -68,6 +75,33 @@ export class AliasTakenError extends Error {
   }
 }
 
+export class InvalidTagError extends Error {
+  constructor(tag: string) {
+    super(
+      `invalid tag ${JSON.stringify(tag)}: must match /^[a-z][a-z0-9_-]{0,31}$/`,
+    );
+    this.name = 'InvalidTagError';
+  }
+}
+
+export class TooManyTagsError extends Error {
+  constructor(count: number) {
+    super(
+      `too many tags (${count}); the per-member limit is ${MAX_TAGS_PER_MEMBER}`,
+    );
+    this.name = 'TooManyTagsError';
+  }
+}
+
+export class PersonaTooLongError extends Error {
+  constructor(length: number) {
+    super(
+      `persona too long (${length} chars); the limit is ${MAX_PERSONA_LENGTH}`,
+    );
+    this.name = 'PersonaTooLongError';
+  }
+}
+
 interface TeamRow {
   id: string;
   name: string;
@@ -80,15 +114,80 @@ interface MemberRow {
   team_id: string;
   session_id: string;
   alias: string;
+  // SQLite returns NULL for nullable columns added via ALTER TABLE
+  // when the row predates the migration.
+  persona: string | null;
+  tags: string | null;
   created_at: string;
+}
+
+function parseTags(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      console.warn(
+        '[teams] tags column not an array — returning empty:',
+        raw.slice(0, 100),
+      );
+      return [];
+    }
+    return parsed.filter((t): t is string => typeof t === 'string');
+  } catch (err) {
+    // Corrupt JSON shouldn't crash the read path. Log so DB corruption
+    // is visible in the server console rather than silently masquerading
+    // as "no tags"; for a single-user local app that's enough.
+    console.warn(
+      '[teams] failed to parse tags JSON, returning empty:',
+      raw.slice(0, 100),
+      err instanceof Error ? err.message : err,
+    );
+    return [];
+  }
 }
 
 function rowToMember(row: MemberRow): TeamMember {
   return {
     sessionId: row.session_id,
     alias: row.alias,
+    persona: row.persona ?? null,
+    tags: parseTags(row.tags),
     createdAt: row.created_at,
   };
+}
+
+function normalizeTags(tags: string[] | undefined): string[] {
+  if (!tags) return [];
+  // Trim, drop empties, and de-dupe in input order. Validation happens
+  // separately so a bad input still produces a clean error message.
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of tags) {
+    const t = raw.trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    result.push(t);
+  }
+  return result;
+}
+
+function validateTags(tags: string[]): void {
+  if (tags.length > MAX_TAGS_PER_MEMBER) {
+    throw new TooManyTagsError(tags.length);
+  }
+  for (const t of tags) {
+    if (!TAG_PATTERN.test(t)) throw new InvalidTagError(t);
+  }
+}
+
+function validatePersona(persona: string | null | undefined): string | null {
+  if (persona == null) return null;
+  const trimmed = persona.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > MAX_PERSONA_LENGTH) {
+    throw new PersonaTooLongError(trimmed.length);
+  }
+  return trimmed;
 }
 
 function loadMembers(teamId: string): TeamMember[] {
@@ -197,10 +296,15 @@ interface AddMemberArgs {
   teamId: string;
   sessionId: string;
   alias: string;
+  persona?: string | null;
+  tags?: string[];
 }
 
 export function addMember(args: AddMemberArgs): TeamMember {
   if (!ALIAS_PATTERN.test(args.alias)) throw new InvalidAliasError(args.alias);
+  const persona = validatePersona(args.persona);
+  const tags = normalizeTags(args.tags);
+  validateTags(tags);
 
   const now = new Date().toISOString();
   const db = getDb();
@@ -215,27 +319,51 @@ export function addMember(args: AddMemberArgs): TeamMember {
     assertAliasFree(args.teamId, args.alias);
 
     db.prepare(
-      `INSERT INTO team_members (team_id, session_id, alias, created_at)
-       VALUES (?, ?, ?, ?)`,
-    ).run(args.teamId, args.sessionId, args.alias, now);
+      `INSERT INTO team_members (team_id, session_id, alias, persona, tags, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      args.teamId,
+      args.sessionId,
+      args.alias,
+      persona,
+      tags.length > 0 ? JSON.stringify(tags) : null,
+      now,
+    );
     touchTeam(args.teamId);
   });
   tx();
 
-  return { sessionId: args.sessionId, alias: args.alias, createdAt: now };
+  return {
+    sessionId: args.sessionId,
+    alias: args.alias,
+    persona,
+    tags,
+    createdAt: now,
+  };
 }
 
 interface UpdateMemberArgs {
   teamId: string;
   sessionId: string;
-  alias: string;
+  // All fields optional — partial PATCH semantics. Only the fields the
+  // caller provides are touched, so the alias-edit flow and the
+  // persona-edit flow can both go through this single entry point.
+  alias?: string;
+  persona?: string | null;
+  tags?: string[];
 }
 
-export function updateMemberAlias(args: UpdateMemberArgs): TeamMember {
-  if (!ALIAS_PATTERN.test(args.alias)) throw new InvalidAliasError(args.alias);
+export function updateMember(args: UpdateMemberArgs): TeamMember {
+  if (args.alias !== undefined && !ALIAS_PATTERN.test(args.alias)) {
+    throw new InvalidAliasError(args.alias);
+  }
+  const personaProvided = args.persona !== undefined;
+  const personaNext = personaProvided ? validatePersona(args.persona) : null;
+  const tagsProvided = args.tags !== undefined;
+  const tagsNext = tagsProvided ? normalizeTags(args.tags) : [];
+  if (tagsProvided) validateTags(tagsNext);
 
   const db = getDb();
-  let createdAt = '';
   const tx = db.transaction(() => {
     const existing = db
       .prepare(
@@ -245,20 +373,57 @@ export function updateMemberAlias(args: UpdateMemberArgs): TeamMember {
     if (!existing) {
       throw new TeamNotFoundError(`${args.teamId}/${args.sessionId}`);
     }
-    createdAt = existing.created_at;
 
-    if (args.alias !== existing.alias) {
+    const nextAlias = args.alias ?? existing.alias;
+    if (args.alias !== undefined && args.alias !== existing.alias) {
       assertAliasFree(args.teamId, args.alias);
     }
+    const nextPersona = personaProvided ? personaNext : existing.persona;
+    const nextTagsRaw = tagsProvided
+      ? tagsNext.length > 0
+        ? JSON.stringify(tagsNext)
+        : null
+      : existing.tags;
 
     db.prepare(
-      'UPDATE team_members SET alias = ? WHERE team_id = ? AND session_id = ?',
-    ).run(args.alias, args.teamId, args.sessionId);
+      `UPDATE team_members
+         SET alias = ?, persona = ?, tags = ?
+       WHERE team_id = ? AND session_id = ?`,
+    ).run(
+      nextAlias,
+      nextPersona,
+      nextTagsRaw,
+      args.teamId,
+      args.sessionId,
+    );
     touchTeam(args.teamId);
   });
   tx();
 
-  return { sessionId: args.sessionId, alias: args.alias, createdAt };
+  // Re-read the row instead of synthesizing the response from in-memory
+  // state. Cheaper to SELECT once than to keep return types in sync
+  // with future column additions, and a re-read is inherently
+  // truth-of-record (covers any defaults / triggers / etc).
+  const fresh = db
+    .prepare('SELECT * FROM team_members WHERE team_id = ? AND session_id = ?')
+    .get(args.teamId, args.sessionId) as MemberRow | undefined;
+  if (!fresh) {
+    // The TX already asserted existence; if the row vanished between
+    // commit and re-read we have a much bigger problem than a 500.
+    throw new TeamNotFoundError(`${args.teamId}/${args.sessionId}`);
+  }
+  return rowToMember(fresh);
+}
+
+// Backwards-compatible thin wrapper for callers that only update alias.
+// Kept so the existing route handler stays terse; new persona/tags code
+// goes through `updateMember` directly.
+export function updateMemberAlias(args: {
+  teamId: string;
+  sessionId: string;
+  alias: string;
+}): TeamMember {
+  return updateMember(args);
 }
 
 export function removeMember(teamId: string, sessionId: string): boolean {
@@ -292,6 +457,16 @@ export function getMemberByAlias(
       'SELECT * FROM team_members WHERE team_id = ? AND alias = ?',
     )
     .get(teamId, alias) as MemberRow | undefined;
+  return row ? rowToMember(row) : null;
+}
+
+// Returns the membership row for a worker session — used by the runner
+// to inject persona/tags into the worker's systemPrompt at run time.
+// O(1) via the unique idx_team_members_session index.
+export function getMemberBySessionId(sessionId: string): TeamMember | null {
+  const row = getDb()
+    .prepare('SELECT * FROM team_members WHERE session_id = ?')
+    .get(sessionId) as MemberRow | undefined;
   return row ? rowToMember(row) : null;
 }
 

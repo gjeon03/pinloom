@@ -6,13 +6,16 @@ import {
   deleteTeam,
   getTeam,
   InvalidAliasError,
+  InvalidTagError,
   listTeams,
   OrchestratorWorkerConflictError,
+  PersonaTooLongError,
   removeMember,
   SessionAlreadyInTeamError,
   SessionNotFoundError,
   TeamNotFoundError,
-  updateMemberAlias,
+  TooManyTagsError,
+  updateMember,
   updateTeam,
 } from '../services/teams.js';
 
@@ -23,7 +26,12 @@ function replyForError(reply: FastifyReply, err: unknown): { error: string } {
     reply.code(404);
     return { error: err.message };
   }
-  if (err instanceof InvalidAliasError) {
+  if (
+    err instanceof InvalidAliasError ||
+    err instanceof InvalidTagError ||
+    err instanceof TooManyTagsError ||
+    err instanceof PersonaTooLongError
+  ) {
     reply.code(400);
     return { error: err.message };
   }
@@ -105,7 +113,12 @@ export async function teamRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { sessionId?: string; alias?: string };
+    Body: {
+      sessionId?: string;
+      alias?: string;
+      persona?: string | null;
+      tags?: string[];
+    };
   }>('/api/teams/:id/members', async (req, reply) => {
     const sessionId = req.body?.sessionId?.trim();
     const alias = req.body?.alias?.trim();
@@ -118,7 +131,13 @@ export async function teamRoutes(app: FastifyInstance) {
       return { error: 'alias is required' };
     }
     try {
-      return addMember({ teamId: req.params.id, sessionId, alias });
+      return addMember({
+        teamId: req.params.id,
+        sessionId,
+        alias,
+        persona: req.body?.persona ?? null,
+        tags: req.body?.tags,
+      });
     } catch (err) {
       return replyForError(reply, err);
     }
@@ -126,18 +145,33 @@ export async function teamRoutes(app: FastifyInstance) {
 
   app.patch<{
     Params: { id: string; sessionId: string };
-    Body: { alias?: string };
+    Body: {
+      alias?: string;
+      persona?: string | null;
+      tags?: string[];
+    };
   }>('/api/teams/:id/members/:sessionId', async (req, reply) => {
-    const alias = req.body?.alias?.trim();
-    if (!alias) {
+    const aliasRaw = req.body?.alias;
+    const alias =
+      typeof aliasRaw === 'string' ? aliasRaw.trim() : undefined;
+    if (aliasRaw !== undefined && !alias) {
       reply.code(400);
-      return { error: 'alias is required' };
+      return { error: 'alias cannot be empty' };
     }
+    // PATCH semantics: an absent key means "leave alone"; an explicit
+    // value (including `null` for persona, `[]` for tags) means "set to
+    // that". `'key' in body` distinguishes absent from explicit-null
+    // because JSON.stringify drops `undefined` but preserves `null`.
+    const body = req.body ?? {};
+    const personaProvided = 'persona' in body;
+    const tagsProvided = 'tags' in body;
     try {
-      return updateMemberAlias({
+      return updateMember({
         teamId: req.params.id,
         sessionId: req.params.sessionId,
         alias,
+        persona: personaProvided ? body.persona ?? null : undefined,
+        tags: tagsProvided ? body.tags ?? [] : undefined,
       });
     } catch (err) {
       return replyForError(reply, err);

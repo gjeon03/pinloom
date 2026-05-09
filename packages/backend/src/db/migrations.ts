@@ -254,6 +254,23 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         ON team_members(team_id, alias);
     `,
   },
+  {
+    id: 17,
+    // Per-worker persona + tags. Persona is a short markdown blurb the
+    // orchestrator can lean on when picking which worker to dispatch
+    // to, and which we inject into the worker's systemPrompt at run
+    // time so it actually plays the role. Tags are short identifiers
+    // (e.g. "backend", "tests") with a future use of "broadcast to all
+    // workers tagged X" — for now they're metadata only.
+    //
+    // Both columns are nullable so existing memberships keep working
+    // unchanged, and so workers can opt out (a generalist worker
+    // doesn't need a persona).
+    sql: `
+      ALTER TABLE team_members ADD COLUMN persona TEXT;
+      ALTER TABLE team_members ADD COLUMN tags TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
