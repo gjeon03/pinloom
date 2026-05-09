@@ -1,24 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Crown, ExternalLink, Plus, X } from 'lucide-react';
+import {
+  ChevronDown,
+  Crown,
+  ExternalLink,
+  MoreVertical,
+  Network,
+  Plus,
+  X,
+} from 'lucide-react';
 import type { AgentKind, Session, Team } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from './AgentBadge.js';
 import { Tooltip } from './Tooltip.js';
 
 type TeamRole =
-  | { kind: 'orchestrator'; teamName: string }
-  | { kind: 'worker'; teamName: string; alias: string };
+  | { kind: 'orchestrator'; teamId: string; teamName: string }
+  | { kind: 'worker'; teamId: string; teamName: string; alias: string };
 
 function buildTeamRoles(teams: Team[]): Map<string, TeamRole> {
   const map = new Map<string, TeamRole>();
   for (const team of teams) {
     map.set(team.orchestratorSessionId, {
       kind: 'orchestrator',
+      teamId: team.id,
       teamName: team.name,
     });
     for (const m of team.members) {
       map.set(m.sessionId, {
         kind: 'worker',
+        teamId: team.id,
         teamName: team.name,
         alias: m.alias,
       });
@@ -60,6 +70,14 @@ export function SessionTabs({
   const [codexAvailable, setCodexAvailable] = useState<boolean | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const pickerButtonRef = useRef<HTMLButtonElement>(null);
+  // Per-tab actions dropdown ("open chat" / "open canvas" / future
+  // session-config). Only one tab can have its menu open at a time.
+  const [tabMenu, setTabMenu] = useState<{
+    sessionId: string;
+    top: number;
+    left: number;
+  } | null>(null);
+  const tabMenuRef = useRef<HTMLDivElement>(null);
 
   // Team membership lookup so we can render "@alias" / "orchestrator"
   // badges next to tab titles. Refetched whenever the user creates or
@@ -119,6 +137,22 @@ export function SessionTabs({
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, [pickerOpen]);
+
+  // Click-outside dismiss for the per-tab actions menu.
+  useEffect(() => {
+    if (!tabMenu) return;
+    function onClick(e: MouseEvent) {
+      if (
+        tabMenuRef.current &&
+        !tabMenuRef.current.contains(e.target as Node) &&
+        !(e.target as Element).closest('[data-tab-menu-trigger]')
+      ) {
+        setTabMenu(null);
+      }
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [tabMenu]);
 
   const canDelete = sessions.length > 1;
 
@@ -310,20 +344,31 @@ export function SessionTabs({
               ) : (
                 <span className="truncate max-w-[180px]">{label}</span>
               )}
-              <a
-                href={`/s/${s.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                title="Open session in new tab"
+              <button
+                type="button"
+                data-tab-menu-trigger
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (tabMenu?.sessionId === s.id) {
+                    setTabMenu(null);
+                    return;
+                  }
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setTabMenu({
+                    sessionId: s.id,
+                    top: r.bottom + 4,
+                    left: r.left,
+                  });
+                }}
+                title="Tab actions"
                 className={`p-0.5 rounded transition-opacity ${
                   active
                     ? 'text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
                     : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
                 }`}
               >
-                <ExternalLink size={12} />
-              </a>
+                <MoreVertical size={12} />
+              </button>
               {canDelete && (
                 <button
                   type="button"
@@ -426,6 +471,45 @@ export function SessionTabs({
           {error}
         </span>
       )}
+      {tabMenu &&
+        (() => {
+          const role = rolesBySessionId.get(tabMenu.sessionId) ?? null;
+          return (
+            <div
+              ref={tabMenuRef}
+              style={{
+                position: 'fixed',
+                top: tabMenu.top,
+                left: tabMenu.left,
+                zIndex: 50,
+              }}
+              className="min-w-[180px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs"
+            >
+              <a
+                href={`/s/${tabMenu.sessionId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setTabMenu(null)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-[var(--color-ink)]"
+              >
+                <ExternalLink size={12} />
+                <span className="flex-1">Open chat in new tab</span>
+              </a>
+              {role?.kind === 'orchestrator' && (
+                <a
+                  href={`/teams/${role.teamId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setTabMenu(null)}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-[var(--color-ink)]"
+                >
+                  <Network size={12} />
+                  <span className="flex-1">Open team canvas</span>
+                </a>
+              )}
+            </div>
+          );
+        })()}
     </div>
   );
 }
