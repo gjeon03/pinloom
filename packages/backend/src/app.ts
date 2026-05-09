@@ -13,6 +13,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
 import { checkAgentClis } from './services/cli-check.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
+import { drainStrandedQueuesOnBoot } from './services/runner.js';
 
 export async function createApp() {
   // 100MB body limit — image-attached messages and wiki imports both ship
@@ -24,6 +25,11 @@ export async function createApp() {
   // Mirror user-managed env vars into process.env so the very first agent
   // spawn inherits them; subsequent upserts/deletes keep this in sync.
   loadUserEnvIntoProcess();
+
+  // Pick up any pending queue rows that survived the previous process —
+  // each session's drain triggers are bound to a live AgentRun, so a
+  // restart with stranded items would otherwise leave them stuck.
+  drainStrandedQueuesOnBoot();
 
   await app.register(cors, { origin: true });
   await app.register(websocket);

@@ -12,7 +12,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { AgentKind, Message, Session } from '@pinloom/shared';
+import type { AgentKind, Message, QueueItem, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
@@ -118,13 +118,27 @@ interface Props {
 
 const BOTTOM_STICKY_PX = 60; // within this distance from bottom → auto-scroll
 
+// Per-session textarea draft survives tab/project switch via sessionStorage.
+// The pending message queue lives entirely in the backend now (see
+// /api/sessions/:id/queue) so it survives backend restarts and mirrors
+// across any client viewing the same session.
+const inputKey = (sessionId: string) => `pinloom:input:${sessionId}`;
+
+function loadPersistedInput(sessionId: string): string {
+  try {
+    return sessionStorage.getItem(inputKey(sessionId)) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export function ChatView({ session, onPinChange }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() => loadPersistedInput(session.id));
   const [runKind, setRunKind] = useState<AiRunState>(null);
   const [shellRunning, setShellRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [queue, setQueue] = useState<string[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [atBottom, setAtBottom] = useState(true);
   const [unseenCount, setUnseenCount] = useState(0);
   const [streamingIds, setStreamingIds] = useState<Set<string>>(() => new Set());
@@ -161,13 +175,29 @@ export function ChatView({ session, onPinChange }: Props) {
   const aiRunning = runKind === 'ai';
   const running = aiRunning || shellRunning;
 
+  // Persist textarea draft per-session. The component remounts on session
+  // switch (key={session.id}), so without this the in-progress draft
+  // disappears when the user changes tabs or projects. Queue items live
+  // on the backend and arrive via WS, so they don't need this treatment.
+  useEffect(() => {
+    try {
+      if (input.length > 0) sessionStorage.setItem(inputKey(session.id), input);
+      else sessionStorage.removeItem(inputKey(session.id));
+    } catch {
+      // sessionStorage unavailable (private mode etc.) — drafts won't
+      // survive then but the chat still works.
+    }
+  }, [input, session.id]);
+
   useEffect(() => {
     let cancelled = false;
     setMessages([]);
     setError(null);
     setRunKind(null);
     setShellRunning(false);
-    setQueue([]);
+    // Don't clear input or queue here: they were loaded from localStorage
+    // by the useState initializer for this session and we want them to
+    // survive the mount-time reset of derived state below.
     setUnseenCount(0);
     setAtBottom(true);
     setStreamingIds(new Set());
@@ -193,6 +223,15 @@ export function ChatView({ session, onPinChange }: Props) {
         setMessages(msgs);
       })
       .catch((e) => !cancelled && setError(String(e)));
+    api
+      .listQueue(session.id)
+      .then((items) => {
+        if (cancelled) return;
+        setQueue(items);
+      })
+      .catch(() => {
+        // Best-effort initial fetch — WS will keep us in sync from here.
+      });
     api
       .getRunStatus(session.id)
       .then((s) => {
@@ -254,6 +293,9 @@ export function ChatView({ session, onPinChange }: Props) {
       setThinkingText('');
     } else if (ev.type === 'thinking_chunk' && ev.sessionId === session.id) {
       setThinkingText((prev) => prev + ev.chunk);
+    } else if (ev.type === 'queue_updated' && ev.sessionId === session.id) {
+      // Backend owns the queue; just mirror it.
+      setQueue(ev.items);
     } else if (ev.type === 'run_status' && ev.sessionId === session.id) {
       if (ev.status === 'started') {
         setRunKind('ai');
@@ -467,35 +509,36 @@ export function ChatView({ session, onPinChange }: Props) {
       return;
     }
 
-    if (aiRunning || queue.length > 0) {
-      // Attachments are not supported in queued messages — require the first
-      // run to complete before stacking more. Only queue plain text.
-      if (attachments.length > 0) {
+    // Image attachments still take the direct send path — the backend
+    // queue table holds plain text only, and quietly losing images on
+    // queue-then-drain would be worse UX than blocking the send.
+    if (attachments.length > 0) {
+      if (aiRunning || queue.length > 0) {
         setError('Finish the current run before sending images.');
         return;
       }
-      setQueue((q) => [...q, content]);
+      const atts = attachments;
       setInput('');
+      setAttachments([]);
+      void runMessage(content, atts);
       return;
     }
-    const atts = attachments;
-    setInput('');
-    setAttachments([]);
-    // Do not reset nextAttachmentNumberRef — numbering continues across the
-    // whole session so "[Image #N]" references stay unique in the transcript.
-    void runMessage(content, atts);
-  }
 
-  // Drain queue: whenever AI finishes and queue has items, pop the first and send.
-  // Shell runs don't block the queue since they're independent.
-  useEffect(() => {
-    if (aiRunning) return;
-    if (queue.length === 0) return;
-    const [next, ...rest] = queue;
-    setQueue(rest);
-    void runMessage(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiRunning, queue]);
+    // Default path: enqueue. The backend drains at every turn boundary,
+    // so an enqueue against an idle agent immediately starts a new run,
+    // and an enqueue against a running agent holds until the next break
+    // — both transparently to the caller.
+    setError(null);
+    setInput('');
+    void api
+      .enqueueMessage(session.id, {
+        content,
+        model: model ?? null,
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  }
 
   // Keep the queue panel pinned to its top so the "next up" item stays visible.
   useEffect(() => {
@@ -728,7 +771,14 @@ export function ChatView({ session, onPinChange }: Props) {
             {queue.length > 1 && (
               <button
                 type="button"
-                onClick={() => setQueue([])}
+                onClick={() => {
+                  // Remove every queued item one by one. Backend broadcasts
+                  // queue_updated after each delete, so the UI updates as
+                  // they drop.
+                  for (const item of queue) {
+                    void api.removeQueueItem(session.id, item.id).catch(() => {});
+                  }
+                }}
                 className="hover:text-red-400"
               >
                 Clear all
@@ -736,18 +786,22 @@ export function ChatView({ session, onPinChange }: Props) {
             )}
           </div>
           <ul ref={queueScrollRef} className="max-h-32 overflow-auto">
-            {queue.map((msg, i) => (
+            {queue.map((item) => (
               <li
-                key={i}
+                key={item.id}
                 className="px-3 py-1 text-xs flex items-center gap-2 border-t border-[var(--color-border)]/60"
               >
                 <ChevronRight size={12} className="text-[var(--color-accent)] shrink-0" />
-                <span className="flex-1 truncate text-[var(--color-ink)]/90">{msg}</span>
+                <span className="flex-1 truncate text-[var(--color-ink)]/90">
+                  {item.content}
+                </span>
                 <button
                   type="button"
                   onClick={() => {
-                    setInput(msg);
-                    setQueue((q) => q.filter((_, j) => j !== i));
+                    setInput(item.content);
+                    void api
+                      .removeQueueItem(session.id, item.id)
+                      .catch(() => {});
                   }}
                   className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] text-[11px]"
                   title="Move back to input to edit"
@@ -756,7 +810,9 @@ export function ChatView({ session, onPinChange }: Props) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setQueue((q) => q.filter((_, j) => j !== i))}
+                  onClick={() =>
+                    void api.removeQueueItem(session.id, item.id).catch(() => {})
+                  }
                   title="Remove from queue"
                   className="text-[var(--color-ink-muted)] hover:text-red-400 p-0.5"
                 >

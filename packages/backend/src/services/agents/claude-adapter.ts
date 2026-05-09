@@ -1,16 +1,19 @@
 // Wraps @anthropic-ai/claude-agent-sdk's `query` so the runner.ts
 // orchestrator can consume the same NormalizedEvent stream for any agent.
-// The translation logic was the for-await loop inside the old
-// runner.ts#runAttempt — we just relocate it and re-emit normalized events
-// instead of broadcasting/persisting inline.
+// User prompts arrive via a UserPromptStream — the first one kicks the
+// run off, additional ones (mid-run injection from sendUserMessage) are
+// surfaced to the SDK's prompt AsyncIterable so it picks them up at the
+// next turn boundary instead of restarting.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { ImageInput, ImageMediaType } from '../runner-types.js';
+import { UserPromptStream } from './message-stream.js';
 import type {
   AgentAdapter,
   AgentRun,
   AgentRunArgs,
   NormalizedEvent,
+  UserPrompt,
 } from './types.js';
 
 interface PromptTextBlock {
@@ -33,14 +36,6 @@ function buildContentBlocks(text: string, images: ImageInput[]): PromptContentBl
     });
   }
   return blocks;
-}
-
-async function* buildPromptIterable(text: string, images: ImageInput[]) {
-  yield {
-    type: 'user' as const,
-    message: { role: 'user' as const, content: buildContentBlocks(text, images) },
-    parent_tool_use_id: null,
-  };
 }
 
 function summarizeToolCall(name: string, input: Record<string, unknown>): string {
@@ -117,13 +112,29 @@ class ClaudeAdapterImpl implements AgentAdapter {
   readonly name = 'claude' as const;
 
   run(args: AgentRunArgs): AgentRun {
+    const promptStream = new UserPromptStream();
+    promptStream.push(args.initialPrompt);
+
+    // SDK reads from this AsyncIterable. We yield each queued user message
+    // and end when the stream closes.
+    async function* sdkPromptIterable() {
+      for await (const p of promptStream) {
+        yield {
+          type: 'user' as const,
+          message: {
+            role: 'user' as const,
+            content: buildContentBlocks(p.text, p.images),
+          },
+          parent_tool_use_id: null,
+        };
+      }
+    }
+
     const options: Record<string, unknown> = {
       cwd: args.cwd,
       systemPrompt: args.systemPrompt,
-      // No maxTurns ceiling: pinloom is a single-user local tool where the
-      // user can always cancel via the chat UI. A hard cap was prematurely
-      // ending legitimate large refactors with "Reached maximum number of
-      // turns" instead of letting the work finish.
+      // No maxTurns ceiling — pinloom is single-user and the cancel button
+      // covers runaway loops.
       permissionMode: 'bypassPermissions',
       allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
       abortController: args.abortController,
@@ -133,13 +144,8 @@ class ClaudeAdapterImpl implements AgentAdapter {
     if (args.resume) options.resume = args.resume;
     if (args.model) options.model = args.model;
 
-    const promptValue =
-      args.images && args.images.length > 0
-        ? buildPromptIterable(args.prompt, args.images)
-        : args.prompt;
-
     const q = query({
-      prompt: promptValue as Parameters<typeof query>[0]['prompt'],
+      prompt: sdkPromptIterable() as Parameters<typeof query>[0]['prompt'],
       options: options as Parameters<typeof query>[0]['options'],
     });
 
@@ -180,9 +186,6 @@ class ClaudeAdapterImpl implements AgentAdapter {
               ev.type === 'content_block_start' &&
               ev.content_block?.type === 'tool_use'
             ) {
-              // The full tool_use (with input args) arrives in the
-              // 'assistant' event below; the start marker just tells us to
-              // close any in-flight streamed text first.
               yield { type: 'message_stop' };
             } else if (ev.type === 'message_stop') {
               yield { type: 'message_stop' };
@@ -229,9 +232,6 @@ class ClaudeAdapterImpl implements AgentAdapter {
             if (result.session_id) {
               yield { type: 'session_id', id: result.session_id };
             }
-            // Rare edge case: result text exceeds what we streamed (the SDK
-            // sometimes catches up here). Forward the missing tail so
-            // orchestrator can append.
             if (
               result.subtype === 'success' &&
               result.result &&
@@ -241,6 +241,11 @@ class ClaudeAdapterImpl implements AgentAdapter {
               totalText += tail;
               yield { type: 'final_text_fallback', text: tail };
             }
+            // SDK signals end-of-turn with `result`. Reset the per-turn text
+            // accumulator so the next turn's final_text_fallback diff is
+            // computed against zero, not against accumulated history.
+            totalText = '';
+            yield { type: 'turn_complete' };
           }
         }
       } finally {
@@ -255,7 +260,11 @@ class ClaudeAdapterImpl implements AgentAdapter {
 
     return {
       events: events(),
+      pushMessage(prompt: UserPrompt) {
+        promptStream.push(prompt);
+      },
       close() {
+        promptStream.close();
         try {
           const maybeClose = (q as unknown as { close?: () => void }).close;
           if (typeof maybeClose === 'function') maybeClose.call(q);

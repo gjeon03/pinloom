@@ -78,13 +78,16 @@ Skip:
 
 Your **final response** is the markdown body. NOTHING ELSE.
 
-- Do NOT prefix with any acknowledgment, status update, or meta-comment.
-  Strings like "이제 충분한 정보를 수집했습니다", "Here's the analysis",
-  "I'll now write the document", "Based on my findings…" — none of these.
+- Do NOT prefix with any acknowledgment, status update, or meta-comment
+  in any language ("Here's the analysis", "I'll now write the document",
+  "Based on my findings…", or equivalents — none of these).
 - Start IMMEDIATELY with the \`# <Project> conventions\` heading on the
   very first line.
 - Do NOT wrap the whole response in a markdown code fence.
 - Do NOT include any YAML frontmatter (\`---\` block) — the caller adds it.
+- Write in the language the user works in: if a previous analysis is
+  provided below, match its language; otherwise default to the language
+  the project's README and source comments use.
 
 Recommended structure:
 
@@ -138,7 +141,7 @@ those sections. Only update what has changed in the codebase.`
 
 // Defensive cleanup of whatever the agent returned. The system prompt
 // already forbids these patterns but agents occasionally slip in:
-//   - leading status preamble ("이제 충분한 정보를 수집했습니다…")
+//   - leading status preamble ("I have gathered enough info…")
 //   - YAML frontmatter (we add our own)
 //   - whole-document code-fence wrapping
 //   - dangling closing fence after we strip preamble

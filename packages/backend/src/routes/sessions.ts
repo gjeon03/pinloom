@@ -3,7 +3,19 @@ import { nanoid } from 'nanoid';
 import type { Message, MessageRole, Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import type { ImageInput, ImageMediaType } from '../services/runner.js';
-import { cancelAiRun, isAiRunning, sendUserMessage } from '../services/runner.js';
+import {
+  cancelAiRun,
+  isAiRunning,
+  sendUserMessage,
+  sendUserMessages,
+  tryDrainQueue,
+} from '../services/runner.js';
+import {
+  broadcastQueueState,
+  enqueueMessage,
+  listQueueItems,
+  removeQueueItem,
+} from '../services/message-queue.js';
 import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
 import { runWikiSync } from '../services/wiki-sync.js';
@@ -251,6 +263,65 @@ export async function sessionRoutes(app: FastifyInstance) {
     },
   );
 
+  // Drains a frontend-side queue: persists each message as its own USER row
+  // (so the chat shows N bubbles) but pushes ONE combined prompt to the
+  // agent so it answers all of them in a single turn — same UX shape as
+  // Claude Code's mid-task message stacking.
+  app.post<{
+    Params: { sessionId: string };
+    Body: {
+      messages: Array<{
+        content: string;
+        planItemId?: string | null;
+        images?: unknown;
+      }>;
+      model?: string;
+      interrupt?: boolean;
+    };
+  }>(
+    '/api/sessions/:sessionId/messages/batch',
+    { bodyLimit: 60 * 1024 * 1024 },
+    async (req, reply) => {
+      const { messages, model, interrupt } = req.body ?? {};
+      if (!Array.isArray(messages) || messages.length === 0) {
+        reply.code(400);
+        return { error: 'messages must be a non-empty array' };
+      }
+      const parsed: Array<{
+        content: string;
+        planItemId: string | null;
+        images: ImageInput[];
+      }> = [];
+      for (const m of messages) {
+        const imagesParsed = parseImages(m.images);
+        if ('error' in imagesParsed) {
+          reply.code(400);
+          return { error: imagesParsed.error };
+        }
+        const content = typeof m.content === 'string' ? m.content : '';
+        if (content.trim().length === 0 && imagesParsed.length === 0) {
+          reply.code(400);
+          return { error: 'each message needs content or images' };
+        }
+        parsed.push({
+          content,
+          planItemId: m.planItemId ?? null,
+          images: imagesParsed,
+        });
+      }
+      const cleanModel =
+        typeof model === 'string' && model.trim().length > 0 ? model : undefined;
+      try {
+        return await sendUserMessages(req.params.sessionId, parsed, cleanModel, {
+          interrupt: interrupt === true,
+        });
+      } catch (err) {
+        reply.code(500);
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
+
   app.post<{
     Params: { sessionId: string };
     Body: { pinMessageId: string };
@@ -284,6 +355,64 @@ export async function sessionRoutes(app: FastifyInstance) {
       const ai = isAiRunning(req.params.sessionId);
       const exec = isExecRunning(req.params.sessionId);
       return { running: ai || exec, ai, exec };
+    },
+  );
+
+  // Pending message queue. The frontend mirrors this list via `queue_updated`
+  // WS broadcasts; HTTP is just for the initial fetch on session load and
+  // for explicit user actions (manual remove). All drains are backend-driven
+  // — at every agent turn boundary, runner pulls the queue and splices it
+  // into the agent.
+  app.get<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/queue',
+    async (req) => {
+      return listQueueItems(req.params.sessionId);
+    },
+  );
+
+  app.post<{
+    Params: { sessionId: string };
+    Body: { content: string; model?: string | null };
+  }>('/api/sessions/:sessionId/queue', async (req, reply) => {
+    const { content, model } = req.body ?? {};
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      reply.code(400);
+      return { error: 'content must be non-empty string' };
+    }
+    const cleanModel =
+      typeof model === 'string' && model.trim().length > 0 ? model : null;
+    const item = enqueueMessage({
+      sessionId: req.params.sessionId,
+      content,
+      model: cleanModel,
+    });
+    broadcastQueueState(req.params.sessionId);
+    // Drain immediately when the agent isn't actively producing output —
+    // that covers both "no run yet" (kick-starts a fresh run) and "run
+    // alive but idle between turns" (push to the existing run so the agent
+    // takes the next prompt without waiting on a runner event that won't
+    // fire). When the agent IS in flight, we hold the queue here and let
+    // the runner's own boundary events drain it, so the queue stays
+    // visible in the UI in the meantime.
+    if (!isAiRunning(req.params.sessionId)) {
+      tryDrainQueue(req.params.sessionId);
+    }
+    return item;
+  });
+
+  app.delete<{ Params: { sessionId: string; itemId: string } }>(
+    '/api/sessions/:sessionId/queue/:itemId',
+    async (req, reply) => {
+      const removed = removeQueueItem(
+        req.params.sessionId,
+        req.params.itemId,
+      );
+      if (!removed) {
+        reply.code(404);
+        return { error: 'queue item not found' };
+      }
+      broadcastQueueState(req.params.sessionId);
+      return { ok: true as const };
     },
   );
 
@@ -337,7 +466,14 @@ export async function sessionRoutes(app: FastifyInstance) {
   app.delete<{ Params: { sessionId: string } }>(
     '/api/sessions/:sessionId',
     async (req) => {
-      db.prepare('DELETE FROM sessions WHERE id = ?').run(req.params.sessionId);
+      const { sessionId } = req.params;
+      // Stop any in-flight or idle agent run before deleting the session
+      // row. If we don't, the run keeps streaming events / persisting
+      // tool/assistant rows and they cascade-delete out from under it,
+      // producing FK errors and orphan in-memory state.
+      cancelAiRun(sessionId);
+      cancelExecRun(sessionId);
+      db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
       return { ok: true };
     },
   );

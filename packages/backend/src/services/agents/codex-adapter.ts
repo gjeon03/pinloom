@@ -1,25 +1,35 @@
 // Spawns the local `codex` CLI in non-interactive `exec --json` mode and
 // translates its JSONL event stream into the same NormalizedEvent shape
-// the Claude adapter produces. The orchestrator (runner.ts) consumes
-// either stream interchangeably.
+// the Claude adapter produces.
+//
+// Codex CLI is single-prompt-per-invocation: each `codex exec` reads one
+// prompt from stdin, runs one turn, and exits. To keep parity with Claude's
+// "mid-run message injection" UX, we wrap that in a loop here:
+//
+//   while (stream still open):
+//     pull next prompt (blocks if queue is empty)
+//     spawn `codex exec resume <thread_id>` (or initial `codex exec`)
+//     stream events, capture thread_id from thread.started
+//     wait for child exit
+//
+// As long as the orchestrator keeps the run alive (i.e. doesn't call
+// close()), pushing a new message resumes the same codex thread for the
+// next turn. Closing the stream lets the loop exit cleanly.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { UserPromptStream } from './message-stream.js';
 import type {
   AgentAdapter,
   AgentRun,
   AgentRunArgs,
   NormalizedEvent,
+  UserPrompt,
 } from './types.js';
 
 const CODEX_BIN = process.env.PINLOOM_CODEX_BIN ?? 'codex';
-
-interface CodexThreadStarted {
-  type: 'thread.started';
-  thread_id: string;
-}
 
 interface CodexAgentMessage {
   type: 'agent_message';
@@ -103,117 +113,58 @@ class CodexAdapterImpl implements AgentAdapter {
   readonly name = 'codex' as const;
 
   run(args: AgentRunArgs): AgentRun {
-    // Build argv. We use `--dangerously-bypass-approvals-and-sandbox` so
-    // codex has the same effective capabilities as the Claude SDK runs in
-    // pinloom (which uses `permissionMode: 'bypassPermissions'`). Without
-    // this, codex's default workspace-write sandbox blocks ~/.gradle
-    // writes, outbound network (e.g. distribution downloads), and local
-    // TCP socket binds (Gradle daemon, dev servers, etc.) — Claude
-    // sessions can do all of those, so the agent picker should be the
-    // only meaningful difference. pinloom is local-only and single-user.
-    const cliArgs: string[] = [
-      'exec',
-      '--json',
-      '--dangerously-bypass-approvals-and-sandbox',
-      '--skip-git-repo-check',
-    ];
-    if (args.resume) {
-      // Format: codex exec resume <SESSION_ID> [PROMPT] --json …
-      // The prompt is appended via stdin so newlines/special chars survive.
-      cliArgs.splice(1, 0, 'resume', args.resume);
-    }
-    if (args.model) cliArgs.push('--model', args.model);
+    const promptStream = new UserPromptStream();
+    promptStream.push(args.initialPrompt);
 
-    // Codex's --image flag takes file paths. Materialize each base64
-    // attachment to a tempfile we'll clean up after the process ends.
-    const tmpDir = args.images && args.images.length > 0
-      ? mkdtempSync(path.join(tmpdir(), 'pinloom-codex-'))
-      : null;
-    const tmpFiles: string[] = [];
-    if (tmpDir && args.images) {
-      for (let i = 0; i < args.images.length; i++) {
-        const img = args.images[i];
+    let threadId: string | null = args.resume ?? null;
+    let currentChild: ChildProcessWithoutNullStreams | null = null;
+    let aborted = false;
+
+    args.abortController.signal.addEventListener('abort', () => {
+      aborted = true;
+      promptStream.close();
+      if (currentChild) {
+        try {
+          currentChild.kill('SIGTERM');
+        } catch {
+          // best-effort
+        }
+      }
+    });
+
+    function cliArgsFor(useResume: boolean): string[] {
+      const base = [
+        'exec',
+        '--json',
+        '--dangerously-bypass-approvals-and-sandbox',
+        '--skip-git-repo-check',
+      ];
+      if (useResume && threadId) {
+        // `codex exec resume <ID> --json …`
+        base.splice(1, 0, 'resume', threadId);
+      }
+      if (args.model) base.push('--model', args.model);
+      return base;
+    }
+
+    function materializeImages(images: UserPrompt['images']): {
+      tmpDir: string | null;
+      flags: string[];
+    } {
+      if (!images || images.length === 0) return { tmpDir: null, flags: [] };
+      const tmpDir = mkdtempSync(path.join(tmpdir(), 'pinloom-codex-'));
+      const flags: string[] = [];
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
         const ext = img.mimeType.split('/')[1] ?? 'png';
         const file = path.join(tmpDir, `img-${i}.${ext}`);
         writeFileSync(file, Buffer.from(img.base64, 'base64'));
-        tmpFiles.push(file);
-        cliArgs.push('--image', file);
+        flags.push('--image', file);
       }
+      return { tmpDir, flags };
     }
 
-    // Compose stdin: [systemPrompt, then user prompt]. Codex doesn't have
-    // a separate --system flag, so we prepend a "## System" block.
-    const stdinPayload =
-      args.systemPrompt.length > 0
-        ? `${args.systemPrompt}\n\n---\n\n${args.prompt}`
-        : args.prompt;
-
-    // Final positional arg is "-" so the prompt is read from stdin.
-    cliArgs.push('-');
-
-    let child: ChildProcessWithoutNullStreams;
-    try {
-      child = spawn(CODEX_BIN, cliArgs, {
-        cwd: args.cwd,
-        env: process.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      // Convert sync spawn error into a one-shot async stream so the caller
-      // surfaces it through the same path it handles all other errors.
-      const message = err instanceof Error ? err.message : String(err);
-      const fallback = (async function* (): AsyncGenerator<NormalizedEvent> {
-        throw new Error(
-          `Failed to spawn '${CODEX_BIN}' (is the Codex CLI installed?). ${message}`,
-        );
-      })();
-      return { events: fallback, close: () => {} };
-    }
-
-    let stdinClosed = false;
-    try {
-      child.stdin.write(stdinPayload);
-      child.stdin.end();
-      stdinClosed = true;
-    } catch {
-      // Best-effort — child may have already exited.
-    }
-
-    let killed = false;
-    args.abortController.signal.addEventListener('abort', () => {
-      killed = true;
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        // best-effort
-      }
-    });
-
-    const cleanup = () => {
-      if (!stdinClosed) {
-        try {
-          child.stdin.end();
-        } catch {
-          // best-effort
-        }
-        stdinClosed = true;
-      }
-      if (tmpDir) {
-        try {
-          rmSync(tmpDir, { recursive: true, force: true });
-        } catch {
-          // best-effort
-        }
-      }
-    };
-
-    let stderrBuffer = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => {
-      stderrBuffer += chunk;
-    });
-
-    async function* lines(): AsyncGenerator<string> {
+    async function* parseLines(child: ChildProcessWithoutNullStreams): AsyncGenerator<string> {
       let buffer = '';
       child.stdout.setEncoding('utf8');
       for await (const chunk of child.stdout) {
@@ -229,24 +180,78 @@ class CodexAdapterImpl implements AgentAdapter {
       if (buffer.trim().length > 0) yield buffer;
     }
 
-    async function* events(): AsyncGenerator<NormalizedEvent> {
+    async function* runOneTurn(
+      prompt: UserPrompt,
+      isFirstTurn: boolean,
+    ): AsyncGenerator<NormalizedEvent> {
+      const useResume = !isFirstTurn || !!args.resume;
+      const cliArgs = cliArgsFor(useResume);
+
+      const { tmpDir, flags: imageFlags } = materializeImages(prompt.images);
+      cliArgs.push(...imageFlags);
+
+      // Compose stdin: systemPrompt is only included on the very first turn
+      // (subsequent resumes already have it baked in via thread context).
+      const stdinPayload =
+        isFirstTurn && args.systemPrompt.length > 0
+          ? `${args.systemPrompt}\n\n---\n\n${prompt.text}`
+          : prompt.text;
+
+      cliArgs.push('-');
+
+      let child: ChildProcessWithoutNullStreams;
       try {
-        for await (const line of lines()) {
-          if (args.abortController.signal.aborted) break;
+        child = spawn(CODEX_BIN, cliArgs, {
+          cwd: args.cwd,
+          env: process.env,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        currentChild = child;
+      } catch (err) {
+        if (tmpDir) {
+          try {
+            rmSync(tmpDir, { recursive: true, force: true });
+          } catch {
+            // best-effort
+          }
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Failed to spawn '${CODEX_BIN}' (is the Codex CLI installed?). ${message}`,
+        );
+      }
+
+      try {
+        child.stdin.write(stdinPayload);
+        child.stdin.end();
+      } catch {
+        // best-effort — child may have already exited.
+      }
+
+      let stderrBuffer = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk: string) => {
+        stderrBuffer += chunk;
+      });
+
+      try {
+        for await (const line of parseLines(child)) {
+          if (aborted) break;
           let parsed: CodexEvent;
           try {
             parsed = JSON.parse(line) as CodexEvent;
           } catch {
-            continue; // Skip malformed lines silently.
+            continue;
           }
 
           if (parsed.type === 'thread.started' && parsed.thread_id) {
+            threadId = parsed.thread_id;
             yield { type: 'session_id', id: parsed.thread_id };
             continue;
           }
 
           if (parsed.type === 'turn.completed') {
-            yield { type: 'message_stop' };
+            yield { type: 'turn_complete' };
             continue;
           }
 
@@ -257,19 +262,13 @@ class CodexAdapterImpl implements AgentAdapter {
             if (item.type === 'agent_message' && parsed.type === 'item.completed') {
               const msg = item as CodexAgentMessage;
               if (typeof msg.text === 'string' && msg.text.length > 0) {
-                // Codex doesn't stream text — emit the whole block as a
-                // single delta and immediately close it so the runner
-                // persists one assistant row per agent_message.
                 yield { type: 'text_delta', text: msg.text };
                 yield { type: 'message_stop' };
               }
               continue;
             }
 
-            if (
-              item.type === 'reasoning' &&
-              parsed.type === 'item.completed'
-            ) {
+            if (item.type === 'reasoning' && parsed.type === 'item.completed') {
               const r = item as CodexReasoning;
               if (typeof r.text === 'string' && r.text.length > 0) {
                 yield { type: 'thinking_start' };
@@ -335,33 +334,55 @@ class CodexAdapterImpl implements AgentAdapter {
         }
 
         const exitCode = await new Promise<number | null>((resolve) => {
-          if (child.exitCode !== null) {
-            resolve(child.exitCode);
-          } else {
-            child.once('close', (code) => resolve(code));
-          }
+          if (child.exitCode !== null) resolve(child.exitCode);
+          else child.once('close', (code) => resolve(code));
         });
 
-        if (!killed && exitCode !== 0 && exitCode !== null) {
+        if (!aborted && exitCode !== 0 && exitCode !== null) {
           throw new Error(
             `codex exec exited with code ${exitCode}` +
               (stderrBuffer ? `: ${stderrBuffer.trim().slice(0, 500)}` : ''),
           );
         }
       } finally {
-        cleanup();
+        if (currentChild === child) currentChild = null;
+        if (tmpDir) {
+          try {
+            rmSync(tmpDir, { recursive: true, force: true });
+          } catch {
+            // best-effort
+          }
+        }
+      }
+    }
+
+    async function* events(): AsyncGenerator<NormalizedEvent> {
+      let isFirstTurn = true;
+      try {
+        while (!aborted) {
+          const next = await promptStream.next();
+          if (next === null) return;
+          yield* runOneTurn(next, isFirstTurn);
+          isFirstTurn = false;
+        }
+      } finally {
+        if (currentChild) {
+          try {
+            currentChild.kill('SIGTERM');
+          } catch {
+            // best-effort
+          }
+        }
       }
     }
 
     return {
       events: events(),
+      pushMessage(prompt: UserPrompt) {
+        promptStream.push(prompt);
+      },
       close() {
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          // best-effort
-        }
-        cleanup();
+        promptStream.close();
       },
     };
   }
