@@ -1,15 +1,23 @@
+import { createRequire } from 'node:module';
 import { nanoid } from 'nanoid';
 import type { Message, MessageRole } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { getAgentAdapter } from './agents/index.js';
-import type { AgentRun, NormalizedEvent } from './agents/types.js';
+import type {
+  AgentRun,
+  McpStdioServerConfig,
+  NormalizedEvent,
+} from './agents/types.js';
 import { listUserEnvVars } from './user-env.js';
+import { getTeamByOrchestratorSessionId } from './teams.js';
+import { mintTeamToken } from './team-tokens.js';
 import {
   broadcastQueueState,
   drainQueue,
   enqueueMessage,
+  listQueueItems,
   listSessionsWithQueuedItems,
 } from './message-queue.js';
 import { redactSecrets } from './redact.js';
@@ -385,6 +393,10 @@ function stopRun(sessionId: string, opts: { silent: boolean }): boolean {
   } catch {
     // best-effort
   }
+  // Loud cancel still surfaces as "idle" to team_wait subscribers; silent
+  // cancel does too because the runner immediately starts a fresh attempt
+  // so the listener will re-check isAiRunning and stay subscribed.
+  notifySessionIdle(sessionId);
   return true;
 }
 
@@ -395,6 +407,82 @@ export function cancelAiRun(sessionId: string): boolean {
 export function isAiRunning(sessionId: string): boolean {
   const run = activeRuns.get(sessionId);
   return !!run && run.inFlight;
+}
+
+// Promise-based "wait until session is idle" helper — primarily used by
+// the team-dispatch routes for `team_wait`. Resolves with `true` when
+// the session is idle, `false` on timeout or abort. Hooks into a tiny
+// per-session listener Set that's notified by the run-attempt loop's
+// finally block when a run wraps up. Subscribers register *before*
+// checking inFlight to avoid a race where the run ends between their
+// check and their subscribe.
+const idleListeners = new Map<string, Set<() => void>>();
+
+function notifySessionIdle(sessionId: string): void {
+  const set = idleListeners.get(sessionId);
+  if (!set) return;
+  // Snapshot first — listeners may unsubscribe synchronously inside the
+  // callback, mutating the set we'd otherwise be iterating.
+  const callbacks = [...set];
+  for (const cb of callbacks) {
+    try {
+      cb();
+    } catch {
+      // best-effort — one bad listener shouldn't break the rest
+    }
+  }
+}
+
+export function waitForIdle(
+  sessionId: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    if (!isAiRunning(sessionId) && getQueueDepthFor(sessionId) === 0) {
+      resolve(true);
+      return;
+    }
+    let settled = false;
+    const set = idleListeners.get(sessionId) ?? new Set<() => void>();
+    idleListeners.set(sessionId, set);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    }, timeoutMs);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    };
+    function cleanup() {
+      clearTimeout(timer);
+      set.delete(onIdle);
+      if (set.size === 0) idleListeners.delete(sessionId);
+      signal?.removeEventListener('abort', onAbort);
+    }
+    function onIdle() {
+      // Re-check actual state — the listener fires on every run end but
+      // there may still be queued items waiting to be drained.
+      if (isAiRunning(sessionId) || getQueueDepthFor(sessionId) > 0) return;
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(true);
+    }
+    set.add(onIdle);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+// Tiny indirection so the queue depth lookup doesn't need to import
+// message-queue at module load time (would create a cycle with runner →
+// message-queue → broadcast → … in some refactors).
+function getQueueDepthFor(sessionId: string): number {
+  return listQueueItems(sessionId).length;
 }
 
 // Called once on backend startup. The message_queue table survives backend
@@ -673,6 +761,49 @@ interface AttemptResult {
   silent: boolean;
 }
 
+// Resolve the bundled MCP server entry once at module load. createRequire
+// looks up `@pinloom/mcp-server` against this file's URL — works in both
+// dev (tsx watching src/) and prod (built dist/) layouts because the
+// package has a `main` pointing at its built entry. Returns null if the
+// package isn't installed (defensive — pnpm workspace should always
+// resolve it, but a missing build shouldn't crash the runner).
+const requireFromHere = createRequire(import.meta.url);
+function resolveMcpServerEntry(): string | null {
+  try {
+    return requireFromHere.resolve('@pinloom/mcp-server');
+  } catch {
+    return null;
+  }
+}
+const MCP_SERVER_ENTRY = resolveMcpServerEntry();
+
+// If the given session is an orchestrator, mint a fresh per-run token
+// and return the MCP server config to inject. Workers and untethered
+// sessions get null — they don't need MCP wiring.
+function buildOrchestratorMcpConfig(
+  sessionId: string,
+): Record<string, McpStdioServerConfig> | undefined {
+  if (!MCP_SERVER_ENTRY) return undefined;
+  const team = getTeamByOrchestratorSessionId(sessionId);
+  if (!team) return undefined;
+  const token = mintTeamToken(team.id);
+  return {
+    pinloom: {
+      command: process.execPath, // current Node binary
+      args: [MCP_SERVER_ENTRY],
+      env: {
+        PINLOOM_TEAM_ID: team.id,
+        PINLOOM_TEAM_TOKEN: token,
+        // Default backend URL is fine for local dev; expose an override
+        // hook in case the user runs pinloom on a non-standard port.
+        ...(process.env.PINLOOM_MCP_BACKEND_URL
+          ? { PINLOOM_BACKEND_URL: process.env.PINLOOM_MCP_BACKEND_URL }
+          : {}),
+      },
+    },
+  };
+}
+
 async function runAttempt(
   ctx: SessionContext,
   prompt: string,
@@ -684,6 +815,7 @@ async function runAttempt(
 ): Promise<AttemptResult> {
   const adapter = getAgentAdapter(ctx.agent);
   const abortController = new AbortController();
+  const mcpServers = buildOrchestratorMcpConfig(ctx.id);
   const agentRun = adapter.run({
     cwd: ctx.cwd,
     systemPrompt,
@@ -691,6 +823,7 @@ async function runAttempt(
     resume: useResume ? ctx.claudeSessionId : null,
     abortController,
     initialPrompt: { text: prompt, images },
+    mcpServers,
   });
 
   const active: ActiveRun = {
@@ -890,6 +1023,7 @@ async function runAttempt(
     if (activeRuns.get(ctx.id) === active) {
       activeRuns.delete(ctx.id);
     }
+    notifySessionIdle(ctx.id);
   }
 
   if (abortController.signal.aborted) {

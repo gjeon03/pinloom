@@ -17,8 +17,14 @@
 // next turn. Closing the stream lets the loop exit cleanly.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { UserPromptStream } from './message-stream.js';
 import type {
@@ -74,6 +80,69 @@ interface CodexEvent {
   item?: CodexItem;
 }
 
+// TOML escaping for string values — keep it minimal because we control
+// everything we render. We only use double-quoted basic strings.
+function tomlString(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function tomlStringArray(values: string[]): string {
+  return `[${values.map(tomlString).join(', ')}]`;
+}
+
+// Build a temporary CODEX_HOME directory containing a generated
+// `config.toml` with our MCP server block, plus a copy of the user's
+// existing auth (`auth.json`) so the spawned codex still recognizes the
+// logged-in account. Returns the directory path and the env overrides
+// the caller should merge into the spawn env. Caller is responsible for
+// cleaning up the directory.
+function buildCodexHome(
+  mcpServers: Record<
+    string,
+    { command: string; args?: string[]; env?: Record<string, string> }
+  >,
+): { dir: string; env: Record<string, string> } | null {
+  const sourceHome =
+    process.env.CODEX_HOME ?? path.join(homedir(), '.codex');
+  const dir = mkdtempSync(path.join(tmpdir(), 'pinloom-codex-home-'));
+
+  // Bring over auth so the spawned codex stays logged in.
+  for (const filename of ['auth.json', 'auth.json.bak']) {
+    const src = path.join(sourceHome, filename);
+    if (existsSync(src)) {
+      try {
+        copyFileSync(src, path.join(dir, filename));
+      } catch {
+        // best-effort — codex will surface its own auth errors if missing
+      }
+    }
+  }
+
+  const lines: string[] = [];
+  // Inherit user's default model preference if set in their real config —
+  // we intentionally don't copy the whole config.toml because the user's
+  // own [mcp_servers.*] entries would shadow ours by name. Pinloom-side
+  // model selection still works via --model flag downstream.
+  for (const [name, server] of Object.entries(mcpServers)) {
+    lines.push(`[mcp_servers.${name}]`);
+    lines.push(`command = ${tomlString(server.command)}`);
+    if (server.args && server.args.length > 0) {
+      lines.push(`args = ${tomlStringArray(server.args)}`);
+    }
+    if (server.env && Object.keys(server.env).length > 0) {
+      lines.push('[mcp_servers.' + name + '.env]');
+      for (const [k, v] of Object.entries(server.env)) {
+        lines.push(`${k} = ${tomlString(v)}`);
+      }
+    }
+    lines.push('');
+  }
+
+  writeFileSync(path.join(dir, 'config.toml'), lines.join('\n'), 'utf8');
+
+  return { dir, env: { CODEX_HOME: dir } };
+}
+
 function summarizeFileChange(item: CodexFileChange): {
   name: string;
   input: Record<string, unknown>;
@@ -119,6 +188,13 @@ class CodexAdapterImpl implements AgentAdapter {
     let threadId: string | null = args.resume ?? null;
     let currentChild: ChildProcessWithoutNullStreams | null = null;
     let aborted = false;
+
+    // Per-run isolated CODEX_HOME if the orchestrator needs MCP wiring.
+    // Stays alive for the lifetime of the AgentRun (multiple turns reuse
+    // the same config) and is wiped on close().
+    const codexHome = args.mcpServers
+      ? buildCodexHome(args.mcpServers)
+      : null;
 
     args.abortController.signal.addEventListener('abort', () => {
       aborted = true;
@@ -201,9 +277,12 @@ class CodexAdapterImpl implements AgentAdapter {
 
       let child: ChildProcessWithoutNullStreams;
       try {
+        const spawnEnv = codexHome
+          ? { ...process.env, ...codexHome.env }
+          : process.env;
         child = spawn(CODEX_BIN, cliArgs, {
           cwd: args.cwd,
-          env: process.env,
+          env: spawnEnv,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         currentChild = child;
@@ -369,6 +448,13 @@ class CodexAdapterImpl implements AgentAdapter {
         if (currentChild) {
           try {
             currentChild.kill('SIGTERM');
+          } catch {
+            // best-effort
+          }
+        }
+        if (codexHome) {
+          try {
+            rmSync(codexHome.dir, { recursive: true, force: true });
           } catch {
             // best-effort
           }
