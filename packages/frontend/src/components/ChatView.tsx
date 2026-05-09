@@ -269,13 +269,30 @@ export function ChatView({ session, onPinChange }: Props) {
     return null;
   }
 
+  // True while the IME is composing (Korean/Japanese/Chinese). We
+  // suppress mention updates during composition because aliases are
+  // strict ASCII — any preedit char in the query is noise — and because
+  // committing composition fires a synthetic Enter that would otherwise
+  // race the popup's keydown handler.
+  const composingRef = useRef(false);
+
   function updateMentionFromTextarea() {
     if (mentionWorkers.length === 0) {
       if (mention) setMention(null);
       return;
     }
+    if (composingRef.current) return;
     const el = textareaRef.current;
     if (!el) return;
+    // A range selection is a deliberate user gesture (selecting text to
+    // overtype etc.) — don't pop up a mention picker over it.
+    if (
+      typeof el.selectionEnd === 'number' &&
+      el.selectionEnd !== el.selectionStart
+    ) {
+      if (mention) setMention(null);
+      return;
+    }
     const cursor = el.selectionStart ?? input.length;
     const next = detectMentionAtCursor(input, cursor);
     if (!next) {
@@ -1053,6 +1070,14 @@ export function ChatView({ session, onPinChange }: Props) {
               queueMicrotask(updateMentionFromTextarea);
             }}
             onSelect={updateMentionFromTextarea}
+            onCompositionStart={() => {
+              composingRef.current = true;
+              if (mention) setMention(null);
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+              queueMicrotask(updateMentionFromTextarea);
+            }}
             onBlur={() => {
               // Delay so a click on a popup row still fires.
               setTimeout(() => setMention(null), 100);

@@ -879,10 +879,10 @@ async function runAttempt(
   systemPrompt: string,
   useResume: boolean,
   model?: string,
+  mcpServers?: Record<string, McpStdioServerConfig>,
 ): Promise<AttemptResult> {
   const adapter = getAgentAdapter(ctx.agent);
   const abortController = new AbortController();
-  const mcpServers = buildOrchestratorMcpConfig(ctx.id);
   const agentRun = adapter.run({
     cwd: ctx.cwd,
     systemPrompt,
@@ -1137,6 +1137,14 @@ async function runAssistant(
     teamContext +
     (pinsContext ? `\n\n${pinsContext}` : '');
 
+  // Mint the orchestrator's MCP token ONCE per turn (i.e. per
+  // runAssistant call), not once per runAttempt. Resume + fallback
+  // attempts share the same token so the still-spawned child process
+  // from the first attempt — if any — keeps authenticating until it
+  // exits. Per-attempt minting would 403 the first attempt's child the
+  // moment the fallback ran.
+  const mcpServers = buildOrchestratorMcpConfig(ctx.id);
+
   let result: AttemptResult = { shouldFallback: false, cancelled: false, silent: false };
 
   try {
@@ -1150,6 +1158,7 @@ async function runAssistant(
           systemPrompt,
           true,
           model,
+          mcpServers,
         );
       } catch (err) {
         // Hard error after the attempt produced output — surface as runner
@@ -1198,6 +1207,7 @@ async function runAssistant(
         systemPrompt,
         false,
         model,
+        mcpServers,
       );
     }
 

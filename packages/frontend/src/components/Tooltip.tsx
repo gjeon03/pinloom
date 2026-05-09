@@ -61,18 +61,29 @@ export function Tooltip({ label, side = 'bottom', children }: Props) {
     setCoords({ position: 'fixed', top, left });
   }
 
-  // Reposition on every visibility flip and on viewport changes while open.
+  // Reposition on every visibility flip and on viewport changes while
+  // open. The scroll listener is in the capture phase so nested
+  // scrollers (chat log, tab strip, etc.) all bubble through — but
+  // that means a continuous wheel can fire it ~60Hz against forced
+  // layout from getBoundingClientRect. rAF-coalesce to 1 reposition
+  // per frame.
   useLayoutEffect(() => {
     if (!visible || suppressed) return;
     recompute();
-    function onScrollOrResize() {
-      recompute();
+    let rafId: number | null = null;
+    function schedule() {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        recompute();
+      });
     }
-    window.addEventListener('resize', onScrollOrResize);
-    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', schedule);
+    window.addEventListener('scroll', schedule, true);
     return () => {
-      window.removeEventListener('resize', onScrollOrResize);
-      window.removeEventListener('scroll', onScrollOrResize, true);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', schedule);
+      window.removeEventListener('scroll', schedule, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, suppressed, side, label]);

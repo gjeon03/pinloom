@@ -187,16 +187,16 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     };
     let rows: MessageRow[];
     if (req.query.sinceMessageId) {
-      // Chronological forward pagination: "give me everything after X".
-      // ISO created_at + lexicographic compare is enough. Scope the
-      // sinceRow lookup to the same session so a caller can't probe ids
-      // across other sessions.
+      // Chronological forward pagination: "give me everything strictly
+      // after this message". We compare the (created_at, id) tuple so
+      // same-millisecond siblings of the cursor are paginated correctly
+      // — comparing only created_at would silently drop them.
       const sinceRow = db
         .prepare(
-          'SELECT created_at FROM messages WHERE id = ? AND session_id = ?',
+          'SELECT id, created_at FROM messages WHERE id = ? AND session_id = ?',
         )
         .get(req.query.sinceMessageId, member.sessionId) as
-        | { created_at: string }
+        | { id: string; created_at: string }
         | undefined;
       if (!sinceRow) {
         reply.code(404);
@@ -208,11 +208,17 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         .prepare(
           `SELECT id, role, content, created_at FROM messages
            WHERE session_id = ? AND role IN ('user','assistant')
-             AND created_at > ?
+             AND (created_at > ? OR (created_at = ? AND id > ?))
            ORDER BY created_at ASC, id ASC
            LIMIT ?`,
         )
-        .all(member.sessionId, sinceRow.created_at, limit) as MessageRow[];
+        .all(
+          member.sessionId,
+          sinceRow.created_at,
+          sinceRow.created_at,
+          sinceRow.id,
+          limit,
+        ) as MessageRow[];
     } else {
       // Default: "latest N messages". The 99% case for an orchestrator
       // is "what did the worker just say" — chronological-forward with
@@ -275,8 +281,16 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     // Default to the upper cap so a caller that doesn't care about the
     // exact ceiling gets the longest sensible wait without explicit
     // tuning. AbortSignal still ends it the moment the client disconnects.
-    const requested = parseInt(req.query.timeoutMs ?? String(MAX_WAIT_MS), 10) || MAX_WAIT_MS;
-    const timeoutMs = Math.min(Math.max(requested, 100), MAX_WAIT_MS);
+    // `timeoutMs=0` is treated as "non-blocking poll" — return whatever
+    // the current state is immediately rather than silently re-defaulting.
+    const rawParam = req.query.timeoutMs;
+    let timeoutMs: number;
+    if (rawParam === '0') {
+      timeoutMs = 0;
+    } else {
+      const requested = parseInt(rawParam ?? String(MAX_WAIT_MS), 10) || MAX_WAIT_MS;
+      timeoutMs = Math.min(Math.max(requested, 100), MAX_WAIT_MS);
+    }
 
     // Tie the wait to the underlying socket so a disconnected MCP shim
     // doesn't pin the worker thread hostage until timeout. Detach after
