@@ -287,6 +287,10 @@ export const api = {
     request<{ ok: true }>(`/api/sessions/${sessionId}/queue/${itemId}`, {
       method: 'DELETE',
     }),
+  clearQueue: (sessionId: string) =>
+    request<{ ok: true }>(`/api/sessions/${sessionId}/queue`, {
+      method: 'DELETE',
+    }),
 
   // User-managed environment variables (Settings → Environment Variables).
   listEnvVars: () => request<UserEnvVar[]>('/api/settings/env'),

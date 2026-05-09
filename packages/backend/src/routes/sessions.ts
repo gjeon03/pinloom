@@ -12,9 +12,12 @@ import {
 } from '../services/runner.js';
 import {
   broadcastQueueState,
+  clearQueue,
   enqueueMessage,
+  InvalidQueueContentError,
   listQueueItems,
   removeQueueItem,
+  SessionNotFoundError,
 } from '../services/message-queue.js';
 import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
@@ -375,18 +378,32 @@ export async function sessionRoutes(app: FastifyInstance) {
     Body: { content: string; model?: string | null };
   }>('/api/sessions/:sessionId/queue', async (req, reply) => {
     const { content, model } = req.body ?? {};
-    if (typeof content !== 'string' || content.trim().length === 0) {
+    if (typeof content !== 'string') {
       reply.code(400);
-      return { error: 'content must be non-empty string' };
+      return { error: 'content must be a string' };
     }
     const cleanModel =
       typeof model === 'string' && model.trim().length > 0 ? model : null;
-    const item = enqueueMessage({
-      sessionId: req.params.sessionId,
-      content,
-      model: cleanModel,
-    });
-    broadcastQueueState(req.params.sessionId);
+
+    let item;
+    try {
+      item = enqueueMessage({
+        sessionId: req.params.sessionId,
+        content,
+        model: cleanModel,
+      });
+    } catch (err) {
+      if (err instanceof SessionNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
+      }
+      if (err instanceof InvalidQueueContentError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+
     // Drain immediately when the agent isn't actively producing output —
     // that covers both "no run yet" (kick-starts a fresh run) and "run
     // alive but idle between turns" (push to the existing run so the agent
@@ -395,10 +412,27 @@ export async function sessionRoutes(app: FastifyInstance) {
     // the runner's own boundary events drain it, so the queue stays
     // visible in the UI in the meantime.
     if (!isAiRunning(req.params.sessionId)) {
+      // Skip the post-enqueue broadcast: tryDrainQueue immediately drains
+      // and broadcasts the (now empty) state, so an extra broadcast here
+      // would cause a one-frame "Queued (1) → 0" flicker in the UI.
       tryDrainQueue(req.params.sessionId);
+    } else {
+      broadcastQueueState(req.params.sessionId);
     }
     return item;
   });
+
+  app.delete<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/queue',
+    async (req) => {
+      // Bulk clear — single broadcast at the end. Used by the chat UI's
+      // "Clear all" button so we don't fire N parallel DELETEs (one
+      // broadcast per row) when the queue holds many items.
+      clearQueue(req.params.sessionId);
+      broadcastQueueState(req.params.sessionId);
+      return { ok: true as const };
+    },
+  );
 
   app.delete<{ Params: { sessionId: string; itemId: string } }>(
     '/api/sessions/:sessionId/queue/:itemId',
