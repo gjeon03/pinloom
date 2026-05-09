@@ -186,9 +186,12 @@ class ClaudeAdapterImpl implements AgentAdapter {
               ev.type === 'content_block_start' &&
               ev.content_block?.type === 'tool_use'
             ) {
-              yield { type: 'message_stop' };
+              // SDK is about to start a tool_use block — close any
+              // in-flight streamed text first.
+              yield { type: 'text_block_end' };
             } else if (ev.type === 'message_stop') {
-              yield { type: 'message_stop' };
+              // End of an assistant message block from the SDK.
+              yield { type: 'text_block_end' };
             }
             continue;
           }

@@ -24,10 +24,13 @@ export type NormalizedEvent =
     }
   // Output from a tool call. `stream` mirrors Claude's stdout/stderr split.
   | { type: 'tool_result'; text: string; stream: 'stdout' | 'stderr' }
-  // Marks the end of an in-flight assistant message block (Claude
-  // message_stop or each agent_message in Codex). Multiple of these can fire
-  // within a single turn — finalize the streaming row, but stay running.
-  | { type: 'message_stop' }
+  // Marks the end of a streamed assistant text block — finalize the
+  // streaming chat row but keep the run going. Fires for SDK's actual
+  // `message_stop` (end of an assistant message) AND right before a
+  // `tool_use` block starts (so any in-flight text gets closed first).
+  // Multiple per turn; runner uses it as a natural-break drain trigger
+  // when text was actually streaming (vs the empty pre-tool case).
+  | { type: 'text_block_end' }
   // Marks the end of a full turn — the agent has nothing more to say until
   // the next user prompt arrives. Used by the runner to roll over the
   // pending plan item id of a queued mid-run message.
