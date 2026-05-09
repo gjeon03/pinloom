@@ -1,8 +1,30 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ExternalLink, Plus, X } from 'lucide-react';
-import type { AgentKind, Session } from '@pinloom/shared';
+import type { AgentKind, Session, Team } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from './AgentBadge.js';
+
+type TeamRole =
+  | { kind: 'orchestrator'; teamName: string }
+  | { kind: 'worker'; teamName: string; alias: string };
+
+function buildTeamRoles(teams: Team[]): Map<string, TeamRole> {
+  const map = new Map<string, TeamRole>();
+  for (const team of teams) {
+    map.set(team.orchestratorSessionId, {
+      kind: 'orchestrator',
+      teamName: team.name,
+    });
+    for (const m of team.members) {
+      map.set(m.sessionId, {
+        kind: 'worker',
+        teamName: team.name,
+        alias: m.alias,
+      });
+    }
+  }
+  return map;
+}
 
 interface Props {
   projectId: string;
@@ -37,6 +59,34 @@ export function SessionTabs({
   const [codexAvailable, setCodexAvailable] = useState<boolean | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const pickerButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Team membership lookup so we can render "@alias" / "orchestrator"
+  // badges next to tab titles. Refetched whenever the user creates or
+  // changes a team via the same window event the AppShell sidebar uses.
+  const [teams, setTeams] = useState<Team[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    function reload() {
+      api
+        .listTeams()
+        .then((t) => {
+          if (!cancelled) setTeams(t);
+        })
+        .catch(() => {
+          if (!cancelled) setTeams([]);
+        });
+    }
+    reload();
+    function onTeamsChanged() {
+      reload();
+    }
+    window.addEventListener('pinloom:teams-changed', onTeamsChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('pinloom:teams-changed', onTeamsChanged);
+    };
+  }, []);
+  const rolesBySessionId = useMemo(() => buildTeamRoles(teams), [teams]);
 
   // One-shot health probe to know whether the Codex CLI is on PATH.
   // We use this only to dim the picker option — even when codex looks
@@ -239,6 +289,7 @@ export function SessionTabs({
               }}
             >
               <AgentBadge agent={s.agent} size="xs" />
+              <TeamRoleBadge role={rolesBySessionId.get(s.id) ?? null} />
               {editing ? (
                 <input
                   autoFocus
@@ -371,5 +422,30 @@ export function SessionTabs({
         </span>
       )}
     </div>
+  );
+}
+
+// Pill that surfaces a session's role inside a team. Orchestrator gets a
+// neutral "orchestrator" pill; workers get "@alias". Tooltip carries the
+// team name so the user knows which crew the session belongs to.
+function TeamRoleBadge({ role }: { role: TeamRole | null }) {
+  if (!role) return null;
+  if (role.kind === 'orchestrator') {
+    return (
+      <span
+        title={`Orchestrator of team "${role.teamName}"`}
+        className="rounded border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-1 py-[1px] text-[10px] font-medium text-[var(--color-accent)] uppercase tracking-wide"
+      >
+        orch
+      </span>
+    );
+  }
+  return (
+    <span
+      title={`@${role.alias} in team "${role.teamName}"`}
+      className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-[1px] text-[10px] font-mono text-[var(--color-ink-muted)]"
+    >
+      @{role.alias}
+    </span>
   );
 }

@@ -277,6 +277,71 @@ function buildEnvVarsContext(): string {
   ].join('\n');
 }
 
+// If `sessionId` is the orchestrator of a team, return a markdown block
+// describing the workers and the dispatch tools available via the
+// pinloom MCP server. Empty string for non-orchestrator sessions —
+// they don't get the MCP wired up either, so the prompt stays clean.
+function buildTeamContext(sessionId: string): string {
+  const team = getTeamByOrchestratorSessionId(sessionId);
+  if (!team) return '';
+  if (team.members.length === 0) {
+    return [
+      '',
+      '## Team orchestration',
+      '',
+      `You are the orchestrator of team **${team.name}**, but no workers are`,
+      'attached yet. Ask the user to add workers via the Teams page before',
+      'attempting to dispatch.',
+    ].join('\n');
+  }
+  const db = getDb();
+  const workerLines: string[] = [];
+  for (const m of team.members) {
+    const session = db
+      .prepare(
+        'SELECT agent, model, project_id, title FROM sessions WHERE id = ?',
+      )
+      .get(m.sessionId) as
+      | {
+          agent: 'claude' | 'codex' | null;
+          model: string | null;
+          project_id: string;
+          title: string | null;
+        }
+      | undefined;
+    if (!session) continue;
+    const project = db
+      .prepare('SELECT name FROM projects WHERE id = ?')
+      .get(session.project_id) as { name: string } | undefined;
+    const agent = session.agent ?? 'claude';
+    const modelPart = session.model ? `:${session.model}` : '';
+    const projectPart = project ? `, project ${project.name}` : '';
+    workerLines.push(`- **@${m.alias}** (${agent}${modelPart}${projectPart})`);
+  }
+  return [
+    '',
+    `## Team orchestration — you are the orchestrator of team "${team.name}"`,
+    '',
+    'You can dispatch tasks to the workers below by calling the pinloom MCP',
+    'tools. Each worker is its own session with its own agent, model, and',
+    'project — pick the right alias for the job.',
+    '',
+    'Workers:',
+    ...workerLines,
+    '',
+    'Available tools (auto-injected via MCP):',
+    '- `team_list()` — re-fetch worker status if needed',
+    '- `team_send(alias, text)` — enqueue a prompt to a worker (returns immediately)',
+    '- `team_read(alias, sinceMessageId?)` — read a worker\'s recent reply',
+    '- `team_status(alias)` — check if a worker is idle/running',
+    '- `team_wait(alias, timeoutMs?)` — block until a worker is idle (max 60s)',
+    '',
+    'Typical pattern: `team_send` → `team_wait` → `team_read` (with the last',
+    'message id you saw, to get only the new reply). Workers don\'t see each',
+    'other; you are the only one that can synthesize across them.',
+  ].join('\n');
+}
+
 function buildPinsContext(sessionId: string): string {
   const db = getDb();
   const pins = db
@@ -1071,11 +1136,13 @@ async function runAssistant(
 
   const pinsContext = buildPinsContext(ctx.id);
   const envVarsContext = buildEnvVarsContext();
+  const teamContext = buildTeamContext(ctx.id);
   const systemPrompt =
     SYSTEM_PROMPT +
     buildPlanContext(planItems) +
     buildWikiContext(ctx.projectId) +
     envVarsContext +
+    teamContext +
     (pinsContext ? `\n\n${pinsContext}` : '');
 
   let result: AttemptResult = { shouldFallback: false, cancelled: false, silent: false };
