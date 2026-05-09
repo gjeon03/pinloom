@@ -801,6 +801,10 @@ export async function sendUserMessages(
       sessionId,
       status: 'started',
     });
+    // Repaint the canvas: worker just transitioned idle → running mid-
+    // AgentRun (next turn starts via pushMessage rather than a fresh
+    // adapter spawn).
+    emitWorkerStatusIfMember(sessionId);
     return persisted;
   }
 
@@ -1094,6 +1098,13 @@ async function runAttempt(
           // Anything the user typed during this turn now goes into the
           // next one — no interrupt needed, the run is idle.
           tryDrainQueue(ctx.id);
+          // Wake any team_wait waiters AND repaint the canvas. Without
+          // these, a long-lived AgentRun (Codex resume / Claude SDK) sits
+          // at inFlight=false between turns but no one observing the
+          // session knows — team_wait stalls until the AgentRun fully
+          // ends, the canvas keeps "running" indefinitely.
+          notifySessionIdle(ctx.id);
+          emitWorkerStatusIfMember(ctx.id);
           break;
         case 'final_text_fallback': {
           const id = ensureStream();
