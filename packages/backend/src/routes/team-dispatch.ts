@@ -14,7 +14,6 @@
 //   GET  /wait       ?alias=&timeoutMs=           — team_wait (long-poll)
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { getMemberByAlias, getTeam } from '../services/teams.js';
 import {

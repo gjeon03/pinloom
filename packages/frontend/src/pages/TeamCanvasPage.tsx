@@ -1,16 +1,17 @@
 // Descriptive team-dispatch canvas — renders the team's orchestrator
-// and workers as nodes, with edges showing recent dispatch_send events
-// and node pulses driven by worker_status. The canvas does NOT author
-// the graph; it observes what the orchestrator does at runtime.
+// and workers as nodes, with edge color/animation driven entirely by
+// each worker's running/queued state. The canvas does NOT author the
+// graph; it observes what the orchestrator does at runtime.
 //
 // Data flow:
 //   1. On mount, fetch team metadata + recent dispatch events (backfill)
-//   2. Subscribe to `team:${teamId}` WS channel for live events
-//   3. Reduce events into derived `nodeStates` (status per worker) and
-//      `edgePulses` (timestamp of most recent dispatch per alias)
-//   4. Stale edges fade after EDGE_FRESH_MS
+//   2. Apply backfill BEFORE subscribing live so the latter naturally
+//      wins on overlap. We additionally guard handleEvent with a per-
+//      alias `at` timestamp so out-of-order events can't regress state.
+//   3. Edge state derives from current worker_status only — no timer-
+//      based fade, no stale-edge re-render churn.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ReactFlow,
@@ -34,15 +35,14 @@ import { api } from '../api/client.js';
 import { AgentBadge } from '../components/AgentBadge.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 
-const EDGE_FRESH_MS = 30_000;
-
 interface WorkerState {
   alias: string;
   sessionId: string;
   running: boolean;
   queued: number;
-  /** ISO timestamp of the most recent dispatch_send to this worker. */
-  lastDispatchAt: string | null;
+  /** Timestamp of the latest event we've applied for this alias.
+   *  Older events (replayed backfill, out-of-order WS) are dropped. */
+  lastEventAt: string;
 }
 
 interface CanvasNodeData extends Record<string, unknown> {
@@ -79,30 +79,41 @@ export function TeamCanvasPage() {
   const [workersByAlias, setWorkersByAlias] = useState<
     Record<string, WorkerState>
   >({});
-  // Tick state used so the edge-fresh decay refreshes the render even
-  // when no new event has arrived. Bumped every 5s.
-  const [, setNow] = useState(Date.now());
 
   const handleEvent = useCallback((event: TeamDispatchEvent) => {
     setWorkersByAlias((prev) => {
-      const next = { ...prev };
-      const existing = next[event.alias] ?? {
-        alias: event.alias,
-        sessionId: event.sessionId,
-        running: false,
-        queued: 0,
-        lastDispatchAt: null,
-      };
+      const existing = prev[event.alias];
+      // Drop stale events: backfill replay racing the live stream OR
+      // out-of-order WS deliveries can't regress fresh state.
+      if (existing && existing.lastEventAt > event.at) return prev;
+      // dispatch_send carries no status — it's a "we just sent" pulse
+      // we don't render directly. The follow-up worker_status from the
+      // runner is what flips the node visual. Skip to avoid clobbering.
       if (event.type === 'dispatch_send') {
-        next[event.alias] = { ...existing, lastDispatchAt: event.at };
-      } else {
-        next[event.alias] = {
-          ...existing,
+        if (!existing) {
+          return {
+            ...prev,
+            [event.alias]: {
+              alias: event.alias,
+              sessionId: event.sessionId,
+              running: false,
+              queued: 0,
+              lastEventAt: event.at,
+            },
+          };
+        }
+        return { ...prev, [event.alias]: { ...existing, lastEventAt: event.at } };
+      }
+      return {
+        ...prev,
+        [event.alias]: {
+          alias: event.alias,
+          sessionId: event.sessionId,
           running: event.running,
           queued: event.queued,
-        };
-      }
-      return next;
+          lastEventAt: event.at,
+        },
+      };
     });
   }, []);
 
@@ -115,7 +126,11 @@ export function TeamCanvasPage() {
     [handleEvent],
   );
 
-  useWebSocket(teamId ? `team:${teamId}` : null, onWsMessage);
+  // Don't subscribe until backfill has been applied — that way live
+  // events trump replayed backfill via the timestamp guard, and the
+  // initial render has the historical state hydrated.
+  const [loaded, setLoaded] = useState(false);
+  useWebSocket(teamId && loaded ? `team:${teamId}` : null, onWsMessage);
 
   // Initial load: team meta + sessions + projects + event backfill.
   useEffect(() => {
@@ -133,9 +148,14 @@ export function TeamCanvasPage() {
         setTeam(t);
         setSessions(s);
         setProjects(p);
-        // Replay backfill chronologically so the latest event wins per
-        // alias. The setState reducer handles partial-update merging.
-        for (const event of events) handleEvent(event);
+        // Replay backfill chronologically (sort defensively; the server
+        // returns push-order, but interleaved emit paths can land in
+        // not-quite-causal order — `at` is the canonical key).
+        const sorted = [...events].sort((a, b) =>
+          a.at < b.at ? -1 : a.at > b.at ? 1 : 0,
+        );
+        for (const event of sorted) handleEvent(event);
+        setLoaded(true);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -146,13 +166,9 @@ export function TeamCanvasPage() {
     return () => {
       cancelled = true;
     };
-  }, [teamId, handleEvent]);
-
-  // Tick to fade edges after EDGE_FRESH_MS without a new event.
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 5_000);
-    return () => clearInterval(timer);
-  }, []);
+    // handleEvent is stable (empty deps useCallback); intentionally omit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamId]);
 
   const sessionsById = useMemo(() => {
     const map = new Map<string, Session>();
@@ -210,14 +226,7 @@ export function TeamCanvasPage() {
     // proper layout engine, but for ≤10 workers this is readable.
     const workerNodes: Node<CanvasNodeData>[] = team.members.map((m, i) => {
       const meta = describe(m.sessionId);
-      const state =
-        workersByAlias[m.alias] ?? {
-          alias: m.alias,
-          sessionId: m.sessionId,
-          running: false,
-          queued: 0,
-          lastDispatchAt: null,
-        };
+      const state = workersByAlias[m.alias];
       return {
         id: `worker-${m.sessionId}`,
         type: 'pinloomNode',
@@ -232,34 +241,27 @@ export function TeamCanvasPage() {
           agent: meta.agent,
           projectName: meta.projectName,
           sessionId: m.sessionId,
-          running: state.running,
-          queued: state.queued,
+          running: state?.running ?? false,
+          queued: state?.queued ?? 0,
         },
       };
     });
 
-    const now = Date.now();
+    // Edge appearance derives entirely from current worker state — no
+    // wall-clock decay, so the canvas only re-renders edges when the
+    // worker actually transitions running/queued/idle.
     const edges: Edge[] = team.members.map((m) => {
       const state = workersByAlias[m.alias];
-      const fresh =
-        state?.lastDispatchAt &&
-        now - new Date(state.lastDispatchAt).getTime() < EDGE_FRESH_MS;
       const running = state?.running ?? false;
       const queued = (state?.queued ?? 0) > 0;
       return {
         id: `e-${m.sessionId}`,
         source: orchNode.id,
         target: `worker-${m.sessionId}`,
-        animated: fresh || running,
+        animated: running,
         style: {
-          stroke: fresh
-            ? '#facc15'
-            : running
-              ? '#facc15'
-              : queued
-                ? '#60a5fa'
-                : '#374151',
-          strokeWidth: fresh || running ? 2 : 1,
+          stroke: running ? '#facc15' : queued ? '#60a5fa' : '#374151',
+          strokeWidth: running ? 2 : 1,
         },
       };
     });
@@ -337,7 +339,7 @@ function CanvasNode({ data }: CanvasNodeProps) {
     sessionId: data.sessionId,
     running: data.running ?? false,
     queued: data.queued ?? 0,
-    lastDispatchAt: null,
+    lastEventAt: '',
   };
   return (
     <div

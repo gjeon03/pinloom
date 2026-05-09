@@ -20,6 +20,7 @@ import {
   enqueueMessage,
   listQueueItems,
   listSessionsWithQueuedItems,
+  setTeamWorkerQueueHook,
 } from './message-queue.js';
 import { redactSecrets } from './redact.js';
 import type { ImageInput, ImageMediaType } from './runner-types.js';
@@ -475,6 +476,14 @@ export function isAiRunning(sessionId: string): boolean {
 // checking inFlight to avoid a race where the run ends between their
 // check and their subscribe.
 const idleListeners = new Map<string, Set<() => void>>();
+
+// Wire the message-queue's broadcast path to also fan a worker_status
+// event into the team channel — covers the "user typed directly into a
+// worker chat" case which otherwise wouldn't repaint the canvas until
+// a run actually started/ended.
+setTeamWorkerQueueHook((sessionId: string) => {
+  emitWorkerStatusIfMember(sessionId);
+});
 
 // Emits a `worker_status` dispatch event if this session is a worker in
 // some team. Drives the descriptive canvas's node pulse (PR3). Lookup
