@@ -509,93 +509,23 @@ function resolveMentionedItem(
   return null;
 }
 
-export async function sendUserMessage(
-  sessionId: string,
-  content: string,
-  planItemId: string | null = null,
-  images: ImageInput[] = [],
-  model?: string,
-): Promise<Message> {
-  const ctx = loadSession(sessionId);
-  if (!ctx) throw new Error(`session ${sessionId} not found`);
-
-  const planItems = loadPlanItems(ctx.planId);
-  const resolvedPlanItemId = planItemId ?? resolveMentionedItem(content, planItems);
-
-  const userMsg = persistMessage({
-    sessionId,
-    planItemId: resolvedPlanItemId,
-    role: 'user',
-    content,
-  });
-
-  if (images.length > 0) {
-    getDb()
-      .prepare(
-        'UPDATE sessions SET next_image_number = next_image_number + ? WHERE id = ?',
-      )
-      .run(images.length, sessionId);
-  }
-
-  const existing = activeRuns.get(sessionId);
-  if (existing) {
-    // Mid-run injection. The plan-item rollover depends on whether a turn
-    // is currently in flight: if yes, queue the new id and let the next
-    // `turn_complete` adopt it (so events for the current turn keep the old
-    // tag); if no (we're idle between turns), adopt immediately because no
-    // turn_complete will fire before the queued message's events arrive.
-    if (existing.inFlight) {
-      existing.pendingPlanItemId = resolvedPlanItemId;
-      existing.hasPendingPlanItem = true;
-    } else {
-      existing.currentPlanItemId = resolvedPlanItemId;
-      existing.pendingPlanItemId = null;
-      existing.hasPendingPlanItem = false;
-    }
-    existing.inFlight = true;
-    existing.agentRun.pushMessage({ text: content, images });
-    broadcast(`session:${sessionId}`, {
-      type: 'run_status',
-      sessionId,
-      status: 'started',
-    });
-    return userMsg;
-  }
-
-  // No active run — start a fresh one.
-  runAssistant(ctx, content, resolvedPlanItemId, planItems, images, model).catch((err) => {
-    const message = err instanceof Error ? err.message : String(err);
-    persistMessage({
-      sessionId,
-      planItemId: resolvedPlanItemId,
-      role: 'system',
-      content: `[runner error] ${message}`,
-    });
-    broadcast(`session:${sessionId}`, {
-      type: 'run_status',
-      sessionId,
-      status: 'error',
-      error: message,
-    });
-  });
-
-  return userMsg;
-}
-
 interface BatchMessage {
   content: string;
   planItemId?: string | null;
   images?: ImageInput[];
 }
 
-// Sends multiple queued user messages as ONE agent turn. Each message is
-// persisted separately (so the chat shows N USER bubbles) but we push a
-// single combined prompt to the AgentRun, so the agent answers all of them
-// in one response — matching Claude Code's "drained-at-turn-boundary" UX.
+// Single entry point for both the chat UI's direct send and the queue-drain
+// batch send. Each message is persisted as its own USER row (so the chat
+// shows N bubbles), but everything is combined into ONE agent prompt — for
+// length 1 that's just the message itself, and for length N a `\n\n`-joined
+// paragraph block. The agent answers all of them in one response, matching
+// Claude Code's "drained-at-turn-boundary" UX.
 //
-// Use the existing sendUserMessage for the single-message case; this is
-// only called by the frontend's queue-drain when the user has stacked
-// multiple prompts during a long-running turn.
+// `interrupt: true` says "stop the current in-flight turn silently and
+// restart from the same resume point with these prompts." Used by the
+// queue's mid-turn drain so the user doesn't see a `[cancelled by user]`
+// row when the agent gets spliced.
 export async function sendUserMessages(
   sessionId: string,
   messages: BatchMessage[],
@@ -609,26 +539,12 @@ export async function sendUserMessages(
   const ctx = loadSession(sessionId);
   if (!ctx) throw new Error(`session ${sessionId} not found`);
 
-  // Interrupt mode: the queue-drain wants these messages spliced in *now*
-  // instead of waiting for the in-flight multi-tool turn to finish. Stop
-  // the current run silently so it doesn't leave a "[cancelled by user]"
-  // row in chat; the new run we kick off below resumes from the same
-  // agent_session_id, so the agent picks up where it left off + the new
-  // prompts as a single combined turn.
+  // Interrupt mode: stop the current run silently before persisting new
+  // user rows so it doesn't leave a "[cancelled by user]" row in chat;
+  // the new run we kick off below resumes from the same agent_session_id,
+  // so the agent picks up where it left off + the new prompts as one turn.
   if (options?.interrupt) {
     stopRun(sessionId, { silent: true });
-  }
-
-  if (messages.length === 1 && !options?.interrupt) {
-    const m = messages[0];
-    const single = await sendUserMessage(
-      sessionId,
-      m.content,
-      m.planItemId ?? null,
-      m.images ?? [],
-      model,
-    );
-    return [single];
   }
 
   const planItems = loadPlanItems(ctx.planId);
@@ -658,12 +574,12 @@ export async function sendUserMessages(
       .run(totalImages, sessionId);
   }
 
-  // Combine into a single agent prompt. Each message keeps its own paragraph;
-  // the agent reads them as the user's stacked input over the previous turn.
-  // For interrupt-mode (mid-task drains), prepend a small marker so the
-  // system prompt's "natural aside" rule kicks in — without it the model
-  // doesn't know the previous task got paused, so it just answers tersely
-  // and forgets to offer to resume.
+  // Combine into a single agent prompt. Each message keeps its own
+  // paragraph; the agent reads them as the user's stacked input over the
+  // previous turn. For interrupt-mode (mid-task drains), prepend a small
+  // marker so the system prompt's "natural aside" rule kicks in — without
+  // it the model doesn't know the previous task got paused, so it just
+  // answers tersely and forgets to offer to resume.
   const joinedMessages = messages.map((m) => m.content).join('\n\n');
   const combinedText = options?.interrupt
     ? `[Interrupted mid-task]\n\n${joinedMessages}`
@@ -675,6 +591,12 @@ export async function sendUserMessages(
 
   const existing = activeRuns.get(sessionId);
   if (existing) {
+    // Mid-run injection. Plan-item rollover depends on whether a turn is
+    // currently in flight: if yes, queue the new id and let the next
+    // `turn_complete` adopt it (so events for the current turn keep the
+    // old tag); if no (we're idle between turns), adopt immediately
+    // because no turn_complete will fire before the queued message's
+    // events arrive.
     if (existing.inFlight) {
       existing.pendingPlanItemId = lastPlanItemId;
       existing.hasPendingPlanItem = true;
@@ -717,6 +639,24 @@ export async function sendUserMessages(
     });
   });
 
+  return persisted;
+}
+
+// Thin compatibility wrapper for the single-message direct send path.
+// Kept for the existing /api/sessions/:id/messages route's signature; the
+// real work happens in sendUserMessages with a single-element array.
+export async function sendUserMessage(
+  sessionId: string,
+  content: string,
+  planItemId: string | null = null,
+  images: ImageInput[] = [],
+  model?: string,
+): Promise<Message> {
+  const [persisted] = await sendUserMessages(
+    sessionId,
+    [{ content, planItemId, images }],
+    model,
+  );
   return persisted;
 }
 
