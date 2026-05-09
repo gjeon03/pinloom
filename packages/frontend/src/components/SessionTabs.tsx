@@ -37,6 +37,11 @@ function buildTeamRoles(teams: Team[]): Map<string, TeamRole> {
   return map;
 }
 
+export interface InlineCanvasTab {
+  teamId: string;
+  teamName: string;
+}
+
 interface Props {
   projectId: string;
   sessions: Session[];
@@ -46,6 +51,12 @@ interface Props {
   onDelete: (sessionId: string) => void;
   onRename: (session: Session) => void;
   onReorder: (sessions: Session[]) => void;
+  /** Inline canvas pseudo-tabs the user has opened next to the chats. */
+  canvasTabs?: InlineCanvasTab[];
+  activeCanvasTeamId?: string | null;
+  onSelectCanvas?: (teamId: string) => void;
+  onCloseCanvas?: (teamId: string) => void;
+  onOpenCanvasTab?: (tab: InlineCanvasTab) => void;
 }
 
 export function SessionTabs({
@@ -57,6 +68,11 @@ export function SessionTabs({
   onDelete,
   onRename,
   onReorder,
+  canvasTabs = [],
+  activeCanvasTeamId = null,
+  onSelectCanvas,
+  onCloseCanvas,
+  onOpenCanvasTab,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -390,6 +406,39 @@ export function SessionTabs({
           </div>
         );
       })}
+      {canvasTabs.map((c) => {
+        const active = c.teamId === activeCanvasTeamId;
+        return (
+          <div
+            key={`canvas-${c.teamId}`}
+            className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm cursor-pointer border-b-2 ${
+              active
+                ? 'border-[var(--color-accent)] text-[var(--color-ink)] bg-[var(--color-surface-2)]'
+                : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+            }`}
+            onClick={() => onSelectCanvas?.(c.teamId)}
+            title={`Canvas — ${c.teamName}`}
+          >
+            <Network size={12} className="text-[var(--color-accent)] shrink-0" />
+            <span className="truncate max-w-[160px]">{c.teamName}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCloseCanvas?.(c.teamId);
+              }}
+              className={`p-0.5 rounded transition-opacity ${
+                active
+                  ? 'text-[var(--color-ink-muted)] hover:text-red-400'
+                  : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400'
+              }`}
+              title="Close canvas tab"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        );
+      })}
       {(() => {
         const lastId = sessions[sessions.length - 1]?.id;
         const showTail =
@@ -496,16 +545,34 @@ export function SessionTabs({
                 <span className="flex-1">Open chat in new tab</span>
               </a>
               {role?.kind === 'orchestrator' && (
-                <a
-                  href={`/teams/${role.teamId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => setTabMenu(null)}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-[var(--color-ink)]"
-                >
-                  <Network size={12} />
-                  <span className="flex-1">Open team canvas</span>
-                </a>
+                <>
+                  {onOpenCanvasTab && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenCanvasTab({
+                          teamId: role.teamId,
+                          teamName: role.teamName,
+                        });
+                        setTabMenu(null);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
+                    >
+                      <Network size={12} />
+                      <span className="flex-1">Open canvas as tab</span>
+                    </button>
+                  )}
+                  <a
+                    href={`/teams/${role.teamId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setTabMenu(null)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-[var(--color-ink)]"
+                  >
+                    <ExternalLink size={12} />
+                    <span className="flex-1">Open canvas in browser tab</span>
+                  </a>
+                </>
               )}
             </div>
           );

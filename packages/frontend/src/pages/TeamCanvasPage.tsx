@@ -69,8 +69,24 @@ function statusLabel(s: WorkerState): string {
   return 'idle';
 }
 
-export function TeamCanvasPage() {
-  const { teamId } = useParams<{ teamId: string }>();
+interface TeamCanvasPageProps {
+  /** Optional override — when this page is rendered inline (e.g. as a
+   *  tab inside ProjectPage), the parent passes the team id directly
+   *  rather than relying on the route. The route variant fills this
+   *  via useParams. */
+  teamId?: string;
+  /** Whether to render the page header (back link + team name + count).
+   *  Inline mounts hide it because the SessionTabs strip already
+   *  identifies the active canvas. Defaults to true. */
+  showHeader?: boolean;
+}
+
+export function TeamCanvasPage({
+  teamId: teamIdProp,
+  showHeader = true,
+}: TeamCanvasPageProps = {}) {
+  const params = useParams<{ teamId: string }>();
+  const teamId = teamIdProp ?? params.teamId;
   const [team, setTeam] = useState<Team | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -298,19 +314,21 @@ export function TeamCanvasPage() {
 
   return (
     <div className="flex-1 flex flex-col">
-      <div className="flex items-center gap-3 pl-6 pr-16 py-4 border-b border-[var(--color-border)]">
-        <Link
-          to="/teams"
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-          aria-label="Back to Teams"
-        >
-          <ArrowLeft size={16} />
-        </Link>
-        <h1 className="text-sm font-semibold">{team.name}</h1>
-        <span className="text-[11px] text-[var(--color-ink-muted)]">
-          {team.members.length} worker{team.members.length === 1 ? '' : 's'}
-        </span>
-      </div>
+      {showHeader && (
+        <div className="flex items-center gap-3 pl-6 pr-16 py-4 border-b border-[var(--color-border)]">
+          <Link
+            to="/teams"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
+            aria-label="Back to Teams"
+          >
+            <ArrowLeft size={16} />
+          </Link>
+          <h1 className="text-sm font-semibold">{team.name}</h1>
+          <span className="text-[11px] text-[var(--color-ink-muted)]">
+            {team.members.length} worker{team.members.length === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
       <div className="flex-1 relative">
         <ReactFlow
           nodes={nodes}

@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
 import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
-import { SessionTabs } from '../components/SessionTabs.js';
+import {
+  SessionTabs,
+  type InlineCanvasTab,
+} from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
 import { EditableTitle } from '../components/EditableTitle.js';
 import { SessionPickerModal } from '../components/SessionPickerModal.js';
+import { TeamCanvasPage } from './TeamCanvasPage.js';
 import { applyPinChange } from '../utils/pins.js';
 
 export function ProjectPage({
@@ -21,12 +25,22 @@ export function ProjectPage({
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [pins, setPins] = useState<Message[]>([]);
   const [sendingPin, setSendingPin] = useState<Message | null>(null);
+  // Inline canvas tabs the user opened next to chats. Reset when the
+  // project changes (each project has its own strip). The active view
+  // is either a session OR a canvas tab — we track which so the right
+  // panel renders accordingly.
+  const [canvasTabs, setCanvasTabs] = useState<InlineCanvasTab[]>([]);
+  const [activeCanvasTeamId, setActiveCanvasTeamId] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
     setSessions([]);
     setActiveSession(null);
     setPins([]);
+    setCanvasTabs([]);
+    setActiveCanvasTeamId(null);
 
     const lastKey = `pinloom:lastSession:${project.id}`;
     const lastId = localStorage.getItem(lastKey);
@@ -92,10 +106,16 @@ export function ProjectPage({
       <SessionTabs
         projectId={project.id}
         sessions={sessions}
-        activeSessionId={activeSession?.id ?? null}
-        onSelect={setActiveSession}
+        activeSessionId={
+          activeCanvasTeamId === null ? activeSession?.id ?? null : null
+        }
+        onSelect={(s) => {
+          setActiveCanvasTeamId(null);
+          setActiveSession(s);
+        }}
         onCreate={(s) => {
           setSessions((prev) => [...prev, s]);
+          setActiveCanvasTeamId(null);
           setActiveSession(s);
         }}
         onDelete={(id) => {
@@ -110,6 +130,19 @@ export function ProjectPage({
           if (activeSession?.id === updated.id) setActiveSession(updated);
         }}
         onReorder={(reordered) => setSessions(reordered)}
+        canvasTabs={canvasTabs}
+        activeCanvasTeamId={activeCanvasTeamId}
+        onSelectCanvas={(teamId) => setActiveCanvasTeamId(teamId)}
+        onCloseCanvas={(teamId) => {
+          setCanvasTabs((prev) => prev.filter((c) => c.teamId !== teamId));
+          if (activeCanvasTeamId === teamId) setActiveCanvasTeamId(null);
+        }}
+        onOpenCanvasTab={(tab) => {
+          setCanvasTabs((prev) =>
+            prev.some((c) => c.teamId === tab.teamId) ? prev : [...prev, tab],
+          );
+          setActiveCanvasTeamId(tab.teamId);
+        }}
       />
 
       <div className="flex-1 flex min-h-0">
@@ -134,7 +167,13 @@ export function ProjectPage({
             ) : null
           }
           right={
-            activeSession ? (
+            activeCanvasTeamId ? (
+              // Inline canvas — wraps the dedicated route's component so
+              // updates / fixes flow into both surfaces. The page reads
+              // teamId from the URL via useParams, so we route inline by
+              // overriding the `teamId` segment via a key + path.
+              <InlineCanvasView teamId={activeCanvasTeamId} />
+            ) : activeSession ? (
               // Force a fresh component instance per session so per-session
               // local state (textarea draft, queue, wikiSyncing flag, etc.)
               // doesn't leak across tab switches.
@@ -172,4 +211,12 @@ export function ProjectPage({
       )}
     </div>
   );
+}
+
+// Thin wrapper around TeamCanvasPage for inline mounting in the right
+// pane. The header is suppressed because the SessionTabs strip already
+// shows which canvas is active. `key={teamId}` resets internal state on
+// switch so events from a previous team don't bleed in.
+function InlineCanvasView({ teamId }: { teamId: string }) {
+  return <TeamCanvasPage key={teamId} teamId={teamId} showHeader={false} />;
 }
