@@ -347,30 +347,49 @@ interface ActiveRun {
   // True while the agent is producing output — flips on push, off on
   // turn_complete. Drives `isAiRunning` for the run-status endpoint.
   inFlight: boolean;
-  // Set when the orchestrator wants to abort this run mid-turn purely to
-  // splice in queued user messages. Suppresses the "[cancelled by user]"
-  // chat row and the run_status:error broadcast so the UI seamlessly rolls
-  // into the new run instead of showing an interruption.
-  silentCancel: boolean;
 }
 
 const activeRuns = new Map<string, ActiveRun>();
 
-export function cancelAiRun(sessionId: string): boolean {
+// Distinct cancel intents passed via AbortController.abort(reason). The
+// AttemptResult derives `silent` by inspecting `signal.reason` instead of
+// reading a mutable flag on ActiveRun, so the cancel decision is colocated
+// with the abort itself.
+class UserCancelled extends Error {
+  constructor() {
+    super('cancelled by user');
+    this.name = 'UserCancelled';
+  }
+}
+class SilentCancelled extends Error {
+  constructor() {
+    super('cancelled to splice queued message');
+    this.name = 'SilentCancelled';
+  }
+}
+
+// Single teardown path used by both Stop button (loud) and queue-drain
+// interrupt (silent). Always deregisters before aborting so any caller
+// that immediately starts a new run sees an empty slot. The consumer
+// loop's `finally` is race-safe (identity check) so the same entry won't
+// be deleted twice.
+function stopRun(sessionId: string, opts: { silent: boolean }): boolean {
   const run = activeRuns.get(sessionId);
   if (!run) return false;
-  // Deregister immediately so a follow-up sendUserMessage(s) — typically the
-  // queue-drain that triggered this cancel — sees an empty slot and starts a
-  // fresh run instead of pushing into the dying one. The consumer loop's
-  // `finally` is race-safe (it checks identity before deleting).
   activeRuns.delete(sessionId);
-  run.abortController.abort();
+  run.abortController.abort(
+    opts.silent ? new SilentCancelled() : new UserCancelled(),
+  );
   try {
     run.agentRun.close();
   } catch {
     // best-effort
   }
   return true;
+}
+
+export function cancelAiRun(sessionId: string): boolean {
+  return stopRun(sessionId, { silent: false });
 }
 
 export function isAiRunning(sessionId: string): boolean {
@@ -590,24 +609,14 @@ export async function sendUserMessages(
   const ctx = loadSession(sessionId);
   if (!ctx) throw new Error(`session ${sessionId} not found`);
 
-  // Interrupt mode: the chat UI saw an intra-turn `turn_milestone` and wants
-  // to splice these queued messages in *now* instead of waiting for the full
-  // multi-tool turn to finish. Silently abort the in-flight run so the
-  // [cancelled by user] row isn't persisted; the new run we start below
-  // resumes from the same agent_session_id and the agent picks up where it
-  // left off + the new prompts.
+  // Interrupt mode: the queue-drain wants these messages spliced in *now*
+  // instead of waiting for the in-flight multi-tool turn to finish. Stop
+  // the current run silently so it doesn't leave a "[cancelled by user]"
+  // row in chat; the new run we kick off below resumes from the same
+  // agent_session_id, so the agent picks up where it left off + the new
+  // prompts as a single combined turn.
   if (options?.interrupt) {
-    const inflight = activeRuns.get(sessionId);
-    if (inflight) {
-      inflight.silentCancel = true;
-      activeRuns.delete(sessionId);
-      inflight.abortController.abort();
-      try {
-        inflight.agentRun.close();
-      } catch {
-        // best-effort
-      }
-    }
+    stopRun(sessionId, { silent: true });
   }
 
   if (messages.length === 1 && !options?.interrupt) {
@@ -717,9 +726,10 @@ interface AttemptResult {
   // succeeded, was cancelled, or errored after streaming started.
   shouldFallback: boolean;
   cancelled: boolean;
-  // Mirrors ActiveRun.silentCancel — a cancellation initiated to splice in
-  // queued messages, not by the user pressing Stop. runAssistant uses this
-  // to suppress the chat-visible "[cancelled by user]" row + error event.
+  // True when the cancellation was initiated to splice in queued messages
+  // (`stopRun({silent:true})`), not by the user pressing Stop. Derived
+  // from `signal.reason instanceof SilentCancelled`. runAssistant uses
+  // this to suppress the chat-visible "[cancelled by user]" row + error.
   silent: boolean;
 }
 
@@ -750,7 +760,6 @@ async function runAttempt(
     pendingPlanItemId: null,
     hasPendingPlanItem: false,
     inFlight: true,
-    silentCancel: false,
   };
   activeRuns.set(ctx.id, active);
 
@@ -946,7 +955,7 @@ async function runAttempt(
     return {
       shouldFallback: false,
       cancelled: true,
-      silent: active.silentCancel,
+      silent: abortController.signal.reason instanceof SilentCancelled,
     };
   }
   if (attemptError) {
