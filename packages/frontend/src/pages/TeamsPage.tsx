@@ -191,6 +191,19 @@ function CreateTeamPanel({
   const [name, setName] = useState('');
   const [pickingOrchestrator, setPickingOrchestrator] = useState(false);
   const [orchestratorId, setOrchestratorId] = useState<string | null>(null);
+  // Sessions/projects created via the inline picker before the parent
+  // lookup has refetched. Used so the orchestrator preview label resolves
+  // immediately after creation.
+  const [extraSessions, setExtraSessions] = useState<Session[]>([]);
+  const [extraProjects, setExtraProjects] = useState<Project[]>([]);
+
+  const enrichedLookup = useMemo<SessionLookup>(() => {
+    const sessionsById = { ...lookup.sessionsById };
+    for (const s of extraSessions) sessionsById[s.id] = s;
+    const projectsById = { ...lookup.projectsById };
+    for (const p of extraProjects) projectsById[p.id] = p;
+    return { ...lookup, sessionsById, projectsById };
+  }, [lookup, extraSessions, extraProjects]);
 
   async function create() {
     const trimmed = name.trim();
@@ -202,6 +215,8 @@ function CreateTeamPanel({
       });
       setName('');
       setOrchestratorId(null);
+      setExtraSessions([]);
+      setExtraProjects([]);
       onCreated();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
@@ -209,7 +224,7 @@ function CreateTeamPanel({
   }
 
   const orchLabel = orchestratorId
-    ? formatSessionLabel(orchestratorId, lookup)
+    ? formatSessionLabel(orchestratorId, enrichedLookup)
     : null;
 
   return (
@@ -258,7 +273,7 @@ function CreateTeamPanel({
       {pickingOrchestrator && (
         <SessionPickerModal
           title="Pick orchestrator session"
-          lookup={lookup}
+          lookup={enrichedLookup}
           /* The new team has no current orchestrator yet — only show free sessions. */
           allowSessionId={null}
           onClose={() => setPickingOrchestrator(false)}
@@ -266,6 +281,8 @@ function CreateTeamPanel({
             setOrchestratorId(id);
             setPickingOrchestrator(false);
           }}
+          onSessionCreated={(s) => setExtraSessions((p) => [...p, s])}
+          onProjectCreated={(p) => setExtraProjects((prev) => [...prev, p])}
         />
       )}
     </div>
@@ -614,6 +631,10 @@ interface SessionPickerModalProps {
   allowSessionId: string | null;
   onClose: () => void;
   onPick: (sessionId: string) => void;
+  /** Surfaces inline-created sessions/projects so the parent can
+   *  optimistically merge them into its own lookup. */
+  onSessionCreated?: (session: Session) => void;
+  onProjectCreated?: (project: Project) => void;
 }
 
 function SessionPickerModal({
@@ -622,6 +643,8 @@ function SessionPickerModal({
   allowSessionId,
   onClose,
   onPick,
+  onSessionCreated,
+  onProjectCreated,
 }: SessionPickerModalProps) {
   const [creating, setCreating] = useState(false);
 
@@ -631,14 +654,26 @@ function SessionPickerModal({
     );
   }, [lookup, allowSessionId]);
 
+  // Inline-created projects haven't propagated back to the parent's
+  // lookup yet — merge them so the picker that opens on next click sees
+  // them too.
+  const projectsForForm = useMemo(
+    () => Object.values(lookup.projectsById),
+    [lookup.projectsById],
+  );
+
   return (
     <ModalShell title={title} onClose={onClose}>
       {creating ? (
         <NewSessionForm
-          projects={Object.values(lookup.projectsById)}
+          projects={projectsForForm}
           projectGroups={lookup.projectGroups}
           onCancel={() => setCreating(false)}
-          onCreated={(s) => onPick(s.id)}
+          onCreated={(s) => {
+            onSessionCreated?.(s);
+            onPick(s.id);
+          }}
+          onProjectCreated={onProjectCreated}
         />
       ) : (
         <>
@@ -700,10 +735,17 @@ function AddMemberModal({
   const [selected, setSelected] = useState<string | null>(null);
   const [alias, setAlias] = useState('');
   const [creating, setCreating] = useState(false);
-  // Sessions just-created via the inline form. Held locally because the
-  // parent's `lookup` won't refresh until we commit the team membership;
-  // we still want to show + select them in the picker right away.
+  // Sessions/projects just-created via the inline form. Held locally
+  // because the parent's `lookup` won't refresh until we commit the
+  // team membership; we still want to show + select them right away.
   const [extras, setExtras] = useState<Session[]>([]);
+  const [extraProjects, setExtraProjects] = useState<Project[]>([]);
+
+  const projectsById = useMemo(() => {
+    const merged: Record<string, Project> = { ...lookup.projectsById };
+    for (const p of extraProjects) merged[p.id] = p;
+    return merged;
+  }, [lookup.projectsById, extraProjects]);
 
   const candidates = useMemo(() => {
     const base = Object.values(lookup.sessionsById).filter(
@@ -715,7 +757,7 @@ function AddMemberModal({
   }, [lookup, extras]);
 
   function describe(s: Session): SessionLabel {
-    const project = lookup.projectsById[s.projectId];
+    const project = projectsById[s.projectId];
     return {
       title: s.title ?? 'Untitled session',
       subtitle: project?.name ?? '(unknown project)',
@@ -763,7 +805,7 @@ function AddMemberModal({
           </label>
           {creating ? (
             <NewSessionForm
-              projects={Object.values(lookup.projectsById)}
+              projects={Object.values(projectsById)}
               projectGroups={lookup.projectGroups}
               onCancel={() => setCreating(false)}
               onCreated={(s) => {
@@ -771,6 +813,9 @@ function AddMemberModal({
                 setSelected(s.id);
                 setCreating(false);
               }}
+              onProjectCreated={(p) =>
+                setExtraProjects((prev) => [...prev, p])
+              }
             />
           ) : (
             <>
@@ -843,6 +888,9 @@ interface NewSessionFormProps {
   projectGroups: ProjectGroup[];
   onCancel: () => void;
   onCreated: (session: Session) => void;
+  /** Surfaces an inline-created project so the parent modal can render
+   *  it in the candidate list before the global state refetches. */
+  onProjectCreated?: (project: Project) => void;
 }
 
 // Inline session creation surfaced inside the orchestrator/worker pickers
@@ -857,6 +905,7 @@ function NewSessionForm({
   projectGroups,
   onCancel,
   onCreated,
+  onProjectCreated,
 }: NewSessionFormProps) {
   // Local copy so a project created inline is immediately visible in the
   // dropdown without round-tripping through the parent.
@@ -938,6 +987,9 @@ function NewSessionForm({
       setProjectId(created.id);
       setCreatingProject(false);
       setNewProjectGroupId(null);
+      onProjectCreated?.(created);
+      // Notify AppShell so its sidebar refetches the project list.
+      window.dispatchEvent(new CustomEvent('pinloom:projects-changed'));
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }

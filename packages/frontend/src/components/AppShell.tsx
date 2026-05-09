@@ -120,12 +120,24 @@ export function AppShell({ children }: Props) {
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api.listProjects(), api.listProjectGroups()])
-      .then(([ps, gs]) => {
-        setProjects(ps);
-        setGroups(gs);
-      })
-      .catch((e) => setError(String(e)));
+    function reload() {
+      Promise.all([api.listProjects(), api.listProjectGroups()])
+        .then(([ps, gs]) => {
+          setProjects(ps);
+          setGroups(gs);
+        })
+        .catch((e) => setError(String(e)));
+    }
+    reload();
+    // Other surfaces (e.g. Teams page inline project creation) dispatch
+    // this event after creating a project/group so the sidebar refetches
+    // without requiring a page reload.
+    function onChanged() {
+      reload();
+    }
+    window.addEventListener('pinloom:projects-changed', onChanged);
+    return () =>
+      window.removeEventListener('pinloom:projects-changed', onChanged);
   }, []);
 
   useEffect(() => {
