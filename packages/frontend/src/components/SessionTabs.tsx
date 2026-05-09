@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
   Crown,
   ExternalLink,
+  FolderInput,
   MoreVertical,
   Network,
   Plus,
   X,
 } from 'lucide-react';
-import type { AgentKind, Session, Team } from '@pinloom/shared';
+import type { AgentKind, Project, Session, Team } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from './AgentBadge.js';
 import { Tooltip } from './Tooltip.js';
@@ -94,6 +96,10 @@ export function SessionTabs({
     left: number;
   } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
+  const [moveModal, setMoveModal] = useState<{ sessionId: string } | null>(
+    null,
+  );
+  const navigate = useNavigate();
 
   // Team membership lookup so we can render "@alias" / "orchestrator"
   // badges next to tab titles. Refetched whenever the user creates or
@@ -544,6 +550,17 @@ export function SessionTabs({
                 <ExternalLink size={12} />
                 <span className="flex-1">Open chat in new tab</span>
               </a>
+              <button
+                type="button"
+                onClick={() => {
+                  setMoveModal({ sessionId: tabMenu.sessionId });
+                  setTabMenu(null);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
+              >
+                <FolderInput size={12} />
+                <span className="flex-1">Move to project…</span>
+              </button>
               {role?.kind === 'orchestrator' && (
                 <>
                   {onOpenCanvasTab && (
@@ -577,6 +594,152 @@ export function SessionTabs({
             </div>
           );
         })()}
+      {moveModal && (
+        <MoveSessionModal
+          sessionId={moveModal.sessionId}
+          currentProjectId={projectId}
+          onClose={() => setMoveModal(null)}
+          onMoved={(targetProjectId) => {
+            const movedId = moveModal.sessionId;
+            setMoveModal(null);
+            // Drop the session from this strip so its absence is
+            // immediate; the parent's onDelete handler does the same
+            // bookkeeping it would for a true delete (filler session
+            // takes over if this was the last tab).
+            onDelete(movedId);
+            // Pre-seed the target project's "last session" so the next
+            // mount lands on the just-moved tab instead of whatever the
+            // user happened to be on there last time.
+            try {
+              localStorage.setItem(
+                `pinloom:lastSession:${targetProjectId}`,
+                movedId,
+              );
+            } catch {
+              // ignore storage failures
+            }
+            navigate(`/projects/${targetProjectId}`);
+          }}
+          onError={setError}
+        />
+      )}
+    </div>
+  );
+}
+
+// Modal listing every other project so the user can move the current
+// session into one of them. Backend auto-creates a filler session in
+// the source project if this move would leave it empty, so we don't
+// have to handle "0 tabs" here — the parent's onDelete + the next
+// mount of the source project will surface the filler.
+function MoveSessionModal({
+  sessionId,
+  currentProjectId,
+  onClose,
+  onMoved,
+  onError,
+}: {
+  sessionId: string;
+  currentProjectId: string;
+  onClose: () => void;
+  onMoved: (targetProjectId: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [submitting, setSubmitting] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listProjects()
+      .then((p) => {
+        if (!cancelled) setProjects(p);
+      })
+      .catch((e) => {
+        if (!cancelled) onError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onError]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const candidates = (projects ?? []).filter((p) => p.id !== currentProjectId);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Move session to project"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--color-border)]/40 px-4 py-2">
+          <h2 className="text-sm font-medium">Move session to project</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <div className="p-4">
+          {projects === null ? (
+            <p className="text-xs text-[var(--color-ink-muted)]">Loading…</p>
+          ) : candidates.length === 0 ? (
+            <p className="text-xs text-[var(--color-ink-muted)]">
+              No other projects to move into. Create one from the sidebar
+              first.
+            </p>
+          ) : (
+            <ul className="space-y-1 max-h-80 overflow-y-auto">
+              {candidates.map((p) => (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    disabled={submitting !== null}
+                    onClick={async () => {
+                      setSubmitting(p.id);
+                      try {
+                        await api.moveSession(sessionId, p.id);
+                        onMoved(p.id);
+                      } catch (err) {
+                        onError(err instanceof Error ? err.message : String(err));
+                        setSubmitting(null);
+                      }
+                    }}
+                    className="w-full text-left rounded border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] disabled:opacity-50 px-3 py-2 text-xs"
+                  >
+                    <div className="font-medium">{p.name}</div>
+                    <div className="text-[10px] text-[var(--color-ink-muted)] font-mono truncate">
+                      {p.cwd}
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 text-[10px] text-[var(--color-ink-muted)]">
+            The session keeps its conversation history and team
+            membership. If this was the only tab in the current project,
+            a fresh empty session will be created so the project stays
+            usable.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

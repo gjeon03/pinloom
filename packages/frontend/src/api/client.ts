@@ -135,6 +135,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  moveSession: (sessionId: string, targetProjectId: string) =>
+    request<{ session: Session; sourceFiller: Session | null }>(
+      `/api/sessions/${sessionId}/move`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ projectId: targetProjectId }),
+      },
+    ),
   listMessages: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/messages`),
   sendMessage: (
