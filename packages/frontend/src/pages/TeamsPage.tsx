@@ -62,7 +62,7 @@ function formatSessionLabel(
   }
   const project = lookup.projectsById[session.projectId];
   return {
-    title: session.title ?? 'Untitled session',
+    title: session.title ?? `Chat ${session.id.slice(0, 6)}`,
     subtitle: project?.name ?? '(unknown project)',
     agent: session.agent,
   };
@@ -759,7 +759,7 @@ function AddMemberModal({
   function describe(s: Session): SessionLabel {
     const project = projectsById[s.projectId];
     return {
-      title: s.title ?? 'Untitled session',
+      title: s.title ?? `Chat ${s.id.slice(0, 6)}`,
       subtitle: project?.name ?? '(unknown project)',
       agent: s.agent,
     };

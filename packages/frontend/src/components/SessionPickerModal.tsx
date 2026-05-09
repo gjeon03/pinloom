@@ -47,7 +47,7 @@ export function SessionPickerModal({
     setBusyId('__new__');
     setError(null);
     try {
-      const created = await api.createSession(projectId, { title: 'New chat' });
+      const created = await api.createSession(projectId, { title: null });
       onNewSessionCreated?.(created);
       await api.injectPin(created.id, pin.id);
       setSentId(created.id);

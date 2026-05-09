@@ -38,7 +38,7 @@ export function ProjectPage({
         const remembered = lastId ? list.find((s) => s.id === lastId) : null;
         setActiveSession(remembered ?? list[0]);
       } else {
-        const created = await api.createSession(project.id, { title: 'New chat' });
+        const created = await api.createSession(project.id, { title: null });
         if (cancelled) return;
         setSessions([created]);
         setActiveSession(created);
