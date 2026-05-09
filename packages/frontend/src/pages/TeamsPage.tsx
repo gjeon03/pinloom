@@ -15,13 +15,29 @@ import {
   Check,
   ExternalLink,
 } from 'lucide-react';
-import type { Project, Session, Team, TeamMember } from '@pinloom/shared';
+import type {
+  Project,
+  ProjectGroup,
+  Session,
+  Team,
+  TeamMember,
+} from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from '../components/AgentBadge.js';
+import { DirectoryPicker } from '../components/DirectoryPicker.js';
+
+function basenameOfPath(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  const parts = trimmed.split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? 'project';
+}
 
 interface SessionLookup {
   sessionsById: Record<string, Session>;
   projectsById: Record<string, Project>;
+  /** Project groups, included so the inline "create new project" form can
+   *  let users pick a group instead of always landing in Ungrouped. */
+  projectGroups: ProjectGroup[];
   /** Sessions bound to any team (orchestrator OR worker). */
   boundSessionIds: Set<string>;
 }
@@ -46,7 +62,7 @@ function formatSessionLabel(
   }
   const project = lookup.projectsById[session.projectId];
   return {
-    title: session.title ?? 'Untitled session',
+    title: session.title ?? `Chat ${session.id.slice(0, 6)}`,
     subtitle: project?.name ?? '(unknown project)',
     agent: session.agent,
   };
@@ -55,6 +71,7 @@ function formatSessionLabel(
 export function TeamsPage() {
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectGroups, setProjectGroups] = useState<ProjectGroup[]>([]);
   const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Guards against an in-flight refresh being clobbered by an older one
@@ -64,14 +81,16 @@ export function TeamsPage() {
   const refresh = useCallback(async () => {
     const seq = ++refreshSeqRef.current;
     try {
-      const [t, p, s] = await Promise.all([
+      const [t, p, g, s] = await Promise.all([
         api.listTeams(),
         api.listProjects(),
+        api.listProjectGroups(),
         api.listAllSessions(),
       ]);
       if (seq !== refreshSeqRef.current) return;
       setTeams(t);
       setProjects(p);
+      setProjectGroups(g);
       setAllSessions(s);
     } catch (err) {
       if (seq !== refreshSeqRef.current) return;
@@ -93,8 +112,13 @@ export function TeamsPage() {
       bound.add(team.orchestratorSessionId);
       for (const m of team.members) bound.add(m.sessionId);
     }
-    return { sessionsById, projectsById, boundSessionIds: bound };
-  }, [allSessions, projects, teams]);
+    return {
+      sessionsById,
+      projectsById,
+      projectGroups,
+      boundSessionIds: bound,
+    };
+  }, [allSessions, projects, projectGroups, teams]);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -167,6 +191,19 @@ function CreateTeamPanel({
   const [name, setName] = useState('');
   const [pickingOrchestrator, setPickingOrchestrator] = useState(false);
   const [orchestratorId, setOrchestratorId] = useState<string | null>(null);
+  // Sessions/projects created via the inline picker before the parent
+  // lookup has refetched. Used so the orchestrator preview label resolves
+  // immediately after creation.
+  const [extraSessions, setExtraSessions] = useState<Session[]>([]);
+  const [extraProjects, setExtraProjects] = useState<Project[]>([]);
+
+  const enrichedLookup = useMemo<SessionLookup>(() => {
+    const sessionsById = { ...lookup.sessionsById };
+    for (const s of extraSessions) sessionsById[s.id] = s;
+    const projectsById = { ...lookup.projectsById };
+    for (const p of extraProjects) projectsById[p.id] = p;
+    return { ...lookup, sessionsById, projectsById };
+  }, [lookup, extraSessions, extraProjects]);
 
   async function create() {
     const trimmed = name.trim();
@@ -178,6 +215,8 @@ function CreateTeamPanel({
       });
       setName('');
       setOrchestratorId(null);
+      setExtraSessions([]);
+      setExtraProjects([]);
       onCreated();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
@@ -185,7 +224,7 @@ function CreateTeamPanel({
   }
 
   const orchLabel = orchestratorId
-    ? formatSessionLabel(orchestratorId, lookup)
+    ? formatSessionLabel(orchestratorId, enrichedLookup)
     : null;
 
   return (
@@ -234,7 +273,7 @@ function CreateTeamPanel({
       {pickingOrchestrator && (
         <SessionPickerModal
           title="Pick orchestrator session"
-          lookup={lookup}
+          lookup={enrichedLookup}
           /* The new team has no current orchestrator yet — only show free sessions. */
           allowSessionId={null}
           onClose={() => setPickingOrchestrator(false)}
@@ -242,6 +281,8 @@ function CreateTeamPanel({
             setOrchestratorId(id);
             setPickingOrchestrator(false);
           }}
+          onSessionCreated={(s) => setExtraSessions((p) => [...p, s])}
+          onProjectCreated={(p) => setExtraProjects((prev) => [...prev, p])}
         />
       )}
     </div>
@@ -590,6 +631,10 @@ interface SessionPickerModalProps {
   allowSessionId: string | null;
   onClose: () => void;
   onPick: (sessionId: string) => void;
+  /** Surfaces inline-created sessions/projects so the parent can
+   *  optimistically merge them into its own lookup. */
+  onSessionCreated?: (session: Session) => void;
+  onProjectCreated?: (project: Project) => void;
 }
 
 function SessionPickerModal({
@@ -598,41 +643,75 @@ function SessionPickerModal({
   allowSessionId,
   onClose,
   onPick,
+  onSessionCreated,
+  onProjectCreated,
 }: SessionPickerModalProps) {
+  const [creating, setCreating] = useState(false);
+
   const candidates = useMemo(() => {
     return Object.values(lookup.sessionsById).filter(
       (s) => !lookup.boundSessionIds.has(s.id) || s.id === allowSessionId,
     );
   }, [lookup, allowSessionId]);
 
+  // Inline-created projects haven't propagated back to the parent's
+  // lookup yet — merge them so the picker that opens on next click sees
+  // them too.
+  const projectsForForm = useMemo(
+    () => Object.values(lookup.projectsById),
+    [lookup.projectsById],
+  );
+
   return (
     <ModalShell title={title} onClose={onClose}>
-      {candidates.length === 0 ? (
-        <p className="text-xs text-[var(--color-ink-muted)]">
-          No available sessions. Create a session first, or remove one from
-          another team.
-        </p>
+      {creating ? (
+        <NewSessionForm
+          projects={projectsForForm}
+          projectGroups={lookup.projectGroups}
+          onCancel={() => setCreating(false)}
+          onCreated={(s) => {
+            onSessionCreated?.(s);
+            onPick(s.id);
+          }}
+          onProjectCreated={onProjectCreated}
+        />
       ) : (
-        <ul className="space-y-1 max-h-80 overflow-y-auto">
-          {candidates.map((s) => {
-            const meta = formatSessionLabel(s.id, lookup);
-            return (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  onClick={() => onPick(s.id)}
-                  className="w-full text-left rounded border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] px-3 py-2 text-xs flex items-center gap-2"
-                >
-                  {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
-                  <span className="truncate flex-1">{meta.title}</span>
-                  <span className="text-[var(--color-ink-muted)] shrink-0">
-                    {meta.subtitle}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="mb-3 w-full rounded border border-dashed border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1.5"
+          >
+            <Plus size={12} />
+            Create new session
+          </button>
+          {candidates.length === 0 ? (
+            <p className="text-xs text-[var(--color-ink-muted)]">
+              No available sessions to pick from. Create a new one above.
+            </p>
+          ) : (
+            <ul className="space-y-1 max-h-80 overflow-y-auto">
+              {candidates.map((s) => {
+                const meta = formatSessionLabel(s.id, lookup);
+                return (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => onPick(s.id)}
+                      className="w-full text-left rounded border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] px-3 py-2 text-xs flex items-center gap-2"
+                    >
+                      {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
+                      <span className="truncate flex-1">{meta.title}</span>
+                      <span className="text-[var(--color-ink-muted)] shrink-0">
+                        {meta.subtitle}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </>
       )}
     </ModalShell>
   );
@@ -655,12 +734,36 @@ function AddMemberModal({
 }: AddMemberModalProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [alias, setAlias] = useState('');
+  const [creating, setCreating] = useState(false);
+  // Sessions/projects just-created via the inline form. Held locally
+  // because the parent's `lookup` won't refresh until we commit the
+  // team membership; we still want to show + select them right away.
+  const [extras, setExtras] = useState<Session[]>([]);
+  const [extraProjects, setExtraProjects] = useState<Project[]>([]);
+
+  const projectsById = useMemo(() => {
+    const merged: Record<string, Project> = { ...lookup.projectsById };
+    for (const p of extraProjects) merged[p.id] = p;
+    return merged;
+  }, [lookup.projectsById, extraProjects]);
 
   const candidates = useMemo(() => {
-    return Object.values(lookup.sessionsById).filter(
+    const base = Object.values(lookup.sessionsById).filter(
       (s) => !lookup.boundSessionIds.has(s.id),
     );
-  }, [lookup]);
+    const extraIds = new Set(extras.map((e) => e.id));
+    const filteredBase = base.filter((s) => !extraIds.has(s.id));
+    return [...extras, ...filteredBase];
+  }, [lookup, extras]);
+
+  function describe(s: Session): SessionLabel {
+    const project = projectsById[s.projectId];
+    return {
+      title: s.title ?? `Chat ${s.id.slice(0, 6)}`,
+      subtitle: project?.name ?? '(unknown project)',
+      agent: s.agent,
+    };
+  }
 
   async function add() {
     if (!selected || !alias.trim()) return;
@@ -700,36 +803,62 @@ function AddMemberModal({
           <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
             Session
           </label>
-          {candidates.length === 0 ? (
-            <p className="text-xs text-[var(--color-ink-muted)]">
-              No free sessions. Every existing session is already in a team.
-            </p>
+          {creating ? (
+            <NewSessionForm
+              projects={Object.values(projectsById)}
+              projectGroups={lookup.projectGroups}
+              onCancel={() => setCreating(false)}
+              onCreated={(s) => {
+                setExtras((prev) => [...prev, s]);
+                setSelected(s.id);
+                setCreating(false);
+              }}
+              onProjectCreated={(p) =>
+                setExtraProjects((prev) => [...prev, p])
+              }
+            />
           ) : (
-            <ul className="space-y-1 max-h-60 overflow-y-auto">
-              {candidates.map((s) => {
-                const meta = formatSessionLabel(s.id, lookup);
-                const active = selected === s.id;
-                return (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(s.id)}
-                      className={`w-full text-left rounded border px-3 py-2 text-xs flex items-center gap-2 ${
-                        active
-                          ? 'border-[var(--color-accent)] bg-[var(--color-surface-3)]/50'
-                          : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]'
-                      }`}
-                    >
-                      {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
-                      <span className="truncate flex-1">{meta.title}</span>
-                      <span className="text-[var(--color-ink-muted)] shrink-0">
-                        {meta.subtitle}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            <>
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className="mb-2 w-full rounded border border-dashed border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1.5"
+              >
+                <Plus size={12} />
+                Create new session
+              </button>
+              {candidates.length === 0 ? (
+                <p className="text-xs text-[var(--color-ink-muted)]">
+                  No free sessions. Create one above.
+                </p>
+              ) : (
+                <ul className="space-y-1 max-h-60 overflow-y-auto">
+                  {candidates.map((s) => {
+                    const meta = describe(s);
+                    const active = selected === s.id;
+                    return (
+                      <li key={s.id}>
+                        <button
+                          type="button"
+                          onClick={() => setSelected(s.id)}
+                          className={`w-full text-left rounded border px-3 py-2 text-xs flex items-center gap-2 ${
+                            active
+                              ? 'border-[var(--color-accent)] bg-[var(--color-surface-3)]/50'
+                              : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]'
+                          }`}
+                        >
+                          {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
+                          <span className="truncate flex-1">{meta.title}</span>
+                          <span className="text-[var(--color-ink-muted)] shrink-0">
+                            {meta.subtitle}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
           )}
         </div>
         <div className="flex justify-end gap-2 pt-2">
@@ -751,6 +880,309 @@ function AddMemberModal({
         </div>
       </div>
     </ModalShell>
+  );
+}
+
+interface NewSessionFormProps {
+  projects: Project[];
+  projectGroups: ProjectGroup[];
+  onCancel: () => void;
+  onCreated: (session: Session) => void;
+  /** Surfaces an inline-created project so the parent modal can render
+   *  it in the candidate list before the global state refetches. */
+  onProjectCreated?: (project: Project) => void;
+}
+
+// Inline session creation surfaced inside the orchestrator/worker pickers
+// so users don't have to navigate to a project page and come back. The
+// form is intentionally minimal — project + agent + optional title; the
+// session inherits everything else from the project's defaults. If the
+// user has no projects yet (or wants a new one for this session), the
+// "+ New project" button opens the same DirectoryPicker the sidebar uses
+// and lets them assign the new project to a group (defaults to Ungrouped).
+function NewSessionForm({
+  projects,
+  projectGroups,
+  onCancel,
+  onCreated,
+  onProjectCreated,
+}: NewSessionFormProps) {
+  // Local copy so a project created inline is immediately visible in the
+  // dropdown without round-tripping through the parent.
+  const [localProjects, setLocalProjects] = useState<Project[]>(projects);
+  useEffect(() => {
+    setLocalProjects((prev) => {
+      // Merge — prefer local state for any project we just created so a
+      // re-prop from the parent doesn't drop our optimistic addition.
+      const ids = new Set(prev.map((p) => p.id));
+      const merged = [...prev];
+      for (const p of projects) if (!ids.has(p.id)) merged.push(p);
+      return merged;
+    });
+  }, [projects]);
+
+  const sortedProjects = useMemo(
+    () => [...localProjects].sort((a, b) => a.name.localeCompare(b.name)),
+    [localProjects],
+  );
+  const [projectId, setProjectId] = useState<string>(
+    sortedProjects[0]?.id ?? '',
+  );
+  // Keep selection in sync as projects change (e.g., user creates one).
+  useEffect(() => {
+    if (!projectId && sortedProjects[0]) {
+      setProjectId(sortedProjects[0].id);
+    }
+  }, [sortedProjects, projectId]);
+
+  const [agent, setAgent] = useState<'claude' | 'codex'>('claude');
+  const [title, setTitle] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [showDirPicker, setShowDirPicker] = useState(false);
+  // Two-step "+ New project" mini-flow: clicking the button reveals a
+  // group select and a "Pick directory…" button. We don't open the
+  // DirectoryPicker until the user confirms group choice so they can't
+  // forget it.
+  const [creatingProject, setCreatingProject] = useState(false);
+  // null = Ungrouped. Persisted across the DirectoryPicker round-trip so
+  // the user picks the group BEFORE the directory and we apply it after.
+  const [newProjectGroupId, setNewProjectGroupId] = useState<string | null>(
+    null,
+  );
+
+  const sortedGroups = useMemo(
+    () => [...projectGroups].sort((a, b) => a.orderIndex - b.orderIndex),
+    [projectGroups],
+  );
+
+  async function submit() {
+    if (!projectId || submitting) return;
+    setSubmitting(true);
+    setErr(null);
+    try {
+      const session = await api.createSession(projectId, {
+        agent,
+        title: title.trim() || null,
+      });
+      onCreated(session);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDirChosen(cwd: string) {
+    setShowDirPicker(false);
+    setErr(null);
+    try {
+      const name = basenameOfPath(cwd);
+      const created = await api.createProject({
+        name,
+        cwd,
+        groupId: newProjectGroupId,
+      });
+      setLocalProjects((prev) => [created, ...prev]);
+      setProjectId(created.id);
+      setCreatingProject(false);
+      setNewProjectGroupId(null);
+      onProjectCreated?.(created);
+      // Notify AppShell so its sidebar refetches the project list.
+      window.dispatchEvent(new CustomEvent('pinloom:projects-changed'));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Reusable: group select + "Pick directory…" button. Both the empty-
+  // state panel and the regular form's "+ New project" use this so the
+  // group decision is made consistently before the picker opens.
+  const newProjectControls = (
+    <div className="space-y-2">
+      <div>
+        <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+          Group <span className="text-[10px]">(optional)</span>
+        </label>
+        <select
+          value={newProjectGroupId ?? ''}
+          onChange={(e) => setNewProjectGroupId(e.target.value || null)}
+          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
+        >
+          <option value="">Ungrouped</option>
+          {sortedGroups.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+
+  // Empty state: no projects exist yet → show a CTA panel with group +
+  // pick directory.
+  if (sortedProjects.length === 0) {
+    return (
+      <>
+        <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2.5 text-xs">
+          <p className="text-[var(--color-ink-muted)]">
+            No projects yet. Pick a directory to start one — pinloom uses it as
+            the session's working directory.
+          </p>
+          {newProjectControls}
+          {err && <p className="text-red-400">{err}</p>}
+          <div className="flex justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDirPicker(true)}
+              className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium flex items-center gap-1"
+            >
+              <Plus size={11} />
+              Pick directory…
+            </button>
+          </div>
+        </div>
+        {showDirPicker && (
+          <DirectoryPicker
+            onSelect={handleDirChosen}
+            onClose={() => setShowDirPicker(false)}
+          />
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+    <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2.5">
+      <div>
+        <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+          Project
+        </label>
+        <div className="flex gap-1.5">
+          <select
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
+          >
+            {sortedProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {!creatingProject && (
+            <button
+              type="button"
+              onClick={() => setCreatingProject(true)}
+              title="Create new project"
+              aria-label="Create new project"
+              className="rounded border border-[var(--color-border)] px-2 py-1.5 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1"
+            >
+              <Plus size={11} />
+              New
+            </button>
+          )}
+        </div>
+        {creatingProject && (
+          <div className="mt-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 space-y-2 text-xs">
+            <p className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+              New project
+            </p>
+            {newProjectControls}
+            <div className="flex justify-end gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreatingProject(false);
+                  setNewProjectGroupId(null);
+                }}
+                className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDirPicker(true)}
+                className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium flex items-center gap-1"
+              >
+                <Plus size={11} />
+                Pick directory…
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+      <div>
+        <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+          Agent
+        </label>
+        <div className="flex gap-1.5">
+          {(['claude', 'codex'] as const).map((kind) => (
+            <button
+              type="button"
+              key={kind}
+              onClick={() => setAgent(kind)}
+              className={`flex-1 rounded border px-2 py-1.5 text-xs flex items-center justify-center gap-1.5 ${
+                agent === kind
+                  ? 'border-[var(--color-accent)] bg-[var(--color-surface-3)]/50 text-[var(--color-ink)]'
+                  : 'border-[var(--color-border)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+              }`}
+            >
+              <AgentBadge agent={kind} size="xs" />
+              <span className="capitalize">{kind}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+          Title <span className="text-[10px]">(optional)</span>
+        </label>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Untitled session"
+          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
+        />
+      </div>
+      {err && (
+        <p className="text-xs text-red-400">{err}</p>
+      )}
+      <div className="flex justify-end gap-1.5 pt-1">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={submitting || !projectId}
+          className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {submitting ? 'Creating…' : 'Create session'}
+        </button>
+      </div>
+    </div>
+    {showDirPicker && (
+      <DirectoryPicker
+        onSelect={handleDirChosen}
+        onClose={() => setShowDirPicker(false)}
+      />
+    )}
+    </>
   );
 }
 

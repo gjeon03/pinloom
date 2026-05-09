@@ -74,8 +74,12 @@ export function SessionTabs({
   async function createTab(agent: AgentKind) {
     setPickerOpen(false);
     try {
+      // Leave the title null so the tab renders as "Chat <6char-suffix>"
+      // (see fallback below). Same default as the inline-creation flow
+      // in the Teams page — keeps suffixes unique across many "new"
+      // sessions instead of stacking identical "New chat" labels.
       const created = await api.createSession(projectId, {
-        title: agent === 'codex' ? 'New codex chat' : 'New chat',
+        title: null,
         agent,
       });
       onCreate(created);
