@@ -136,6 +136,37 @@ export interface HealthResponse {
 }
 
 
+// Events emitted by the team-dispatch layer for the descriptive canvas
+// (PR3). These are *observed* — pinloom doesn't author the dispatch
+// graph, it just renders what the orchestrator agent does at runtime.
+// Stored only in an in-memory ring buffer (services/team-events.ts) so
+// late-joining clients can backfill via HTTP, then subscribe to live
+// events via the `team:${teamId}` WS channel.
+export type TeamDispatchEvent =
+  // Orchestrator just enqueued a prompt to a worker. `previewText` is
+  // a short snippet (first ~120 chars) so the canvas can label the edge
+  // without fetching the full message.
+  | {
+      type: 'dispatch_send';
+      teamId: string;
+      alias: string;
+      sessionId: string;
+      previewText: string;
+      at: string;
+    }
+  // Worker's runtime status changed — running / idle / queued. Drives
+  // the node pulse on the canvas. Coalesces queue depth + isAiRunning
+  // so the client doesn't have to combine three signals.
+  | {
+      type: 'worker_status';
+      teamId: string;
+      alias: string;
+      sessionId: string;
+      running: boolean;
+      queued: number;
+      at: string;
+    };
+
 export type WsEvent =
   | { type: 'message'; sessionId: string; message: Message }
   | { type: 'message_updated'; sessionId: string; message: Message }
@@ -149,4 +180,6 @@ export type WsEvent =
   // does not maintain its own copy. Broadcast on every enqueue, dequeue,
   // and drain (turn-boundary auto-drain).
   | { type: 'queue_updated'; sessionId: string; items: QueueItem[] }
-  | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string };
+  | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string }
+  // Live dispatch event for the team canvas. Channel: `team:${teamId}`.
+  | { type: 'team_dispatch_event'; event: TeamDispatchEvent };

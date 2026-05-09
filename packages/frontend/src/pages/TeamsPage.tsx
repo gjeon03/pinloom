@@ -14,6 +14,7 @@ import {
   Pencil,
   Check,
   ExternalLink,
+  Network,
 } from 'lucide-react';
 import type {
   Project,
@@ -380,6 +381,15 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
             </button>
           )}
         </div>
+        <Link
+          to={`/teams/${team.id}`}
+          aria-label="Open canvas"
+          title="Open canvas"
+          className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1"
+        >
+          <Network size={12} />
+          Canvas
+        </Link>
         <button
           type="button"
           onClick={deleteThisTeam}

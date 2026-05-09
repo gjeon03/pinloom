@@ -13,12 +13,14 @@ import type {
 import { listUserEnvVars } from './user-env.js';
 import { getTeamByOrchestratorSessionId } from './teams.js';
 import { mintTeamToken } from './team-tokens.js';
+import { emitDispatchEvent } from './team-events.js';
 import {
   broadcastQueueState,
   drainQueue,
   enqueueMessage,
   listQueueItems,
   listSessionsWithQueuedItems,
+  setTeamWorkerQueueHook,
 } from './message-queue.js';
 import { redactSecrets } from './redact.js';
 import type { ImageInput, ImageMediaType } from './runner-types.js';
@@ -475,6 +477,38 @@ export function isAiRunning(sessionId: string): boolean {
 // check and their subscribe.
 const idleListeners = new Map<string, Set<() => void>>();
 
+// Wire the message-queue's broadcast path to also fan a worker_status
+// event into the team channel — covers the "user typed directly into a
+// worker chat" case which otherwise wouldn't repaint the canvas until
+// a run actually started/ended.
+setTeamWorkerQueueHook((sessionId: string) => {
+  emitWorkerStatusIfMember(sessionId);
+});
+
+// Emits a `worker_status` dispatch event if this session is a worker in
+// some team. Drives the descriptive canvas's node pulse (PR3). Lookup
+// is one SQLite hit; safe to call frequently.
+function emitWorkerStatusIfMember(sessionId: string): void {
+  const row = getDb()
+    .prepare(
+      `SELECT t.id AS team_id, m.alias AS alias
+       FROM team_members m
+       JOIN teams t ON t.id = m.team_id
+       WHERE m.session_id = ?`,
+    )
+    .get(sessionId) as { team_id: string; alias: string } | undefined;
+  if (!row) return;
+  emitDispatchEvent({
+    type: 'worker_status',
+    teamId: row.team_id,
+    alias: row.alias,
+    sessionId,
+    running: isAiRunning(sessionId),
+    queued: listQueueItems(sessionId).length,
+    at: new Date().toISOString(),
+  });
+}
+
 function notifySessionIdle(sessionId: string): void {
   const set = idleListeners.get(sessionId);
   if (!set) return;
@@ -767,6 +801,10 @@ export async function sendUserMessages(
       sessionId,
       status: 'started',
     });
+    // Repaint the canvas: worker just transitioned idle → running mid-
+    // AgentRun (next turn starts via pushMessage rather than a fresh
+    // adapter spawn).
+    emitWorkerStatusIfMember(sessionId);
     return persisted;
   }
 
@@ -902,6 +940,7 @@ async function runAttempt(
     inFlight: true,
   };
   activeRuns.set(ctx.id, active);
+  emitWorkerStatusIfMember(ctx.id);
 
   let streamMsgId: string | null = null;
   let streamContent = '';
@@ -1059,6 +1098,13 @@ async function runAttempt(
           // Anything the user typed during this turn now goes into the
           // next one — no interrupt needed, the run is idle.
           tryDrainQueue(ctx.id);
+          // Wake any team_wait waiters AND repaint the canvas. Without
+          // these, a long-lived AgentRun (Codex resume / Claude SDK) sits
+          // at inFlight=false between turns but no one observing the
+          // session knows — team_wait stalls until the AgentRun fully
+          // ends, the canvas keeps "running" indefinitely.
+          notifySessionIdle(ctx.id);
+          emitWorkerStatusIfMember(ctx.id);
           break;
         case 'final_text_fallback': {
           const id = ensureStream();
@@ -1096,6 +1142,7 @@ async function runAttempt(
     // drain now while the session is verifiably idle.
     tryDrainQueue(ctx.id);
     notifySessionIdle(ctx.id);
+    emitWorkerStatusIfMember(ctx.id);
   }
 
   if (abortController.signal.aborted) {

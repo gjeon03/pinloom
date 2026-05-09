@@ -5,6 +5,7 @@ import { ProjectPage } from './pages/ProjectPage.js';
 import { PinsPage } from './pages/PinsPage.js';
 import { SessionPage } from './pages/SessionPage.js';
 import { TeamsPage } from './pages/TeamsPage.js';
+import { TeamCanvasPage } from './pages/TeamCanvasPage.js';
 import { WikiPage } from './pages/WikiPage.js';
 import { WikiDetailPage } from './pages/WikiDetailPage.js';
 
@@ -34,6 +35,14 @@ export function App() {
           element={
             <AppShell>
               {() => <TeamsPage />}
+            </AppShell>
+          }
+        />
+        <Route
+          path="/teams/:teamId"
+          element={
+            <AppShell>
+              {() => <TeamCanvasPage />}
             </AppShell>
           }
         />

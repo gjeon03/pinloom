@@ -55,6 +55,21 @@ export function broadcastQueueState(sessionId: string): void {
     sessionId,
     items: listQueueItems(sessionId),
   });
+  // Best-effort canvas update: if this session is a team worker, fan
+  // out a `worker_status` so the descriptive canvas reflects queue
+  // changes that don't happen to coincide with run-state transitions
+  // (e.g. user types directly into a worker's chat). Loose import to
+  // avoid pulling runner.ts into message-queue's dep graph.
+  void notifyTeamWorkerQueueChange(sessionId);
+}
+
+let teamWorkerQueueHook: ((sessionId: string) => void) | null = null;
+export function setTeamWorkerQueueHook(hook: (sessionId: string) => void): void {
+  teamWorkerQueueHook = hook;
+}
+
+function notifyTeamWorkerQueueChange(sessionId: string): void {
+  if (teamWorkerQueueHook) teamWorkerQueueHook(sessionId);
 }
 
 interface EnqueueArgs {

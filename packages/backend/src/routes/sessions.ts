@@ -539,4 +539,86 @@ export async function sessionRoutes(app: FastifyInstance) {
       .get(req.params.sessionId) as SessionRow;
     return toSession(row);
   });
+
+  // Move a session to a different project. Use case: a chat that
+  // bootstrapped a new repo should follow that repo into its own
+  // pinloom project. We clear plan_id (plans are project-scoped) and
+  // — to honor the "projects are never empty" UX — auto-create a
+  // fresh untitled session in the source project if the move would
+  // leave it with zero tabs.
+  app.post<{
+    Params: { sessionId: string };
+    Body: { projectId?: string };
+  }>('/api/sessions/:sessionId/move', async (req, reply) => {
+    const targetProjectId = req.body?.projectId?.trim();
+    if (!targetProjectId) {
+      reply.code(400);
+      return { error: 'projectId is required' };
+    }
+    const session = db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(req.params.sessionId) as SessionRow | undefined;
+    if (!session) {
+      reply.code(404);
+      return { error: 'session not found' };
+    }
+    const target = db
+      .prepare('SELECT id FROM projects WHERE id = ?')
+      .get(targetProjectId) as { id: string } | undefined;
+    if (!target) {
+      reply.code(404);
+      return { error: 'target project not found' };
+    }
+    if (session.project_id === targetProjectId) {
+      reply.code(400);
+      return { error: 'session already belongs to that project' };
+    }
+
+    const sourceProjectId = session.project_id;
+    const now = new Date().toISOString();
+
+    let sourceFiller: SessionRow | null = null;
+    db.transaction(() => {
+      // New tab lands at the bottom of the target project's strip.
+      const maxRow = db
+        .prepare(
+          'SELECT COALESCE(MAX(order_index), -1) AS max FROM sessions WHERE project_id = ?',
+        )
+        .get(targetProjectId) as { max: number };
+      db.prepare(
+        `UPDATE sessions
+         SET project_id = ?,
+             plan_id = NULL,
+             order_index = ?,
+             updated_at = ?
+         WHERE id = ?`,
+      ).run(targetProjectId, maxRow.max + 1, now, req.params.sessionId);
+
+      const remaining = db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM sessions WHERE project_id = ?',
+        )
+        .get(sourceProjectId) as { n: number };
+      if (remaining.n === 0) {
+        const fillerId = nanoid();
+        db.prepare(
+          `INSERT INTO sessions
+             (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, created_at, updated_at)
+           VALUES (?, ?, NULL, 'claude', NULL, NULL, NULL, 0, ?, ?)`,
+        ).run(fillerId, sourceProjectId, now, now);
+        sourceFiller = db
+          .prepare('SELECT * FROM sessions WHERE id = ?')
+          .get(fillerId) as SessionRow;
+      }
+    })();
+
+    const moved = db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(req.params.sessionId) as SessionRow;
+
+    return {
+      session: toSession(moved),
+      sourceFiller: sourceFiller ? toSession(sourceFiller) : null,
+    };
+  });
 }
