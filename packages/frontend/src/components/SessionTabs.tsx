@@ -914,7 +914,12 @@ function AddWorkerFromTabModal({
         setLoading(false);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (cancelled) return;
+        // Bug fix: the previous version left `loading=true` on error,
+        // which left the picker stuck on "Loading…" even though an
+        // error banner was shown. Both states must clear together.
+        setError(e instanceof Error ? e.message : String(e));
+        setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -923,11 +928,14 @@ function AddWorkerFromTabModal({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // Don't allow Escape-dismiss while a request is in flight; it
+      // would leave dangling setState calls on an unmounted modal.
+      if (submitting || creatingSubmit) return;
       if (e.key === 'Escape') onClose();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, submitting, creatingSubmit]);
 
   const projectsById = useMemo(() => {
     const map = new Map<string, Project>();

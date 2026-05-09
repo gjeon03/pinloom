@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import {
@@ -72,7 +72,20 @@ export function ProjectPage({
     let restored: InlineCanvasTab[] = [];
     try {
       const raw = localStorage.getItem(`pinloom:canvasTabs:${project.id}`);
-      if (raw) restored = JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          // Defensive shape check — a tampered or older-schema entry
+          // shouldn't poison the strip with undefineds later.
+          restored = parsed.filter(
+            (t): t is InlineCanvasTab =>
+              t &&
+              typeof t === 'object' &&
+              typeof (t as InlineCanvasTab).teamId === 'string' &&
+              typeof (t as InlineCanvasTab).teamName === 'string',
+          );
+        }
+      }
     } catch {
       restored = [];
     }
@@ -129,6 +142,13 @@ export function ProjectPage({
   // the canvas via navigate() + lastSession seeding; for same-project
   // jumps the route doesn't change, so we listen here and switch the
   // active tab in-place (also clearing any inline canvas tab focus).
+  // Read sessions through a ref so the listener doesn't tear down /
+  // re-attach on every session-state change — that would otherwise
+  // open a window where dispatched events get dropped.
+  const sessionsRef = useRef<Session[]>(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
   useEffect(() => {
     function onGoto(event: Event) {
       const detail = (event as CustomEvent<{
@@ -136,7 +156,9 @@ export function ProjectPage({
         sessionId: string;
       }>).detail;
       if (!detail || detail.projectId !== project.id) return;
-      const target = sessions.find((s) => s.id === detail.sessionId);
+      const target = sessionsRef.current.find(
+        (s) => s.id === detail.sessionId,
+      );
       if (!target) return;
       setActiveCanvasTeamId(null);
       persistActiveCanvas(project.id, null);
@@ -148,7 +170,7 @@ export function ProjectPage({
         'pinloom:goto-session',
         onGoto as EventListener,
       );
-  }, [project.id, sessions]);
+  }, [project.id]);
 
   function handlePinsChange(updated: Message) {
     setPins((prev) => applyPinChange(prev, updated));
