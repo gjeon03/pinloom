@@ -216,6 +216,44 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         ON message_queue(session_id, created_at);
     `,
   },
+  {
+    id: 16,
+    // Teams group an orchestrator session with one or more worker sessions.
+    // The orchestrator (a regular session) addresses workers by alias via
+    // the pinloom MCP server; each worker keeps its own systemPrompt /
+    // model / agent and stays usable as a standalone session. A session
+    // is the orchestrator of at most one team and a worker of at most one
+    // team, but can be neither (the default for existing sessions).
+    sql: `
+      CREATE TABLE IF NOT EXISTS teams (
+        id                       TEXT PRIMARY KEY,
+        name                     TEXT NOT NULL,
+        -- A team is unusable without an orchestrator (the runner needs a
+        -- session id to attribute MCP calls to). Cascading on delete keeps
+        -- "team has workers but no orchestrator" out of the data model
+        -- entirely — the alternative (SET NULL) would leave PR2's MCP
+        -- server unable to resolve teams from the orchestrator's env.
+        orchestrator_session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        created_at               TEXT NOT NULL,
+        updated_at               TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_orchestrator
+        ON teams(orchestrator_session_id)
+        WHERE orchestrator_session_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS team_members (
+        team_id     TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        alias       TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        PRIMARY KEY (team_id, session_id)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_session
+        ON team_members(session_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_alias
+        ON team_members(team_id, alias);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

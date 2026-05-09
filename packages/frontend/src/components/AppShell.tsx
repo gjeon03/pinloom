@@ -11,6 +11,7 @@ import {
   Plus,
   Settings,
   Sun,
+  Users,
 } from 'lucide-react';
 import type { Project, ProjectGroup } from '@pinloom/shared';
 import { api } from '../api/client.js';
@@ -104,6 +105,7 @@ export function AppShell({ children }: Props) {
   const location = useLocation();
   const { projectId } = useParams<{ projectId: string }>();
   const onWiki = location.pathname.startsWith('/wiki');
+  const onTeams = location.pathname.startsWith('/teams');
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
@@ -573,6 +575,17 @@ export function AppShell({ children }: Props) {
         </div>
 
         <div className="border-t border-[var(--color-border)] p-2 space-y-1">
+          <button
+            onClick={() => navigate('/teams')}
+            className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
+              onTeams
+                ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
+            }`}
+          >
+            <Users size={12} />
+            Teams
+          </button>
           <button
             onClick={() => navigate('/wiki')}
             className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${

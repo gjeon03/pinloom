@@ -1,0 +1,158 @@
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import {
+  addMember,
+  AliasTakenError,
+  createTeam,
+  deleteTeam,
+  getTeam,
+  InvalidAliasError,
+  listTeams,
+  OrchestratorWorkerConflictError,
+  removeMember,
+  SessionAlreadyInTeamError,
+  SessionNotFoundError,
+  TeamNotFoundError,
+  updateMemberAlias,
+  updateTeam,
+} from '../services/teams.js';
+
+// Maps service-layer typed errors to HTTP status codes the frontend can
+// branch on. Anything else falls through to 500 via re-throw.
+function replyForError(reply: FastifyReply, err: unknown): { error: string } {
+  if (err instanceof TeamNotFoundError || err instanceof SessionNotFoundError) {
+    reply.code(404);
+    return { error: err.message };
+  }
+  if (err instanceof InvalidAliasError) {
+    reply.code(400);
+    return { error: err.message };
+  }
+  if (
+    err instanceof AliasTakenError ||
+    err instanceof SessionAlreadyInTeamError ||
+    err instanceof OrchestratorWorkerConflictError
+  ) {
+    reply.code(409);
+    return { error: err.message };
+  }
+  throw err;
+}
+
+export async function teamRoutes(app: FastifyInstance) {
+  app.get('/api/teams', async () => listTeams());
+
+  app.get<{ Params: { id: string } }>('/api/teams/:id', async (req, reply) => {
+    const team = getTeam(req.params.id);
+    if (!team) {
+      reply.code(404);
+      return { error: 'team not found' };
+    }
+    return team;
+  });
+
+  app.post<{ Body: { name?: string; orchestratorSessionId?: string } }>(
+    '/api/teams',
+    async (req, reply) => {
+      const name = req.body?.name?.trim();
+      const orchestratorSessionId = req.body?.orchestratorSessionId?.trim();
+      if (!name) {
+        reply.code(400);
+        return { error: 'name is required' };
+      }
+      if (!orchestratorSessionId) {
+        reply.code(400);
+        return { error: 'orchestratorSessionId is required' };
+      }
+      try {
+        return createTeam({ name, orchestratorSessionId });
+      } catch (err) {
+        return replyForError(reply, err);
+      }
+    },
+  );
+
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string; orchestratorSessionId?: string };
+  }>('/api/teams/:id', async (req, reply) => {
+    const name = req.body?.name?.trim();
+    const orchestratorSessionId = req.body?.orchestratorSessionId?.trim();
+    if (name !== undefined && name.length === 0) {
+      reply.code(400);
+      return { error: 'name cannot be empty' };
+    }
+    if (
+      req.body?.orchestratorSessionId !== undefined &&
+      !orchestratorSessionId
+    ) {
+      reply.code(400);
+      return { error: 'orchestratorSessionId cannot be empty' };
+    }
+    try {
+      return updateTeam(req.params.id, { name, orchestratorSessionId });
+    } catch (err) {
+      return replyForError(reply, err);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/teams/:id', async (req, reply) => {
+    if (!deleteTeam(req.params.id)) {
+      reply.code(404);
+      return { error: 'team not found' };
+    }
+    return { ok: true };
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: { sessionId?: string; alias?: string };
+  }>('/api/teams/:id/members', async (req, reply) => {
+    const sessionId = req.body?.sessionId?.trim();
+    const alias = req.body?.alias?.trim();
+    if (!sessionId) {
+      reply.code(400);
+      return { error: 'sessionId is required' };
+    }
+    if (!alias) {
+      reply.code(400);
+      return { error: 'alias is required' };
+    }
+    try {
+      return addMember({ teamId: req.params.id, sessionId, alias });
+    } catch (err) {
+      return replyForError(reply, err);
+    }
+  });
+
+  app.patch<{
+    Params: { id: string; sessionId: string };
+    Body: { alias?: string };
+  }>('/api/teams/:id/members/:sessionId', async (req, reply) => {
+    const alias = req.body?.alias?.trim();
+    if (!alias) {
+      reply.code(400);
+      return { error: 'alias is required' };
+    }
+    try {
+      return updateMemberAlias({
+        teamId: req.params.id,
+        sessionId: req.params.sessionId,
+        alias,
+      });
+    } catch (err) {
+      return replyForError(reply, err);
+    }
+  });
+
+  app.delete<{ Params: { id: string; sessionId: string } }>(
+    '/api/teams/:id/members/:sessionId',
+    async (req, reply) => {
+      const ok = removeMember(req.params.id, req.params.sessionId);
+      if (!ok) {
+        reply.code(404);
+        return { error: 'member not found' };
+      }
+      return { ok: true };
+    },
+  );
+}
