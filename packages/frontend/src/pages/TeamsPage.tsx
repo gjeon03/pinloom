@@ -599,6 +599,8 @@ function SessionPickerModal({
   onClose,
   onPick,
 }: SessionPickerModalProps) {
+  const [creating, setCreating] = useState(false);
+
   const candidates = useMemo(() => {
     return Object.values(lookup.sessionsById).filter(
       (s) => !lookup.boundSessionIds.has(s.id) || s.id === allowSessionId,
@@ -607,32 +609,49 @@ function SessionPickerModal({
 
   return (
     <ModalShell title={title} onClose={onClose}>
-      {candidates.length === 0 ? (
-        <p className="text-xs text-[var(--color-ink-muted)]">
-          No available sessions. Create a session first, or remove one from
-          another team.
-        </p>
+      {creating ? (
+        <NewSessionForm
+          projects={Object.values(lookup.projectsById)}
+          onCancel={() => setCreating(false)}
+          onCreated={(s) => onPick(s.id)}
+        />
       ) : (
-        <ul className="space-y-1 max-h-80 overflow-y-auto">
-          {candidates.map((s) => {
-            const meta = formatSessionLabel(s.id, lookup);
-            return (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  onClick={() => onPick(s.id)}
-                  className="w-full text-left rounded border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] px-3 py-2 text-xs flex items-center gap-2"
-                >
-                  {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
-                  <span className="truncate flex-1">{meta.title}</span>
-                  <span className="text-[var(--color-ink-muted)] shrink-0">
-                    {meta.subtitle}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="mb-3 w-full rounded border border-dashed border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1.5"
+          >
+            <Plus size={12} />
+            Create new session
+          </button>
+          {candidates.length === 0 ? (
+            <p className="text-xs text-[var(--color-ink-muted)]">
+              No available sessions to pick from. Create a new one above.
+            </p>
+          ) : (
+            <ul className="space-y-1 max-h-80 overflow-y-auto">
+              {candidates.map((s) => {
+                const meta = formatSessionLabel(s.id, lookup);
+                return (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => onPick(s.id)}
+                      className="w-full text-left rounded border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] px-3 py-2 text-xs flex items-center gap-2"
+                    >
+                      {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
+                      <span className="truncate flex-1">{meta.title}</span>
+                      <span className="text-[var(--color-ink-muted)] shrink-0">
+                        {meta.subtitle}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </>
       )}
     </ModalShell>
   );
@@ -655,12 +674,29 @@ function AddMemberModal({
 }: AddMemberModalProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [alias, setAlias] = useState('');
+  const [creating, setCreating] = useState(false);
+  // Sessions just-created via the inline form. Held locally because the
+  // parent's `lookup` won't refresh until we commit the team membership;
+  // we still want to show + select them in the picker right away.
+  const [extras, setExtras] = useState<Session[]>([]);
 
   const candidates = useMemo(() => {
-    return Object.values(lookup.sessionsById).filter(
+    const base = Object.values(lookup.sessionsById).filter(
       (s) => !lookup.boundSessionIds.has(s.id),
     );
-  }, [lookup]);
+    const extraIds = new Set(extras.map((e) => e.id));
+    const filteredBase = base.filter((s) => !extraIds.has(s.id));
+    return [...extras, ...filteredBase];
+  }, [lookup, extras]);
+
+  function describe(s: Session): SessionLabel {
+    const project = lookup.projectsById[s.projectId];
+    return {
+      title: s.title ?? 'Untitled session',
+      subtitle: project?.name ?? '(unknown project)',
+      agent: s.agent,
+    };
+  }
 
   async function add() {
     if (!selected || !alias.trim()) return;
@@ -700,36 +736,58 @@ function AddMemberModal({
           <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
             Session
           </label>
-          {candidates.length === 0 ? (
-            <p className="text-xs text-[var(--color-ink-muted)]">
-              No free sessions. Every existing session is already in a team.
-            </p>
+          {creating ? (
+            <NewSessionForm
+              projects={Object.values(lookup.projectsById)}
+              onCancel={() => setCreating(false)}
+              onCreated={(s) => {
+                setExtras((prev) => [...prev, s]);
+                setSelected(s.id);
+                setCreating(false);
+              }}
+            />
           ) : (
-            <ul className="space-y-1 max-h-60 overflow-y-auto">
-              {candidates.map((s) => {
-                const meta = formatSessionLabel(s.id, lookup);
-                const active = selected === s.id;
-                return (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(s.id)}
-                      className={`w-full text-left rounded border px-3 py-2 text-xs flex items-center gap-2 ${
-                        active
-                          ? 'border-[var(--color-accent)] bg-[var(--color-surface-3)]/50'
-                          : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]'
-                      }`}
-                    >
-                      {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
-                      <span className="truncate flex-1">{meta.title}</span>
-                      <span className="text-[var(--color-ink-muted)] shrink-0">
-                        {meta.subtitle}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            <>
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className="mb-2 w-full rounded border border-dashed border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1.5"
+              >
+                <Plus size={12} />
+                Create new session
+              </button>
+              {candidates.length === 0 ? (
+                <p className="text-xs text-[var(--color-ink-muted)]">
+                  No free sessions. Create one above.
+                </p>
+              ) : (
+                <ul className="space-y-1 max-h-60 overflow-y-auto">
+                  {candidates.map((s) => {
+                    const meta = describe(s);
+                    const active = selected === s.id;
+                    return (
+                      <li key={s.id}>
+                        <button
+                          type="button"
+                          onClick={() => setSelected(s.id)}
+                          className={`w-full text-left rounded border px-3 py-2 text-xs flex items-center gap-2 ${
+                            active
+                              ? 'border-[var(--color-accent)] bg-[var(--color-surface-3)]/50'
+                              : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]'
+                          }`}
+                        >
+                          {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
+                          <span className="truncate flex-1">{meta.title}</span>
+                          <span className="text-[var(--color-ink-muted)] shrink-0">
+                            {meta.subtitle}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
           )}
         </div>
         <div className="flex justify-end gap-2 pt-2">
@@ -751,6 +809,141 @@ function AddMemberModal({
         </div>
       </div>
     </ModalShell>
+  );
+}
+
+interface NewSessionFormProps {
+  projects: Project[];
+  onCancel: () => void;
+  onCreated: (session: Session) => void;
+}
+
+// Inline session creation surfaced inside the orchestrator/worker pickers
+// so users don't have to navigate to a project page and come back. The
+// form is intentionally minimal — project + agent + optional title; the
+// session inherits everything else from the project's defaults.
+function NewSessionForm({ projects, onCancel, onCreated }: NewSessionFormProps) {
+  const sortedProjects = useMemo(
+    () => [...projects].sort((a, b) => a.name.localeCompare(b.name)),
+    [projects],
+  );
+  const [projectId, setProjectId] = useState<string>(
+    sortedProjects[0]?.id ?? '',
+  );
+  const [agent, setAgent] = useState<'claude' | 'codex'>('claude');
+  const [title, setTitle] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit() {
+    if (!projectId || submitting) return;
+    setSubmitting(true);
+    setErr(null);
+    try {
+      const session = await api.createSession(projectId, {
+        agent,
+        title: title.trim() || null,
+      });
+      onCreated(session);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (sortedProjects.length === 0) {
+    return (
+      <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
+        <p className="text-[var(--color-ink-muted)]">
+          Create a project first — sessions are scoped to a project.
+        </p>
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          >
+            Back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2.5">
+      <div>
+        <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+          Project
+        </label>
+        <select
+          value={projectId}
+          onChange={(e) => setProjectId(e.target.value)}
+          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
+        >
+          {sortedProjects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+          Agent
+        </label>
+        <div className="flex gap-1.5">
+          {(['claude', 'codex'] as const).map((kind) => (
+            <button
+              type="button"
+              key={kind}
+              onClick={() => setAgent(kind)}
+              className={`flex-1 rounded border px-2 py-1.5 text-xs flex items-center justify-center gap-1.5 ${
+                agent === kind
+                  ? 'border-[var(--color-accent)] bg-[var(--color-surface-3)]/50 text-[var(--color-ink)]'
+                  : 'border-[var(--color-border)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+              }`}
+            >
+              <AgentBadge agent={kind} size="xs" />
+              <span className="capitalize">{kind}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+          Title <span className="text-[10px]">(optional)</span>
+        </label>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Untitled session"
+          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
+        />
+      </div>
+      {err && (
+        <p className="text-xs text-red-400">{err}</p>
+      )}
+      <div className="flex justify-end gap-1.5 pt-1">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={submitting || !projectId}
+          className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {submitting ? 'Creating…' : 'Create session'}
+        </button>
+      </div>
+    </div>
   );
 }
 
