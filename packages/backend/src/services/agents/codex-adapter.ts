@@ -80,10 +80,29 @@ interface CodexEvent {
   item?: CodexItem;
 }
 
-// TOML escaping for string values — keep it minimal because we control
-// everything we render. We only use double-quoted basic strings.
+// TOML escaping for double-quoted basic strings. The TOML spec forbids
+// raw control chars (U+0000..U+001F) and DEL (U+007F) in basic strings,
+// so we encode the printable few directly and reject the rest. Today's
+// callers (process.execPath, nanoid token, env vars) never contain
+// control chars, but a future caller passing arbitrary user input could
+// silently produce invalid TOML without this guard.
 function tomlString(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  let out = '';
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    if (code === 0x22) out += '\\"'; // "
+    else if (code === 0x5c) out += '\\\\'; // \
+    else if (code === 0x08) out += '\\b';
+    else if (code === 0x09) out += '\\t';
+    else if (code === 0x0a) out += '\\n';
+    else if (code === 0x0c) out += '\\f';
+    else if (code === 0x0d) out += '\\r';
+    else if (code < 0x20 || code === 0x7f) {
+      // Other control chars get the \uXXXX escape per TOML §5.
+      out += `\\u${code.toString(16).padStart(4, '0').toUpperCase()}`;
+    } else out += ch;
+  }
+  return `"${out}"`;
 }
 
 function tomlStringArray(values: string[]): string {
@@ -191,10 +210,23 @@ class CodexAdapterImpl implements AgentAdapter {
 
     // Per-run isolated CODEX_HOME if the orchestrator needs MCP wiring.
     // Stays alive for the lifetime of the AgentRun (multiple turns reuse
-    // the same config) and is wiped on close().
+    // the same config) and is wiped via cleanupCodexHome() — which is
+    // idempotent and called from both the events generator's finally
+    // AND close(), so the tmpdir is reaped no matter which path ends
+    // the run.
     const codexHome = args.mcpServers
       ? buildCodexHome(args.mcpServers)
       : null;
+    let codexHomeRemoved = false;
+    function cleanupCodexHome() {
+      if (!codexHome || codexHomeRemoved) return;
+      codexHomeRemoved = true;
+      try {
+        rmSync(codexHome.dir, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    }
 
     args.abortController.signal.addEventListener('abort', () => {
       aborted = true;
@@ -452,13 +484,7 @@ class CodexAdapterImpl implements AgentAdapter {
             // best-effort
           }
         }
-        if (codexHome) {
-          try {
-            rmSync(codexHome.dir, { recursive: true, force: true });
-          } catch {
-            // best-effort
-          }
-        }
+        cleanupCodexHome();
       }
     }
 
@@ -469,6 +495,7 @@ class CodexAdapterImpl implements AgentAdapter {
       },
       close() {
         promptStream.close();
+        cleanupCodexHome();
       },
     };
   }

@@ -17,6 +17,7 @@
 import { nanoid } from 'nanoid';
 import type { Team, TeamMember } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
+import { clearTeamToken } from './team-tokens.js';
 
 const ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 
@@ -184,6 +185,7 @@ export function updateTeam(id: string, args: UpdateTeamArgs): Team {
 
 export function deleteTeam(id: string): boolean {
   const result = getDb().prepare('DELETE FROM teams WHERE id = ?').run(id);
+  if (result.changes > 0) clearTeamToken(id);
   return result.changes > 0;
 }
 

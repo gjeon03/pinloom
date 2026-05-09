@@ -13,33 +13,51 @@
 // orphaned shims fail loudly instead of silently dispatching into the
 // wrong run.
 
+import { timingSafeEqual } from 'node:crypto';
 import { nanoid } from 'nanoid';
 
-const tokensByTeamId = new Map<string, string>();
+// Two parallel maps so resolution is O(1) and we can timing-safe compare
+// against each candidate without leaking length differences via early-
+// out `===`. teamToToken is the source of truth; tokenToTeam is a
+// derived inverse rebuilt on every mint.
+const teamToToken = new Map<string, string>();
+const tokenToTeam = new Map<string, string>();
 
 /**
  * Mints a new token for the given team, replacing any prior token (so
  * a fresh orchestrator run automatically invalidates stale shims).
  */
 export function mintTeamToken(teamId: string): string {
+  const prior = teamToToken.get(teamId);
+  if (prior) tokenToTeam.delete(prior);
   const token = nanoid(32);
-  tokensByTeamId.set(teamId, token);
+  teamToToken.set(teamId, token);
+  tokenToTeam.set(token, teamId);
   return token;
 }
 
 export function clearTeamToken(teamId: string): void {
-  tokensByTeamId.delete(teamId);
+  const prior = teamToToken.get(teamId);
+  if (prior) tokenToTeam.delete(prior);
+  teamToToken.delete(teamId);
 }
 
 /**
  * Returns the team id whose token matches `presented`, or null if none.
- * The MCP server presents a token without claiming a team id; the
- * backend resolves the team from the token to make it harder for a
- * confused shim to scribble across teams.
+ * Uses constant-time comparison to avoid byte-level timing oracles even
+ * though this is a single-user local app — it costs nothing and keeps
+ * the abstraction defensible if teams ever go remote.
  */
 export function resolveTeamByToken(presented: string): string | null {
-  for (const [teamId, token] of tokensByTeamId.entries()) {
-    if (token === presented) return teamId;
-  }
-  return null;
+  // Direct map lookup is O(1) but its hash equality is fast-path early-
+  // out — not constant-time. Pull the candidate via the lookup, then
+  // do a constant-time byte compare against the stored token.
+  const candidateTeamId = tokenToTeam.get(presented);
+  if (!candidateTeamId) return null;
+  const stored = teamToToken.get(candidateTeamId);
+  if (!stored) return null;
+  if (presented.length !== stored.length) return null;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(stored);
+  return timingSafeEqual(a, b) ? candidateTeamId : null;
 }

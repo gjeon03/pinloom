@@ -164,29 +164,38 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       reply.code(404);
       return { error: `no worker with alias "${alias}" in this team` };
     }
-    const limit = Math.min(
-      Math.max(parseInt(req.query.limit ?? '20', 10) || 20, 1),
-      200,
-    );
+    const requestedLimit = Number(req.query.limit ?? '20');
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+      ? Math.min(Math.max(Math.floor(requestedLimit), 1), 200)
+      : 20;
     let baseSql =
-      'SELECT id, role, content, created_at FROM messages WHERE session_id = ?';
-    const args: Array<string> = [member.sessionId];
+      "SELECT id, role, content, created_at FROM messages WHERE session_id = ? AND role IN ('user','assistant')";
+    const sqlArgs: Array<string | number> = [member.sessionId];
     if (req.query.sinceMessageId) {
       // "messages newer than X" is implemented by created_at because
       // the messages table uses ISO timestamps and string-collation
-      // ordering matches lexicographic ISO sort.
+      // ordering matches lexicographic ISO sort. Scope the lookup to
+      // the same session so a confused caller can't probe across
+      // sessions by trying random ids.
       const sinceRow = db
-        .prepare('SELECT created_at FROM messages WHERE id = ?')
-        .get(req.query.sinceMessageId) as { created_at: string } | undefined;
-      if (sinceRow) {
-        baseSql += ' AND created_at > ?';
-        args.push(sinceRow.created_at);
+        .prepare(
+          'SELECT created_at FROM messages WHERE id = ? AND session_id = ?',
+        )
+        .get(req.query.sinceMessageId, member.sessionId) as
+        | { created_at: string }
+        | undefined;
+      if (!sinceRow) {
+        reply.code(404);
+        return {
+          error: `sinceMessageId not found in worker @${alias}'s history`,
+        };
       }
+      baseSql += ' AND created_at > ?';
+      sqlArgs.push(sinceRow.created_at);
     }
     baseSql += ' ORDER BY created_at ASC, id ASC LIMIT ?';
-    const rows = db
-      .prepare(baseSql)
-      .all(...args, limit) as Array<{
+    sqlArgs.push(limit);
+    const rows = db.prepare(baseSql).all(...sqlArgs) as Array<{
       id: string;
       role: string;
       content: string;
@@ -240,14 +249,19 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     const timeoutMs = Math.min(Math.max(requested, 100), MAX_WAIT_MS);
 
     // Tie the wait to the underlying socket so a disconnected MCP shim
-    // doesn't pin the worker thread hostage until timeout.
+    // doesn't pin the worker thread hostage until timeout. Detach after
+    // resolution so the AbortController doesn't outlive the request.
     const ac = new AbortController();
-    req.raw.on('close', () => ac.abort());
-
-    const idle = await waitForIdle(member.sessionId, timeoutMs, ac.signal);
-    return {
-      idle,
-      queued: listQueueItems(member.sessionId).length,
-    };
+    const onSocketClose = () => ac.abort();
+    req.raw.once('close', onSocketClose);
+    try {
+      const idle = await waitForIdle(member.sessionId, timeoutMs, ac.signal);
+      return {
+        idle,
+        queued: listQueueItems(member.sessionId).length,
+      };
+    } finally {
+      req.raw.off('close', onSocketClose);
+    }
   });
 }

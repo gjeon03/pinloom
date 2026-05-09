@@ -439,25 +439,10 @@ export function waitForIdle(
   signal?: AbortSignal,
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    if (!isAiRunning(sessionId) && getQueueDepthFor(sessionId) === 0) {
-      resolve(true);
-      return;
-    }
     let settled = false;
     const set = idleListeners.get(sessionId) ?? new Set<() => void>();
     idleListeners.set(sessionId, set);
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(false);
-    }, timeoutMs);
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(false);
-    };
+
     function cleanup() {
       clearTimeout(timer);
       set.delete(onIdle);
@@ -473,8 +458,33 @@ export function waitForIdle(
       cleanup();
       resolve(true);
     }
+    function onAbort() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    }
+
+    // CRITICAL ORDER: subscribe BEFORE the early-out check. If we
+    // checked first and the run completed between the check and the
+    // subscribe, our listener would be registered too late and we'd
+    // hang for the full timeout.
     set.add(onIdle);
     signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    }, timeoutMs);
+
+    // Now safe to fast-path resolve if already idle.
+    if (!isAiRunning(sessionId) && getQueueDepthFor(sessionId) === 0) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(true);
+    }
   });
 }
 
@@ -1023,6 +1033,11 @@ async function runAttempt(
     if (activeRuns.get(ctx.id) === active) {
       activeRuns.delete(ctx.id);
     }
+    // A team_send dispatch that arrived during the dying tail (after the
+    // last event-loop drain trigger but before activeRuns.delete) would
+    // otherwise sit in the queue until the next user message. Try to
+    // drain now while the session is verifiably idle.
+    tryDrainQueue(ctx.id);
     notifySessionIdle(ctx.id);
   }
 
