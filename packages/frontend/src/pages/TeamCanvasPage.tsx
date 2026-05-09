@@ -12,7 +12,7 @@
 //      based fade, no stale-edge re-render churn.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ReactFlow,
   Background,
@@ -23,7 +23,7 @@ import {
   type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowLeft, Crown, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Crown, ExternalLink, PanelRight } from 'lucide-react';
 import type {
   Project,
   Session,
@@ -51,6 +51,7 @@ interface CanvasNodeData extends Record<string, unknown> {
   alias?: string;
   agent: 'claude' | 'codex' | null;
   projectName: string | null;
+  projectId: string | null;
   sessionId: string;
   running?: boolean;
   queued?: number;
@@ -202,6 +203,7 @@ export function TeamCanvasPage({
     title: string;
     agent: 'claude' | 'codex' | null;
     projectName: string | null;
+    projectId: string | null;
   } {
     const session = sessionsById.get(sessionId);
     if (!session) {
@@ -209,6 +211,7 @@ export function TeamCanvasPage({
         title: '(deleted session)',
         agent: null,
         projectName: null,
+        projectId: null,
       };
     }
     const project = projectsById.get(session.projectId);
@@ -216,6 +219,7 @@ export function TeamCanvasPage({
       title: session.title ?? `Chat ${session.id.slice(0, 6)}`,
       agent: session.agent,
       projectName: project?.name ?? null,
+      projectId: session.projectId,
     };
   }
 
@@ -234,6 +238,7 @@ export function TeamCanvasPage({
         title: orchMeta.title,
         agent: orchMeta.agent,
         projectName: orchMeta.projectName,
+        projectId: orchMeta.projectId,
         sessionId: team.orchestratorSessionId,
       },
     };
@@ -256,6 +261,7 @@ export function TeamCanvasPage({
           alias: m.alias,
           agent: meta.agent,
           projectName: meta.projectName,
+          projectId: meta.projectId,
           sessionId: m.sessionId,
           running: state?.running ?? false,
           queued: state?.queued ?? 0,
@@ -351,6 +357,7 @@ interface CanvasNodeProps {
 }
 
 function CanvasNode({ data }: CanvasNodeProps) {
+  const navigate = useNavigate();
   const isOrch = data.kind === 'orchestrator';
   const state: WorkerState = {
     alias: data.alias ?? '',
@@ -359,6 +366,26 @@ function CanvasNode({ data }: CanvasNodeProps) {
     queued: data.queued ?? 0,
     lastEventAt: '',
   };
+
+  // Switch to this session inside pinloom (not a new browser tab).
+  // Same-project switches are handled by ProjectPage's listener; cross-
+  // project switches need an actual route change. We seed lastSession so
+  // ProjectPage's mount picks the right tab even before the listener
+  // (or if the listener never runs because the project just mounted).
+  function goToTab() {
+    if (!data.projectId) return;
+    localStorage.setItem(
+      `pinloom:lastSession:${data.projectId}`,
+      data.sessionId,
+    );
+    window.dispatchEvent(
+      new CustomEvent('pinloom:goto-session', {
+        detail: { projectId: data.projectId, sessionId: data.sessionId },
+      }),
+    );
+    navigate(`/projects/${data.projectId}`);
+  }
+
   return (
     <div
       className={`rounded border bg-[var(--color-surface-2)] px-3 py-2 text-xs shadow-md ${
@@ -414,10 +441,22 @@ function CanvasNode({ data }: CanvasNodeProps) {
           <span className="text-[var(--color-ink-muted)]">
             {statusLabel(state)}
           </span>
+          {data.projectId && (
+            <button
+              type="button"
+              onClick={goToTab}
+              className="ml-auto text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
+              aria-label="Go to this tab"
+              title="Go to this tab"
+            >
+              <PanelRight size={10} />
+            </button>
+          )}
           <Link
             to={`/s/${data.sessionId}`}
-            className="ml-auto text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-            aria-label="Open session"
+            className={`${data.projectId ? '' : 'ml-auto'} text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]`}
+            aria-label="Open in new browser tab"
+            title="Open in new browser tab"
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -426,12 +465,24 @@ function CanvasNode({ data }: CanvasNodeProps) {
         </div>
       )}
       {isOrch && (
-        <div className="mt-1.5 text-right">
+        <div className="mt-1.5 flex items-center justify-end gap-2 text-[10px]">
+          {data.projectId && (
+            <button
+              type="button"
+              onClick={goToTab}
+              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] inline-flex items-center gap-1"
+              aria-label="Go to this tab"
+              title="Go to this tab"
+            >
+              go <PanelRight size={10} />
+            </button>
+          )}
           <Link
             to={`/s/${data.sessionId}`}
-            className="text-[10px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] inline-flex items-center gap-1"
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] inline-flex items-center gap-1"
             target="_blank"
             rel="noopener noreferrer"
+            title="Open in new browser tab"
           >
             open <ExternalLink size={10} />
           </Link>

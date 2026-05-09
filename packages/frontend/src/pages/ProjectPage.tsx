@@ -25,22 +25,66 @@ export function ProjectPage({
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [pins, setPins] = useState<Message[]>([]);
   const [sendingPin, setSendingPin] = useState<Message | null>(null);
-  // Inline canvas tabs the user opened next to chats. Reset when the
-  // project changes (each project has its own strip). The active view
-  // is either a session OR a canvas tab — we track which so the right
-  // panel renders accordingly.
+  // Inline canvas tabs the user opened next to chats. Persisted per
+  // project in localStorage so they survive cross-project navigation.
+  // The active view is either a session OR a canvas tab — we track
+  // which so the right panel renders accordingly.
   const [canvasTabs, setCanvasTabs] = useState<InlineCanvasTab[]>([]);
   const [activeCanvasTeamId, setActiveCanvasTeamId] = useState<string | null>(
     null,
   );
+
+  function persistCanvasTabs(projectId: string, tabs: InlineCanvasTab[]) {
+    try {
+      localStorage.setItem(
+        `pinloom:canvasTabs:${projectId}`,
+        JSON.stringify(tabs),
+      );
+    } catch {
+      // localStorage may be unavailable (private mode, quota); the
+      // tabs still work for this session, just won't survive reload.
+    }
+  }
+
+  // Persist which view (session vs. canvas) was active for this project,
+  // so returning to it restores the same tab. Written synchronously from
+  // each handler instead of via useEffect to avoid the project-switch
+  // race where a stale value would clobber the new project's key.
+  function persistActiveCanvas(projectId: string, teamId: string | null) {
+    try {
+      const key = `pinloom:lastCanvas:${projectId}`;
+      if (teamId) localStorage.setItem(key, teamId);
+      else localStorage.removeItem(key);
+    } catch {
+      // see persistCanvasTabs
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     setSessions([]);
     setActiveSession(null);
     setPins([]);
-    setCanvasTabs([]);
-    setActiveCanvasTeamId(null);
+    // Restore inline canvas tabs for this project. We persist on every
+    // mutation rather than via a useEffect — a setter-based approach
+    // avoids the race where a project switch's first persist effect
+    // overwrites the new project's saved tabs with the previous state.
+    let restored: InlineCanvasTab[] = [];
+    try {
+      const raw = localStorage.getItem(`pinloom:canvasTabs:${project.id}`);
+      if (raw) restored = JSON.parse(raw);
+    } catch {
+      restored = [];
+    }
+    setCanvasTabs(restored);
+    // Restore which canvas tab was active, but only if it still exists
+    // in the persisted strip — otherwise fall back to the chat session.
+    const lastCanvasId = localStorage.getItem(
+      `pinloom:lastCanvas:${project.id}`,
+    );
+    const restoreCanvas =
+      lastCanvasId && restored.some((t) => t.teamId === lastCanvasId);
+    setActiveCanvasTeamId(restoreCanvas ? lastCanvasId : null);
 
     const lastKey = `pinloom:lastSession:${project.id}`;
     const lastId = localStorage.getItem(lastKey);
@@ -81,6 +125,31 @@ export function ProjectPage({
     api.listPins(activeSession.id).then(setPins);
   }, [activeSession?.id]);
 
+  // Canvas "go to tab" button. Cross-project navigation is handled by
+  // the canvas via navigate() + lastSession seeding; for same-project
+  // jumps the route doesn't change, so we listen here and switch the
+  // active tab in-place (also clearing any inline canvas tab focus).
+  useEffect(() => {
+    function onGoto(event: Event) {
+      const detail = (event as CustomEvent<{
+        projectId: string;
+        sessionId: string;
+      }>).detail;
+      if (!detail || detail.projectId !== project.id) return;
+      const target = sessions.find((s) => s.id === detail.sessionId);
+      if (!target) return;
+      setActiveCanvasTeamId(null);
+      persistActiveCanvas(project.id, null);
+      setActiveSession(target);
+    }
+    window.addEventListener('pinloom:goto-session', onGoto as EventListener);
+    return () =>
+      window.removeEventListener(
+        'pinloom:goto-session',
+        onGoto as EventListener,
+      );
+  }, [project.id, sessions]);
+
   function handlePinsChange(updated: Message) {
     setPins((prev) => applyPinChange(prev, updated));
   }
@@ -111,11 +180,13 @@ export function ProjectPage({
         }
         onSelect={(s) => {
           setActiveCanvasTeamId(null);
+          persistActiveCanvas(project.id, null);
           setActiveSession(s);
         }}
         onCreate={(s) => {
           setSessions((prev) => [...prev, s]);
           setActiveCanvasTeamId(null);
+          persistActiveCanvas(project.id, null);
           setActiveSession(s);
         }}
         onDelete={(id) => {
@@ -132,16 +203,31 @@ export function ProjectPage({
         onReorder={(reordered) => setSessions(reordered)}
         canvasTabs={canvasTabs}
         activeCanvasTeamId={activeCanvasTeamId}
-        onSelectCanvas={(teamId) => setActiveCanvasTeamId(teamId)}
+        onSelectCanvas={(teamId) => {
+          setActiveCanvasTeamId(teamId);
+          persistActiveCanvas(project.id, teamId);
+        }}
         onCloseCanvas={(teamId) => {
-          setCanvasTabs((prev) => prev.filter((c) => c.teamId !== teamId));
-          if (activeCanvasTeamId === teamId) setActiveCanvasTeamId(null);
+          setCanvasTabs((prev) => {
+            const next = prev.filter((c) => c.teamId !== teamId);
+            persistCanvasTabs(project.id, next);
+            return next;
+          });
+          if (activeCanvasTeamId === teamId) {
+            setActiveCanvasTeamId(null);
+            persistActiveCanvas(project.id, null);
+          }
         }}
         onOpenCanvasTab={(tab) => {
-          setCanvasTabs((prev) =>
-            prev.some((c) => c.teamId === tab.teamId) ? prev : [...prev, tab],
-          );
+          setCanvasTabs((prev) => {
+            const next = prev.some((c) => c.teamId === tab.teamId)
+              ? prev
+              : [...prev, tab];
+            persistCanvasTabs(project.id, next);
+            return next;
+          });
           setActiveCanvasTeamId(tab.teamId);
+          persistActiveCanvas(project.id, tab.teamId);
         }}
       />
 
