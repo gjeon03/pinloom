@@ -328,14 +328,23 @@ export const api = {
   // dispatch primitives (team_send / team_read / …) land in PR2.
   listTeams: () => request<Team[]>('/api/teams'),
   getTeam: (id: string) => request<Team>(`/api/teams/${id}`),
-  createTeam: (body: { name: string; orchestratorSessionId: string }) =>
+  createTeam: (body: {
+    name: string;
+    orchestratorSessionId: string;
+    instructions?: string | null;
+  }) =>
     request<Team>('/api/teams', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
   updateTeam: (
     id: string,
-    body: { name?: string; orchestratorSessionId?: string },
+    body: {
+      name?: string;
+      orchestratorSessionId?: string;
+      // Pass null to clear; omit to leave unchanged.
+      instructions?: string | null;
+    },
   ) =>
     request<Team>(`/api/teams/${id}`, {
       method: 'PATCH',

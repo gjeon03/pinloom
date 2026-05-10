@@ -106,6 +106,8 @@ interface TeamRow {
   id: string;
   name: string;
   orchestrator_session_id: string;
+  // Nullable for pre-mig-19 rows.
+  instructions: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -208,6 +210,7 @@ function rowToTeam(row: TeamRow): Team {
     id: row.id,
     name: row.name,
     orchestratorSessionId: row.orchestrator_session_id,
+    instructions: row.instructions ?? null,
     members: loadMembers(row.id),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -231,11 +234,13 @@ export function getTeam(id: string): Team | null {
 interface CreateTeamArgs {
   name: string;
   orchestratorSessionId: string;
+  instructions?: string | null;
 }
 
 export function createTeam(args: CreateTeamArgs): Team {
   const id = nanoid();
   const now = new Date().toISOString();
+  const instructions = validateInstructions(args.instructions);
   const db = getDb();
 
   // Wrap pre-checks + INSERT in a single SQLite transaction so a concurrent
@@ -245,9 +250,16 @@ export function createTeam(args: CreateTeamArgs): Team {
     assertSessionExists(args.orchestratorSessionId);
     assertSessionFree(args.orchestratorSessionId);
     db.prepare(
-      `INSERT INTO teams (id, name, orchestrator_session_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).run(id, args.name, args.orchestratorSessionId, now, now);
+      `INSERT INTO teams (id, name, orchestrator_session_id, instructions, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      args.name,
+      args.orchestratorSessionId,
+      instructions,
+      now,
+      now,
+    );
   });
   tx();
 
@@ -257,10 +269,15 @@ export function createTeam(args: CreateTeamArgs): Team {
 interface UpdateTeamArgs {
   name?: string;
   orchestratorSessionId?: string;
+  instructions?: string | null;
 }
 
 export function updateTeam(id: string, args: UpdateTeamArgs): Team {
   const db = getDb();
+  const instructionsProvided = args.instructions !== undefined;
+  const instructionsNext = instructionsProvided
+    ? validateInstructions(args.instructions)
+    : null;
   const tx = db.transaction(() => {
     const existing = getTeam(id);
     if (!existing) throw new TeamNotFoundError(id);
@@ -268,6 +285,9 @@ export function updateTeam(id: string, args: UpdateTeamArgs): Team {
     const nextName = args.name ?? existing.name;
     const nextOrchestrator =
       args.orchestratorSessionId ?? existing.orchestratorSessionId;
+    const nextInstructions = instructionsProvided
+      ? instructionsNext
+      : existing.instructions;
 
     if (nextOrchestrator !== existing.orchestratorSessionId) {
       assertSessionExists(nextOrchestrator);
@@ -276,9 +296,15 @@ export function updateTeam(id: string, args: UpdateTeamArgs): Team {
 
     db.prepare(
       `UPDATE teams
-       SET name = ?, orchestrator_session_id = ?, updated_at = ?
+       SET name = ?, orchestrator_session_id = ?, instructions = ?, updated_at = ?
        WHERE id = ?`,
-    ).run(nextName, nextOrchestrator, new Date().toISOString(), id);
+    ).run(
+      nextName,
+      nextOrchestrator,
+      nextInstructions,
+      new Date().toISOString(),
+      id,
+    );
   });
   tx();
 

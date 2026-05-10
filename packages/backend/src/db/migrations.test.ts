@@ -149,6 +149,13 @@ describe('runMigrations', () => {
     expect(cols).not.toContain('persona');
   });
 
+  it('teams has instructions after migration 19', () => {
+    const db = freshDb();
+    runMigrations(db);
+    const cols = tableInfo(db, 'teams');
+    expect(cols).toContain('instructions');
+  });
+
   it('projects has order_index after migration 5', () => {
     const db = freshDb();
     runMigrations(db);

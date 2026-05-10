@@ -58,30 +58,41 @@ export async function teamRoutes(app: FastifyInstance) {
     return team;
   });
 
-  app.post<{ Body: { name?: string; orchestratorSessionId?: string } }>(
-    '/api/teams',
-    async (req, reply) => {
-      const name = req.body?.name?.trim();
-      const orchestratorSessionId = req.body?.orchestratorSessionId?.trim();
-      if (!name) {
-        reply.code(400);
-        return { error: 'name is required' };
-      }
-      if (!orchestratorSessionId) {
-        reply.code(400);
-        return { error: 'orchestratorSessionId is required' };
-      }
-      try {
-        return createTeam({ name, orchestratorSessionId });
-      } catch (err) {
-        return replyForError(reply, err);
-      }
-    },
-  );
+  app.post<{
+    Body: {
+      name?: string;
+      orchestratorSessionId?: string;
+      instructions?: string | null;
+    };
+  }>('/api/teams', async (req, reply) => {
+    const name = req.body?.name?.trim();
+    const orchestratorSessionId = req.body?.orchestratorSessionId?.trim();
+    if (!name) {
+      reply.code(400);
+      return { error: 'name is required' };
+    }
+    if (!orchestratorSessionId) {
+      reply.code(400);
+      return { error: 'orchestratorSessionId is required' };
+    }
+    try {
+      return createTeam({
+        name,
+        orchestratorSessionId,
+        instructions: req.body?.instructions ?? null,
+      });
+    } catch (err) {
+      return replyForError(reply, err);
+    }
+  });
 
   app.patch<{
     Params: { id: string };
-    Body: { name?: string; orchestratorSessionId?: string };
+    Body: {
+      name?: string;
+      orchestratorSessionId?: string;
+      instructions?: string | null;
+    };
   }>('/api/teams/:id', async (req, reply) => {
     const name = req.body?.name?.trim();
     const orchestratorSessionId = req.body?.orchestratorSessionId?.trim();
@@ -96,8 +107,18 @@ export async function teamRoutes(app: FastifyInstance) {
       reply.code(400);
       return { error: 'orchestratorSessionId cannot be empty' };
     }
+    // Same partial-update semantics as the member PATCH: omit a key to
+    // leave alone, pass `null` to clear.
+    const body = req.body ?? {};
+    const instructionsProvided = 'instructions' in body;
     try {
-      return updateTeam(req.params.id, { name, orchestratorSessionId });
+      return updateTeam(req.params.id, {
+        name,
+        orchestratorSessionId,
+        instructions: instructionsProvided
+          ? body.instructions ?? null
+          : undefined,
+      });
     } catch (err) {
       return replyForError(reply, err);
     }

@@ -121,6 +121,81 @@ describe('updateTeam', () => {
   });
 });
 
+describe('team instructions', () => {
+  it('createTeam stores instructions', () => {
+    seedSession('s');
+    const t = createTeam({
+      name: 'crew',
+      orchestratorSessionId: 's',
+      instructions: 'You are the PM.',
+    });
+    expect(t.instructions).toBe('You are the PM.');
+  });
+
+  it('createTeam treats whitespace instructions as null', () => {
+    seedSession('s');
+    const t = createTeam({
+      name: 'crew',
+      orchestratorSessionId: 's',
+      instructions: '   ',
+    });
+    expect(t.instructions).toBeNull();
+  });
+
+  it('createTeam rejects instructions over the cap', () => {
+    seedSession('s');
+    expect(() =>
+      createTeam({
+        name: 'crew',
+        orchestratorSessionId: 's',
+        instructions: 'x'.repeat(5000),
+      }),
+    ).toThrow(/instructions too long/i);
+  });
+
+  it('updateTeam edits instructions partially without touching name', () => {
+    seedSession('s');
+    const t = createTeam({ name: 'crew', orchestratorSessionId: 's' });
+    updateTeam(t.id, { instructions: 'PM mode' });
+    const after = getTeam(t.id);
+    expect(after?.name).toBe('crew');
+    expect(after?.instructions).toBe('PM mode');
+  });
+
+  it('updateTeam can clear instructions by passing null', () => {
+    seedSession('s');
+    const t = createTeam({
+      name: 'crew',
+      orchestratorSessionId: 's',
+      instructions: 'initial',
+    });
+    updateTeam(t.id, { instructions: null });
+    expect(getTeam(t.id)?.instructions).toBeNull();
+  });
+
+  it('updateTeam leaves instructions untouched when omitted', () => {
+    seedSession('s');
+    const t = createTeam({
+      name: 'crew',
+      orchestratorSessionId: 's',
+      instructions: 'keep me',
+    });
+    updateTeam(t.id, { name: 'crew2' });
+    expect(getTeam(t.id)?.instructions).toBe('keep me');
+  });
+
+  it('reads a team whose instructions column is NULL (pre-mig-19)', () => {
+    seedSession('s');
+    const t = createTeam({ name: 'crew', orchestratorSessionId: 's' });
+    // Ensure NULL — createTeam already inserts NULL when instructions
+    // omitted, but be explicit for the simulated-old-row test.
+    getDb()
+      .prepare('UPDATE teams SET instructions = NULL WHERE id = ?')
+      .run(t.id);
+    expect(getTeam(t.id)?.instructions).toBeNull();
+  });
+});
+
 describe('deleteTeam', () => {
   it('removes the team and cascades members', () => {
     seedSession('s1');

@@ -285,6 +285,17 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE team_members RENAME COLUMN persona TO instructions;
     `,
   },
+  {
+    id: 19,
+    // Mirror of team_members.instructions on the team itself, so the
+    // orchestrator session has its own role briefing — the existing
+    // workaround was pinning a message or maintaining a wiki page,
+    // both of which are friction. Same nullable + 4000-char shape as
+    // the worker version.
+    sql: `
+      ALTER TABLE teams ADD COLUMN instructions TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

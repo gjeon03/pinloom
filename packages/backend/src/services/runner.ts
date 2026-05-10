@@ -297,6 +297,12 @@ const ORCHESTRATOR_INSTRUCTIONS_SUMMARY_CHARS = 280;
 function buildTeamContext(sessionId: string): string {
   const team = getTeamByOrchestratorSessionId(sessionId);
   if (!team) return '';
+  // The orchestrator's own briefing — analogous to a worker's
+  // `### Instructions` block but inlined verbatim because there's
+  // exactly one of these per team (no per-N cost concern).
+  const orchInstructionsBlock = team.instructions
+    ? ['', '### Briefing', '', team.instructions]
+    : [];
   if (team.members.length === 0) {
     return [
       '',
@@ -305,6 +311,7 @@ function buildTeamContext(sessionId: string): string {
       `You are the orchestrator of team **${team.name}**, but no workers are`,
       'attached yet. Ask the user to add workers via the Teams page before',
       'attempting to dispatch.',
+      ...orchInstructionsBlock,
     ].join('\n');
   }
   const db = getDb();
@@ -350,6 +357,7 @@ function buildTeamContext(sessionId: string): string {
   return [
     '',
     `## Team orchestration — you are the orchestrator of team "${team.name}"`,
+    ...orchInstructionsBlock,
     '',
     'You can dispatch tasks to the workers below by calling the pinloom MCP',
     'tools. Each worker is its own session with its own agent, model, and',
