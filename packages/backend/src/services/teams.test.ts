@@ -10,6 +10,7 @@ import {
   InvalidAliasError,
   InvalidTagError,
   listBoundSessionIds,
+  listMembersByTag,
   listTeams,
   OrchestratorWorkerConflictError,
   InstructionsTooLongError,
@@ -527,5 +528,99 @@ describe('instructions and tags', () => {
       .prepare('SELECT tags FROM team_members WHERE session_id = ?')
       .get('w') as { tags: string | null };
     expect(raw.tags).toBeNull();
+  });
+});
+
+describe('listMembersByTag', () => {
+  it('returns workers whose tags array contains the tag', () => {
+    seedSession('o');
+    seedSession('w1');
+    seedSession('w2');
+    seedSession('w3');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w1', alias: 'be1', tags: ['backend'] });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w2',
+      alias: 'fe1',
+      tags: ['frontend'],
+    });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w3',
+      alias: 'be2',
+      tags: ['backend', 'tests'],
+    });
+    const matches = listMembersByTag(t.id, 'backend');
+    expect(matches.map((m) => m.alias).sort()).toEqual(['be1', 'be2']);
+  });
+
+  it('returns empty when nothing matches', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be' });
+    expect(listMembersByTag(t.id, 'frontend')).toEqual([]);
+  });
+
+  it('preserves the loadMembers ordering (oldest first)', () => {
+    seedSession('o');
+    seedSession('w1');
+    seedSession('w2');
+    seedSession('w3');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    // Add in this order so created_at is monotonically increasing.
+    addMember({ teamId: t.id, sessionId: 'w1', alias: 'a', tags: ['x'] });
+    addMember({ teamId: t.id, sessionId: 'w2', alias: 'b', tags: ['x'] });
+    addMember({ teamId: t.id, sessionId: 'w3', alias: 'c', tags: ['x'] });
+    const aliases = listMembersByTag(t.id, 'x').map((m) => m.alias);
+    expect(aliases).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does not match the orchestrator session', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be', tags: ['x'] });
+    // Orchestrators have no tags; just sanity-check we never accidentally
+    // include them.
+    expect(listMembersByTag(t.id, 'x').map((m) => m.sessionId)).toEqual(['w']);
+  });
+
+  it('does not match a row whose tags column is NULL (pre-PR rows)', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be' });
+    // Simulate a row that predates this PR — `tags` is NULL.
+    getDb()
+      .prepare('UPDATE team_members SET tags = NULL WHERE session_id = ?')
+      .run('w');
+    expect(listMembersByTag(t.id, 'be')).toEqual([]);
+    expect(listMembersByTag(t.id, 'anything')).toEqual([]);
+  });
+
+  it('does not match a row with cleared (empty) tags', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({ teamId: t.id, sessionId: 'w', alias: 'be', tags: ['x'] });
+    updateMember({ teamId: t.id, sessionId: 'w', tags: [] });
+    expect(listMembersByTag(t.id, 'x')).toEqual([]);
+  });
+
+  it('treats tags as exact-match (no substring / prefix collision)', () => {
+    seedSession('o');
+    seedSession('w');
+    const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
+    addMember({
+      teamId: t.id,
+      sessionId: 'w',
+      alias: 'be',
+      tags: ['backend'],
+    });
+    expect(listMembersByTag(t.id, 'back')).toEqual([]);
+    expect(listMembersByTag(t.id, 'backend-x')).toEqual([]);
+    expect(listMembersByTag(t.id, 'backend')).toHaveLength(1);
   });
 });

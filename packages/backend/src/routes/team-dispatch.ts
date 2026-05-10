@@ -6,16 +6,21 @@
 // and dies with the backend, so a stale shim from a previous run can't
 // keep dispatching after the user has moved on.
 //
-// Five tools live here, mirroring the MCP shim's surface:
+// Six tools live here, mirroring the MCP shim's surface:
 //   GET  /list                                    — team_list
 //   POST /send       {alias, text}                — team_send
+//   POST /send-tag   {tag, text}                  — team_send_tag (fanout)
 //   GET  /messages   ?alias=&sinceMessageId=      — team_read
 //   GET  /status     ?alias=                      — team_status
 //   GET  /wait       ?alias=&timeoutMs=           — team_wait (long-poll)
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getDb } from '../db/connection.js';
-import { getMemberByAlias, getTeam } from '../services/teams.js';
+import {
+  getMemberByAlias,
+  getTeam,
+  listMembersByTag,
+} from '../services/teams.js';
 import {
   enqueueMessage,
   InvalidQueueContentError,
@@ -40,6 +45,11 @@ interface SessionRow {
 // the orchestrator into a polling loop. AbortSignal still releases the
 // wait the moment the client disconnects.
 const MAX_WAIT_MS = 5 * 60_000;
+
+// Mirrors the service-layer tag pattern; we validate at the route so an
+// invalid query tag returns a clear 400 instead of silently producing
+// recipients=[] (which the orchestrator would read as "no matches").
+const TAG_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 
 function authorize(req: FastifyRequest, reply: FastifyReply): string | null {
   const presented = req.headers['x-pinloom-team-token'];
@@ -184,6 +194,108 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       }
       throw err;
     }
+  });
+
+  // Broadcast variant: enqueue the same prompt to every worker tagged
+  // with `tag`. Returns per-recipient enqueue results. We deliberately
+  // do NOT short-circuit on the first failure — partial fanout is
+  // strictly more useful than nothing, and the orchestrator can re-try
+  // selectively against the failed aliases. Each successful enqueue
+  // emits its own dispatch_send event so the canvas animates the same
+  // way as a series of single sends.
+  app.post<{
+    Params: { teamId: string };
+    Body: { tag?: string; text?: string };
+  }>('/api/teams/:teamId/dispatch/send-tag', async (req, reply) => {
+    if (!authorize(req, reply)) return;
+    const tag = req.body?.tag?.trim();
+    const text = req.body?.text;
+    if (!tag) {
+      reply.code(400);
+      return { error: 'tag is required' };
+    }
+    // Tags are stored under the same pattern alias uses; surface a 400
+    // when the query value couldn't possibly match a stored tag rather
+    // than silently returning recipients=[] (which the orchestrator
+    // would interpret as "no workers tagged X").
+    if (!TAG_PATTERN.test(tag)) {
+      reply.code(400);
+      return {
+        error: `invalid tag ${JSON.stringify(tag)}: must match /^[a-z][a-z0-9_-]{0,31}$/`,
+      };
+    }
+    if (typeof text !== 'string' || text.length === 0) {
+      reply.code(400);
+      return { error: 'text is required' };
+    }
+    const recipients = listMembersByTag(req.params.teamId, tag);
+    if (recipients.length === 0) {
+      // Not a 404 — the team exists, the request is well-formed, just
+      // nothing matches. ok=false so the orchestrator's success path
+      // can branch on it cleanly.
+      return { ok: false, recipients: [], failures: [] };
+    }
+    const previewText =
+      text.length > 120 ? `${text.slice(0, 117)}…` : text;
+    // Shared timestamp across the whole fanout so the canvas treats the
+    // burst as one logical event group; per-alias key still keeps
+    // events distinguishable.
+    const dispatchedAt = new Date().toISOString();
+    const results: Array<{
+      alias: string;
+      sessionId: string;
+      queueItemId: string;
+    }> = [];
+    const failures: Array<{ alias: string; error: string }> = [];
+    for (const member of recipients) {
+      let queueItemId: string;
+      try {
+        const item = enqueueMessage({
+          sessionId: member.sessionId,
+          content: text,
+        });
+        queueItemId = item.id;
+      } catch (err) {
+        failures.push({
+          alias: member.alias,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+      // The enqueue is committed at this point — the recipient is
+      // already going to receive the message. A subsequent drain or
+      // canvas-event failure must NOT be reported as a per-recipient
+      // failure or the orchestrator may double-send on retry.
+      results.push({
+        alias: member.alias,
+        sessionId: member.sessionId,
+        queueItemId,
+      });
+      try {
+        tryDrainQueue(member.sessionId);
+        emitDispatchEvent({
+          type: 'dispatch_send',
+          teamId: req.params.teamId,
+          alias: member.alias,
+          sessionId: member.sessionId,
+          previewText,
+          at: dispatchedAt,
+        });
+      } catch (err) {
+        // Drain / event-emit are best-effort: the queue item already
+        // landed, so the worker will pick it up at the next turn
+        // boundary regardless. Log so a future regression isn't
+        // invisible.
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[team-dispatch] post-enqueue side effect failed for @${member.alias}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    // ok mirrors "did anything actually get queued?" — orchestrators
+    // that branch on truthiness need a non-misleading signal.
+    return { ok: results.length > 0, recipients: results, failures };
   });
 
   app.get<{

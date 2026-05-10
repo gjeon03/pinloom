@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// pinloom MCP server — gives an orchestrator agent five tools for
-// dispatching work to its team's worker sessions by alias. The server is
+// pinloom MCP server — gives an orchestrator agent six tools for
+// dispatching work to its team's worker sessions, addressed by alias
+// (one-to-one) or by tag (one-to-many fanout). The server is
 // a thin stdio shim: every tool call translates into an HTTP request
 // against pinloom's backend (default http://localhost:4748). Identity
 // arrives via three env vars injected by the runner at spawn time:
@@ -145,6 +146,63 @@ server.registerTool(
           text: `Enqueued ${args.text.length} chars to @${args.alias}.`,
         },
       ],
+    };
+  },
+);
+
+server.registerTool(
+  'team_send_tag',
+  {
+    description:
+      "Broadcast the same prompt to every worker tagged with `tag`. Equivalent to calling team_send for each matching alias, but in one round trip. Returns the list of recipients (their aliases) plus any failures. There is no team_wait_tag — to synchronize on the whole fanout, iterate `team_wait` over each returned alias. Use this when you have a question for everyone in a category (e.g. 'review this PR', 'estimate this'); use team_send when only one worker is the right pick.",
+    inputSchema: {
+      tag: z.string().describe('Tag to broadcast to (without leading #)'),
+      text: z.string().describe('Prompt text to send'),
+    },
+  },
+  async (args) => {
+    const result = await call<{
+      recipients: Array<{ alias: string; sessionId: string }>;
+      failures: Array<{ alias: string; error: string }>;
+    }>('POST', teamUrl('/send-tag'), {
+      tag: args.tag,
+      text: args.text,
+    });
+    // Lead with whichever signal is most actionable. When everything
+    // failed, surface the failures first so the orchestrator doesn't
+    // skim past them and assume the broadcast succeeded.
+    const recipientLine =
+      result.recipients.length > 0
+        ? `Enqueued ${args.text.length} chars to ${result.recipients.length} worker(s) tagged #${args.tag}: ${result.recipients
+            .map((r) => `@${r.alias}`)
+            .join(', ')}.`
+        : null;
+    const failureLine =
+      result.failures.length > 0
+        ? `Failures (${result.failures.length}): ${result.failures
+            .map((f) => `@${f.alias} (${f.error})`)
+            .join(', ')}`
+        : null;
+    if (!recipientLine && !failureLine) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `No workers tagged #${args.tag} in this team. Either add the tag to the workers you want, or call team_send by alias.`,
+          },
+        ],
+      };
+    }
+    // Failures-first when the call was a total wash; recipients-first
+    // for partial fanout so the success info isn't buried.
+    const text =
+      recipientLine === null
+        ? failureLine!
+        : failureLine === null
+          ? recipientLine
+          : `${recipientLine}\n${failureLine}`;
+    return {
+      content: [{ type: 'text', text }],
     };
   },
 );
