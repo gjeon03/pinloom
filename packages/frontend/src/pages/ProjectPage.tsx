@@ -172,6 +172,33 @@ export function ProjectPage({
       );
   }, [project.id]);
 
+  // A session created via an inline modal (e.g. the AddWorker form's
+  // "Create new session" button) doesn't pass through this strip's
+  // create flow, so the parent doesn't know about it until the page
+  // remounts. Listen for the dispatch and splice it in when it lives
+  // in the current project. We deliberately do NOT auto-select it —
+  // the user is mid-flow on a different tab and a surprise switch
+  // would be jarring.
+  useEffect(() => {
+    function onSessionCreated(event: Event) {
+      const detail = (event as CustomEvent<{ session: Session }>).detail;
+      const s = detail?.session;
+      if (!s || s.projectId !== project.id) return;
+      setSessions((prev) =>
+        prev.some((p) => p.id === s.id) ? prev : [...prev, s],
+      );
+    }
+    window.addEventListener(
+      'pinloom:session-created',
+      onSessionCreated as EventListener,
+    );
+    return () =>
+      window.removeEventListener(
+        'pinloom:session-created',
+        onSessionCreated as EventListener,
+      );
+  }, [project.id]);
+
   function handlePinsChange(updated: Message) {
     setPins((prev) => applyPinChange(prev, updated));
   }
