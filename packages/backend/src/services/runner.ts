@@ -364,6 +364,7 @@ function buildTeamContext(sessionId: string): string {
     `- \`team_send_tag(tag, text)\` — broadcast the same prompt to every worker with that tag${
       hasAnyTags ? '' : ' (no-op until at least one worker is tagged)'
     }`,
+    '- `team_update_member(alias, newAlias?, instructions?, tags?)` — sharpen an existing worker\'s role mid-session (cannot add/remove workers)',
     '- `team_read(alias, sinceMessageId?)` — read a worker\'s recent reply',
     '- `team_status(alias)` — check if a worker is idle/running',
     '- `team_wait(alias, timeoutMs?)` — block until a worker is idle (returns the moment it idles; max 5min)',

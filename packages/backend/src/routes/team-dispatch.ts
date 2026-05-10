@@ -6,20 +6,28 @@
 // and dies with the backend, so a stale shim from a previous run can't
 // keep dispatching after the user has moved on.
 //
-// Six tools live here, mirroring the MCP shim's surface:
-//   GET  /list                                    — team_list
-//   POST /send       {alias, text}                — team_send
-//   POST /send-tag   {tag, text}                  — team_send_tag (fanout)
-//   GET  /messages   ?alias=&sinceMessageId=      — team_read
-//   GET  /status     ?alias=                      — team_status
-//   GET  /wait       ?alias=&timeoutMs=           — team_wait (long-poll)
+// Seven tools live here, mirroring the MCP shim's surface:
+//   GET  /list                                                 — team_list
+//   POST /send          {alias, text}                          — team_send
+//   POST /send-tag      {tag, text}                            — team_send_tag (fanout)
+//   POST /update-member {alias, newAlias?, instructions?, tags?} — team_update_member
+//   GET  /messages      ?alias=&sinceMessageId=                — team_read
+//   GET  /status        ?alias=                                — team_status
+//   GET  /wait          ?alias=&timeoutMs=                     — team_wait (long-poll)
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getDb } from '../db/connection.js';
 import {
+  AliasTakenError,
   getMemberByAlias,
   getTeam,
+  InstructionsTooLongError,
+  InvalidAliasError,
+  InvalidTagError,
   listMembersByTag,
+  TeamNotFoundError,
+  TooManyTagsError,
+  updateMember,
 } from '../services/teams.js';
 import {
   enqueueMessage,
@@ -296,6 +304,118 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     // ok mirrors "did anything actually get queued?" — orchestrators
     // that branch on truthiness need a non-misleading signal.
     return { ok: results.length > 0, recipients: results, failures };
+  });
+
+  // Lets the orchestrator update a worker's instructions / tags / alias
+  // mid-session. Reuses the same validation + persistence path the
+  // human-facing PATCH endpoint uses, so no orchestrator-specific
+  // bypasses exist. Add/remove worker stays out of this surface — those
+  // create sessions / break invariants and want a more deliberate UI.
+  //
+  // Partial-update semantics mirror the human PATCH route:
+  //   - omit a field         → leave unchanged
+  //   - set instructions=null → clear
+  //   - set tags=[]          → clear
+  //   - set alias="newName"  → rename (must still match alias regex,
+  //                            and must not collide with another worker
+  //                            in this team)
+  app.post<{
+    Params: { teamId: string };
+    Body: {
+      alias?: string;
+      newAlias?: string;
+      instructions?: string | null;
+      tags?: string[];
+    };
+  }>('/api/teams/:teamId/dispatch/update-member', async (req, reply) => {
+    if (!authorize(req, reply)) return;
+    const alias = req.body?.alias?.trim();
+    if (!alias) {
+      reply.code(400);
+      return { error: 'alias is required' };
+    }
+    const member = getMemberByAlias(req.params.teamId, alias);
+    if (!member) {
+      reply.code(404);
+      return { error: `no worker with alias "${alias}" in this team` };
+    }
+    // Distinguish "field absent" (leave alone) from "field present
+    // with null" (clear) the same way the human PATCH does.
+    const body = req.body ?? {};
+    const instructionsProvided = 'instructions' in body;
+    const tagsProvided = 'tags' in body;
+    const newAliasRaw = body.newAlias;
+    const newAlias =
+      typeof newAliasRaw === 'string' ? newAliasRaw.trim() : undefined;
+    if (newAliasRaw !== undefined && !newAlias) {
+      reply.code(400);
+      return { error: 'newAlias cannot be empty' };
+    }
+    // Reject `instructions: ""` outright instead of silently treating
+    // it the same as `instructions: null`. The MCP description tells
+    // the orchestrator "pass null to clear" — an LLM sending `""`
+    // thinking it's a harmless no-op should hit a clear error rather
+    // than wipe the worker's role. Empty/whitespace string ≠ null.
+    if (
+      instructionsProvided &&
+      typeof body.instructions === 'string' &&
+      body.instructions.trim() === ''
+    ) {
+      reply.code(400);
+      return {
+        error:
+          'instructions cannot be an empty/whitespace string — pass null to clear',
+      };
+    }
+    try {
+      const updated = updateMember({
+        teamId: req.params.teamId,
+        sessionId: member.sessionId,
+        alias: newAlias,
+        instructions: instructionsProvided
+          ? body.instructions ?? null
+          : undefined,
+        tags: tagsProvided ? body.tags ?? [] : undefined,
+      });
+      // Audit trail — single-user local app, but a console line lets
+      // the user see when the orchestrator mutated team state without
+      // tailing the SQLite DB.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[team-dispatch] orchestrator updated @${alias}` +
+          (newAlias && newAlias !== alias ? ` → @${newAlias}` : '') +
+          (instructionsProvided
+            ? body.instructions
+              ? ' (instructions set)'
+              : ' (instructions cleared)'
+            : '') +
+          (tagsProvided
+            ? body.tags && body.tags.length > 0
+              ? ` (tags=${JSON.stringify(body.tags)})`
+              : ' (tags cleared)'
+            : ''),
+      );
+      return { ok: true, member: updated };
+    } catch (err) {
+      if (err instanceof TeamNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
+      }
+      if (err instanceof AliasTakenError) {
+        reply.code(409);
+        return { error: err.message };
+      }
+      if (
+        err instanceof InvalidAliasError ||
+        err instanceof InvalidTagError ||
+        err instanceof TooManyTagsError ||
+        err instanceof InstructionsTooLongError
+      ) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
   });
 
   app.get<{
