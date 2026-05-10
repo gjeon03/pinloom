@@ -380,6 +380,17 @@ function buildTeamContext(sessionId: string): string {
     'Typical pattern: `team_send / team_send_tag` → `team_wait` → `team_read` (with the',
     'last message id you saw, to get only the new reply). Workers don\'t see',
     'each other; you are the only one that can synthesize across them.',
+    '',
+    '### Dispatch must be a tool call, not a description',
+    '',
+    'Writing "dispatching to @alias" / "sending to #review" / "broadcasting"',
+    'in your reply does NOT send anything — workers receive only what arrives',
+    'via the MCP tool. If you announce a dispatch in the SAME turn, you must',
+    'invoke `team_send` (or `team_send_tag`) in that same turn or the worker',
+    'gets nothing and the user has to ask again. If you are still planning',
+    'and not ready to dispatch, phrase it explicitly as a future step',
+    '("Next: I\'ll dispatch to @alias once ...") so the user knows the work',
+    'hasn\'t left this session yet.',
   ].join('\n');
 }
 
