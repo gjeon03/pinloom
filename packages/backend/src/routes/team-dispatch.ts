@@ -6,10 +6,12 @@
 // and dies with the backend, so a stale shim from a previous run can't
 // keep dispatching after the user has moved on.
 //
-// Seven tools live here, mirroring the MCP shim's surface:
+// Nine tools live here, mirroring the MCP shim's surface:
 //   GET  /list                                                 — team_list
-//   POST /send          {alias, text}                          — team_send
-//   POST /send-tag      {tag, text}                            — team_send_tag (fanout)
+//   POST /send          {alias, text}                          — team_send (fire-and-forget)
+//   POST /send-tag      {tag, text}                            — team_send_tag (fanout, async)
+//   POST /ask           {alias, text, timeoutMs?}              — team_ask (sync — wait for reply)
+//   POST /ask-tag       {tag, text, timeoutMs?}                — team_ask_tag (sync fanout)
 //   POST /update-member {alias, newAlias?, instructions?, tags?} — team_update_member
 //   GET  /messages      ?alias=&sinceMessageId=                — team_read
 //   GET  /status        ?alias=                                — team_status
@@ -416,6 +418,275 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       }
       throw err;
     }
+  });
+
+  // Synchronous variant of /send: enqueues, blocks until the worker
+  // turn finishes, returns the worker's final assistant reply directly.
+  // Mirrors the Claude Agent SDK's Task tool — orchestrator calls one
+  // tool and gets the answer back as the tool_result, never having to
+  // separately team_wait + team_read. The orchestrator's turn can stay
+  // alive across the whole round trip.
+  //
+  // Caveat (acceptable for v1): if the worker already has unrelated
+  // queued items, "the latest assistant message after we waited" may
+  // not strictly be the answer to the message we just enqueued. In
+  // practice an orch dispatching to one worker at a time doesn't
+  // produce that pile-up. A future improvement could tag the queue
+  // item with a request id and link the resulting messages.
+  app.post<{
+    Params: { teamId: string };
+    Body: { alias?: string; text?: string; timeoutMs?: number };
+  }>('/api/teams/:teamId/dispatch/ask', async (req, reply) => {
+    if (!authorize(req, reply)) return;
+    const alias = req.body?.alias?.trim();
+    const text = req.body?.text;
+    if (!alias) {
+      reply.code(400);
+      return { error: 'alias is required' };
+    }
+    if (typeof text !== 'string' || text.length === 0) {
+      reply.code(400);
+      return { error: 'text is required' };
+    }
+    const member = getMemberByAlias(req.params.teamId, alias);
+    if (!member) {
+      reply.code(404);
+      return { error: `no worker with alias "${alias}" in this team` };
+    }
+    const requested = req.body?.timeoutMs;
+    const timeoutMs =
+      typeof requested === 'number' && Number.isFinite(requested)
+        ? Math.min(Math.max(Math.floor(requested), 100), MAX_WAIT_MS)
+        : MAX_WAIT_MS;
+
+    // Snapshot before enqueue so we can disambiguate "new" assistant
+    // messages from anything that already existed.
+    const before = new Date().toISOString();
+    let queueItemId: string;
+    try {
+      const item = enqueueMessage({
+        sessionId: member.sessionId,
+        content: text,
+      });
+      queueItemId = item.id;
+    } catch (err) {
+      if (err instanceof SessionNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
+      }
+      if (err instanceof InvalidQueueContentError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+    tryDrainQueue(member.sessionId);
+    emitDispatchEvent({
+      type: 'dispatch_send',
+      teamId: req.params.teamId,
+      alias: member.alias,
+      sessionId: member.sessionId,
+      previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+      at: before,
+    });
+    const ac = new AbortController();
+    // Match the /wait route's listener-cleanup pattern (once + off in
+    // finally) so a long-lived backend doesn't leak a closure on
+    // IncomingMessage per /ask call.
+    const onSocketClose = () => ac.abort();
+    req.raw.once('close', onSocketClose);
+    let idle = false;
+    try {
+      idle = await waitForIdle(member.sessionId, timeoutMs, ac.signal);
+    } finally {
+      req.raw.off('close', onSocketClose);
+    }
+    if (!idle) {
+      // Worker hasn't completed yet — let the orch decide whether to
+      // poll again or give up. Don't 5xx; this is a normal "didn't
+      // make it in the budget" outcome.
+      return {
+        ok: false,
+        idle: false,
+        alias: member.alias,
+        sessionId: member.sessionId,
+        queueItemId,
+      };
+    }
+    // Pick up the latest assistant message produced after our enqueue.
+    const reply_ = db
+      .prepare(
+        `SELECT id, content, created_at FROM messages
+         WHERE session_id = ? AND role = 'assistant' AND created_at > ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(member.sessionId, before) as
+      | { id: string; content: string; created_at: string }
+      | undefined;
+    return {
+      ok: true,
+      idle: true,
+      alias: member.alias,
+      sessionId: member.sessionId,
+      queueItemId,
+      message: reply_
+        ? {
+            id: reply_.id,
+            content: reply_.content,
+            createdAt: reply_.created_at,
+          }
+        : null,
+    };
+  });
+
+  // Broadcast variant of /ask: fan out to every worker tagged with
+  // `tag`, wait for ALL in parallel, return each one's final reply.
+  // Per-recipient timeout is independent — a slow worker doesn't block
+  // a fast one's reply from being collected.
+  app.post<{
+    Params: { teamId: string };
+    Body: { tag?: string; text?: string; timeoutMs?: number };
+  }>('/api/teams/:teamId/dispatch/ask-tag', async (req, reply) => {
+    if (!authorize(req, reply)) return;
+    const tag = req.body?.tag?.trim();
+    const text = req.body?.text;
+    if (!tag) {
+      reply.code(400);
+      return { error: 'tag is required' };
+    }
+    if (!TAG_PATTERN.test(tag)) {
+      reply.code(400);
+      return {
+        error: `invalid tag ${JSON.stringify(tag)}: must match /^[a-z][a-z0-9_-]{0,31}$/`,
+      };
+    }
+    if (typeof text !== 'string' || text.length === 0) {
+      reply.code(400);
+      return { error: 'text is required' };
+    }
+    const recipients = listMembersByTag(req.params.teamId, tag);
+    if (recipients.length === 0) {
+      return { ok: false, replies: [], failures: [], timedOut: [] };
+    }
+    const requested = req.body?.timeoutMs;
+    const timeoutMs =
+      typeof requested === 'number' && Number.isFinite(requested)
+        ? Math.min(Math.max(Math.floor(requested), 100), MAX_WAIT_MS)
+        : MAX_WAIT_MS;
+    const previewText =
+      text.length > 120 ? `${text.slice(0, 117)}…` : text;
+    const dispatchedAt = new Date().toISOString();
+    const ac = new AbortController();
+    // Single AbortController is intentional — the only abort source is
+    // the request socket closing, which is an all-or-nothing event.
+    // Once + off cleanup so a long-lived backend doesn't leak per
+    // /ask-tag call.
+    const onSocketClose = () => ac.abort();
+    req.raw.once('close', onSocketClose);
+
+    type ReplyEntry = {
+      alias: string;
+      sessionId: string;
+      queueItemId: string;
+      message: { id: string; content: string; createdAt: string } | null;
+    };
+    type FailureEntry = { alias: string; error: string };
+    type TimeoutEntry = {
+      alias: string;
+      sessionId: string;
+      queueItemId: string;
+    };
+
+    const replies: ReplyEntry[] = [];
+    const failures: FailureEntry[] = [];
+    const timedOut: TimeoutEntry[] = [];
+
+    try {
+      await Promise.all(
+        recipients.map(async (member) => {
+          let queueItemId: string;
+          try {
+            const item = enqueueMessage({
+              sessionId: member.sessionId,
+              content: text,
+            });
+            queueItemId = item.id;
+          } catch (err) {
+            failures.push({
+              alias: member.alias,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return;
+          }
+          try {
+            tryDrainQueue(member.sessionId);
+            emitDispatchEvent({
+              type: 'dispatch_send',
+              teamId: req.params.teamId,
+              alias: member.alias,
+              sessionId: member.sessionId,
+              previewText,
+              at: dispatchedAt,
+            });
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[team-dispatch] post-enqueue side effect failed for @${member.alias}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+          const idle = await waitForIdle(
+            member.sessionId,
+            timeoutMs,
+            ac.signal,
+          );
+          if (!idle) {
+            timedOut.push({
+              alias: member.alias,
+              sessionId: member.sessionId,
+              queueItemId,
+            });
+            return;
+          }
+          const reply_ = db
+            .prepare(
+              `SELECT id, content, created_at FROM messages
+               WHERE session_id = ? AND role = 'assistant' AND created_at > ?
+               ORDER BY created_at DESC, id DESC
+               LIMIT 1`,
+            )
+            .get(member.sessionId, dispatchedAt) as
+            | { id: string; content: string; created_at: string }
+            | undefined;
+          replies.push({
+            alias: member.alias,
+            sessionId: member.sessionId,
+            queueItemId,
+            message: reply_
+              ? {
+                  id: reply_.id,
+                  content: reply_.content,
+                  createdAt: reply_.created_at,
+                }
+              : null,
+          });
+        }),
+      );
+    } finally {
+      req.raw.off('close', onSocketClose);
+    }
+
+    return {
+      // ok mirrors "did at least one worker actually produce a reply?".
+      // A worker that idled with only tool calls (no assistant text)
+      // ends up in `replies` with `message: null` — that's not useful
+      // signal, so it shouldn't flip ok to true on its own.
+      ok: replies.some((r) => r.message !== null),
+      replies,
+      failures,
+      timedOut,
+    };
   });
 
   app.get<{

@@ -1,9 +1,18 @@
 #!/usr/bin/env node
-// pinloom MCP server — gives an orchestrator agent seven tools for
-// driving its team. Six dispatch / inspection tools (list, send,
-// send_tag, read, status, wait) plus one mutation tool
+// pinloom MCP server — gives an orchestrator agent nine tools for
+// driving its team. Eight dispatch / inspection tools (list, send,
+// send_tag, ask, ask_tag, read, status, wait) plus one mutation tool
 // (update_member) so the orchestrator can sharpen a worker's role
-// mid-session without breaking out to the UI. The server is
+// mid-session without breaking out to the UI.
+//
+// `team_ask` / `team_ask_tag` mirror the Claude Agent SDK's Task
+// tool — they block the orchestrator's tool-call until the worker(s)
+// reply, and return the reply directly as the tool_result. That keeps
+// the orchestrator's turn alive across the whole round trip and is
+// almost always what you want when delegating focused work. Use the
+// asynchronous `team_send` / `team_send_tag` only when you genuinely
+// want fire-and-forget (e.g. kicking off a long task and continuing
+// other work in the same turn). The server is
 // a thin stdio shim: every tool call translates into an HTTP request
 // against pinloom's backend (default http://localhost:4748). Identity
 // arrives via three env vars injected by the runner at spawn time:
@@ -211,6 +220,150 @@ server.registerTool(
           : `${recipientLine}\n${failureLine}`;
     return {
       content: [{ type: 'text', text }],
+    };
+  },
+);
+
+server.registerTool(
+  'team_ask',
+  {
+    description:
+      "Send a prompt to a worker and BLOCK until the worker has produced a reply. Returns the worker's final assistant message directly as the tool_result, mirroring the Claude SDK's Task tool. This is the default delegation pattern — your turn stays alive across the whole round trip, and you can chain follow-up tool calls (or call team_ask on another worker, in parallel) without ending your turn. Default + max wait is 5min; if the worker doesn't finish in time the call returns idle=false and you can decide to retry, fall back to team_status, or report progress to the user. Prefer this over team_send unless you specifically need fire-and-forget.",
+    inputSchema: {
+      alias: z.string().describe('Worker alias (without leading @)'),
+      text: z.string().describe('Prompt text to send'),
+      timeoutMs: z
+        .number()
+        .int()
+        .min(100)
+        .max(300000)
+        .optional()
+        .describe(
+          'Max wait in ms (default 300000, capped at 300000). Returns the moment the worker idles.',
+        ),
+    },
+  },
+  async (args) => {
+    type Reply = {
+      ok: boolean;
+      idle: boolean;
+      alias: string;
+      sessionId: string;
+      message: { id: string; content: string; createdAt: string } | null;
+    };
+    const params: Record<string, unknown> = {
+      alias: args.alias,
+      text: args.text,
+    };
+    if (args.timeoutMs !== undefined) params.timeoutMs = args.timeoutMs;
+    const r = await call<Reply>('POST', teamUrl('/ask'), params);
+    if (!r.idle) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `@${args.alias} did not finish within the timeout. The message is still queued — you can call team_status / team_wait, or wait and call team_read later.`,
+          },
+        ],
+      };
+    }
+    if (!r.message) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `@${args.alias} idled but produced no assistant message in this turn (tool calls only?). Call team_read to inspect.`,
+          },
+        ],
+      };
+    }
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `--- @${args.alias} reply (${r.message.id}) at ${r.message.createdAt} ---\n${r.message.content}`,
+        },
+      ],
+    };
+  },
+);
+
+server.registerTool(
+  'team_ask_tag',
+  {
+    description:
+      "Broadcast variant of team_ask. Sends the same prompt to every worker tagged with `tag` and BLOCKS until every recipient has either replied or hit the timeout. Returns each reply concatenated — one block per recipient, plus a summary line listing any timeouts/failures. All workers are waited on in parallel, so total wall time is roughly the slowest worker, not the sum. Default + max wait is 5min per worker.",
+    inputSchema: {
+      tag: z.string().describe('Tag to broadcast to (without leading #)'),
+      text: z.string().describe('Prompt text to send'),
+      timeoutMs: z
+        .number()
+        .int()
+        .min(100)
+        .max(300000)
+        .optional()
+        .describe('Per-worker max wait in ms (default 300000, capped 300000).'),
+    },
+  },
+  async (args) => {
+    type AskTagReply = {
+      ok: boolean;
+      replies: Array<{
+        alias: string;
+        sessionId: string;
+        message: { id: string; content: string; createdAt: string } | null;
+      }>;
+      failures: Array<{ alias: string; error: string }>;
+      timedOut: Array<{ alias: string; sessionId: string }>;
+    };
+    const params: Record<string, unknown> = {
+      tag: args.tag,
+      text: args.text,
+    };
+    if (args.timeoutMs !== undefined) params.timeoutMs = args.timeoutMs;
+    const r = await call<AskTagReply>('POST', teamUrl('/ask-tag'), params);
+    if (
+      r.replies.length === 0 &&
+      r.failures.length === 0 &&
+      r.timedOut.length === 0
+    ) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `No workers tagged #${args.tag} in this team. Either add the tag to the workers you want, or use team_ask by alias.`,
+          },
+        ],
+      };
+    }
+    const replyBlocks = r.replies.map((rep) => {
+      if (!rep.message) {
+        return `--- @${rep.alias}: idled but no assistant message ---`;
+      }
+      return `--- @${rep.alias} reply (${rep.message.id}) at ${rep.message.createdAt} ---\n${rep.message.content}`;
+    });
+    const tail: string[] = [];
+    if (r.timedOut.length > 0) {
+      tail.push(
+        `Timed out (${r.timedOut.length}): ${r.timedOut
+          .map((t) => `@${t.alias}`)
+          .join(', ')} — still queued, retriable via team_read later.`,
+      );
+    }
+    if (r.failures.length > 0) {
+      tail.push(
+        `Failures (${r.failures.length}): ${r.failures
+          .map((f) => `@${f.alias} (${f.error})`)
+          .join(', ')}`,
+      );
+    }
+    return {
+      content: [
+        {
+          type: 'text',
+          text: [...replyBlocks, ...tail].join('\n\n'),
+        },
+      ],
     };
   },
 );
