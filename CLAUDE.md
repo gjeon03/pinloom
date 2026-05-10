@@ -39,9 +39,17 @@ pnpm dev:frontend    # frontend only
 ## Build & verify
 
 ```bash
-pnpm build           # shared → backend → frontend
+pnpm build           # shared → mcp-server → backend → frontend
 pnpm typecheck       # tsc -b
 ```
+
+The `mcp-server` package is in the build chain because the backend
+spawns it as a child process at run time (per orchestrator turn) and
+needs the freshly compiled `dist/index.js` to expose the latest set
+of MCP tools. **An already-running orchestrator session caches its
+tool list at session start** — after rebuilding mcp-server, restart
+the orchestrator session (or the whole backend) so the new tools
+become visible to the LLM.
 
 ## Conventions
 
