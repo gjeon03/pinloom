@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// pinloom MCP server — gives an orchestrator agent six tools for
-// dispatching work to its team's worker sessions, addressed by alias
-// (one-to-one) or by tag (one-to-many fanout). The server is
+// pinloom MCP server — gives an orchestrator agent seven tools for
+// driving its team. Six dispatch / inspection tools (list, send,
+// send_tag, read, status, wait) plus one mutation tool
+// (update_member) so the orchestrator can sharpen a worker's role
+// mid-session without breaking out to the UI. The server is
 // a thin stdio shim: every tool call translates into an HTTP request
 // against pinloom's backend (default http://localhost:4748). Identity
 // arrives via three env vars injected by the runner at spawn time:
@@ -86,6 +88,12 @@ interface WorkerMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   createdAt: string;
+}
+
+interface MemberSpec {
+  alias: string;
+  instructions: string | null;
+  tags: string[];
 }
 
 const server = new McpServer({
@@ -204,6 +212,73 @@ server.registerTool(
     return {
       content: [{ type: 'text', text }],
     };
+  },
+);
+
+server.registerTool(
+  'team_update_member',
+  {
+    description:
+      "Update a worker's instructions, tags, or alias mid-session. Use this when the conversation reveals a sharper role for an existing worker (e.g. you discover @be1 is also the right person for security review and want to add the #security tag). Partial-update semantics: omit a field to leave it unchanged; pass `instructions: null` or `tags: []` to clear (an empty string for `instructions` is rejected — use `null`). To rename, set `newAlias` — the old alias stops working in subsequent team_send/team_read calls. Takes effect on the worker's NEXT turn — an in-flight turn finishes with its old instructions, so if you've just sent a message, the next reply may still reflect the old role. Cannot add or remove workers — those flow through the user-facing UI to avoid surprise side effects.",
+    inputSchema: {
+      alias: z
+        .string()
+        .describe('Current worker alias (without leading @)'),
+      newAlias: z
+        .string()
+        .optional()
+        .describe(
+          'Optional rename. Must match /^[a-z][a-z0-9_-]{0,31}$/ and not collide with another worker in this team.',
+        ),
+      instructions: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          "System-prompt-style guidance injected into the worker's prompt every turn. Pass null to clear; omit to leave unchanged. Cap 4000 chars.",
+        ),
+      tags: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Replace the full tag list. Pass [] to clear; omit to leave unchanged. Each tag must match /^[a-z][a-z0-9_-]{0,31}$/. Cap 16 tags.',
+        ),
+    },
+  },
+  async (args) => {
+    const body: Record<string, unknown> = { alias: args.alias };
+    // Forward only the fields the caller actually set so the route's
+    // 'key in body' presence check sees the same shape.
+    if (args.newAlias !== undefined) body.newAlias = args.newAlias;
+    if (args.instructions !== undefined) body.instructions = args.instructions;
+    if (args.tags !== undefined) body.tags = args.tags;
+    const result = await call<{ ok: true; member: MemberSpec }>(
+      'POST',
+      teamUrl('/update-member'),
+      body,
+    );
+    const m = result.member;
+    const lines = [`Updated @${m.alias}.`];
+    if (args.newAlias !== undefined && args.newAlias !== args.alias) {
+      lines.push(
+        `  Renamed from @${args.alias} — use @${m.alias} in future calls.`,
+      );
+    }
+    if (args.instructions !== undefined) {
+      lines.push(
+        m.instructions
+          ? `  Instructions: ${m.instructions.length} chars set.`
+          : '  Instructions cleared.',
+      );
+    }
+    if (args.tags !== undefined) {
+      lines.push(
+        m.tags.length > 0
+          ? `  Tags: ${m.tags.map((t) => `#${t}`).join(' ')}`
+          : '  Tags cleared.',
+      );
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
   },
 );
 
