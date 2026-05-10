@@ -7,9 +7,10 @@
   "license": "MIT",
   "scripts": {
     "build:shared": "pnpm --filter @pinloom/shared build",
-    "build": "pnpm build:shared && pnpm -r --filter @pinloom/backend build && pnpm -r --filter @pinloom/frontend build",
-    "predev": "pnpm build:shared",
-    "predev:backend": "pnpm build:shared",
+    "build:mcp-server": "pnpm --filter @pinloom/mcp-server build",
+    "build": "pnpm build:shared && pnpm build:mcp-server && pnpm -r --filter @pinloom/backend build && pnpm -r --filter @pinloom/frontend build",
+    "predev": "pnpm build:shared && pnpm build:mcp-server",
+    "predev:backend": "pnpm build:shared && pnpm build:mcp-server",
     "predev:frontend": "pnpm build:shared",
     "dev": "concurrently --kill-others \"pnpm --filter @pinloom/backend dev\" \"pnpm --filter @pinloom/frontend dev\"",
     "dev:backend": "pnpm --filter @pinloom/backend dev",
@@ -20,7 +21,7 @@
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "typecheck": "tsc -b",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
-    "postinstall": "pnpm build:shared"
+    "postinstall": "pnpm build:shared && pnpm build:mcp-server"
   },
   "engines": {
     "node": ">=22"
