@@ -467,13 +467,26 @@ export function getMemberByAlias(
 }
 
 // Returns the membership row for a worker session — used by the runner
-// to inject persona/tags into the worker's systemPrompt at run time.
-// O(1) via the unique idx_team_members_session index.
+// to inject instructions/tags into the worker's systemPrompt at run
+// time. O(1) via the unique idx_team_members_session index.
 export function getMemberBySessionId(sessionId: string): TeamMember | null {
   const row = getDb()
     .prepare('SELECT * FROM team_members WHERE session_id = ?')
     .get(sessionId) as MemberRow | undefined;
   return row ? rowToMember(row) : null;
+}
+
+// Returns every worker in `teamId` whose `tags` array contains `tag`.
+// Tags are stored as a JSON-encoded TEXT column (no junction table)
+// because this is a single-user local SQLite workload with realistic
+// upper bounds of ≤20 workers per team and ≤16 tags per worker — so we
+// read all members and filter in memory, trivially cheap. Switch to a
+// junction table only if those bounds break. Stable order: oldest
+// member first, alias alphabetical as tiebreaker, matching
+// loadMembers().
+export function listMembersByTag(teamId: string, tag: string): TeamMember[] {
+  const all = loadMembers(teamId);
+  return all.filter((m) => m.tags.includes(tag));
 }
 
 export function listBoundSessionIds(): Set<string> {

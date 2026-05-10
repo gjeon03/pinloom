@@ -308,6 +308,13 @@ function buildTeamContext(sessionId: string): string {
     ].join('\n');
   }
   const db = getDb();
+  // We always list `team_send_tag` so the orchestrator knows the tool
+  // exists — hiding it until ≥1 worker has tags created a discovery
+  // gap (users would tag workers mid-session expecting broadcast, but
+  // the orchestrator's prompt was already cached without the tool).
+  // The phrasing notes it's a no-op when nothing matches so the
+  // orchestrator doesn't burn tokens on a useless probe.
+  const hasAnyTags = team.members.some((m) => m.tags.length > 0);
   const workerLines: string[] = [];
   for (const m of team.members) {
     const session = db
@@ -353,14 +360,17 @@ function buildTeamContext(sessionId: string): string {
     '',
     'Available tools (auto-injected via MCP):',
     '- `team_list()` — re-fetch worker status if needed',
-    '- `team_send(alias, text)` — enqueue a prompt to a worker (returns immediately)',
+    '- `team_send(alias, text)` — enqueue a prompt to one worker (returns immediately)',
+    `- \`team_send_tag(tag, text)\` — broadcast the same prompt to every worker with that tag${
+      hasAnyTags ? '' : ' (no-op until at least one worker is tagged)'
+    }`,
     '- `team_read(alias, sinceMessageId?)` — read a worker\'s recent reply',
     '- `team_status(alias)` — check if a worker is idle/running',
     '- `team_wait(alias, timeoutMs?)` — block until a worker is idle (returns the moment it idles; max 5min)',
     '',
-    'Typical pattern: `team_send` → `team_wait` → `team_read` (with the last',
-    'message id you saw, to get only the new reply). Workers don\'t see each',
-    'other; you are the only one that can synthesize across them.',
+    'Typical pattern: `team_send / team_send_tag` → `team_wait` → `team_read` (with the',
+    'last message id you saw, to get only the new reply). Workers don\'t see',
+    'each other; you are the only one that can synthesize across them.',
   ].join('\n');
 }
 
