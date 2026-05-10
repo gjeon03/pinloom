@@ -1060,6 +1060,17 @@ function AddWorkerFromTabModal({
       setSelected(created.id);
       setCreating(false);
       setNewTitle('');
+      // Notify any listening surface — most importantly the parent
+      // ProjectPage's tab strip — that a session just appeared. Without
+      // this the strip stays stale until next mount, leaving the user
+      // wondering whether their worker is really there. Detail carries
+      // the full session row so listeners can splice it in without an
+      // extra fetch.
+      window.dispatchEvent(
+        new CustomEvent('pinloom:session-created', {
+          detail: { session: created },
+        }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
