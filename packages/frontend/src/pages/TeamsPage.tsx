@@ -196,6 +196,12 @@ function CreateTeamPanel({
   const [name, setName] = useState('');
   const [pickingOrchestrator, setPickingOrchestrator] = useState(false);
   const [orchestratorId, setOrchestratorId] = useState<string | null>(null);
+  // Optional briefing for the orchestrator session. Mirrors a worker's
+  // instructions field — same trim-to-null UX as the worker AddWorker
+  // form. Hidden behind a toggle so the create panel stays compact for
+  // users who don't need it.
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [instructions, setInstructions] = useState('');
   // Sessions/projects created via the inline picker before the parent
   // lookup has refetched. Used so the orchestrator preview label resolves
   // immediately after creation.
@@ -217,9 +223,12 @@ function CreateTeamPanel({
       await api.createTeam({
         name: trimmed,
         orchestratorSessionId: orchestratorId,
+        instructions: instructions.trim() || null,
       });
       setName('');
       setOrchestratorId(null);
+      setInstructions('');
+      setShowInstructions(false);
       setExtraSessions([]);
       setExtraProjects([]);
       onCreated();
@@ -274,6 +283,33 @@ function CreateTeamPanel({
           Create
         </button>
       </div>
+      <div className="mt-2">
+        {showInstructions ? (
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+              Orchestrator briefing <span className="normal-case">(optional)</span>
+            </label>
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              rows={3}
+              placeholder="e.g. You're the PM. Synthesize across workers, escalate blockers, never auto-merge."
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm resize-y"
+            />
+            <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
+              Injected into the orchestrator's system prompt every turn.
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowInstructions(true)}
+            className="text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
+          >
+            + Add orchestrator briefing (optional)
+          </button>
+        )}
+      </div>
 
       {pickingOrchestrator && (
         <SessionPickerModal
@@ -306,11 +342,36 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
   const [nameDraft, setNameDraft] = useState(team.name);
   const [showAddMember, setShowAddMember] = useState(false);
   const [showOrchestratorPicker, setShowOrchestratorPicker] = useState(false);
+  // Briefing edit panel — same rhythm as MemberRow's instructions edit.
+  const [editingBriefing, setEditingBriefing] = useState(false);
+  const [briefingDraft, setBriefingDraft] = useState(team.instructions ?? '');
+  const [savingBriefing, setSavingBriefing] = useState(false);
 
   // Re-seed draft when the team changes underneath us (rename via another path).
   useEffect(() => {
     setNameDraft(team.name);
   }, [team.name]);
+  useEffect(() => {
+    if (!editingBriefing) {
+      setBriefingDraft(team.instructions ?? '');
+    }
+  }, [team.instructions, editingBriefing]);
+
+  async function saveBriefing() {
+    if (savingBriefing) return;
+    setSavingBriefing(true);
+    try {
+      await api.updateTeam(team.id, {
+        instructions: briefingDraft.trim() || null,
+      });
+      setEditingBriefing(false);
+      onChanged();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingBriefing(false);
+    }
+  }
 
   async function saveName() {
     const next = nameDraft.trim();
@@ -417,6 +478,60 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
               Change
             </button>
           </div>
+        </Section>
+
+        <Section label="Briefing">
+          {editingBriefing ? (
+            <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2 space-y-2">
+              <textarea
+                value={briefingDraft}
+                onChange={(e) => setBriefingDraft(e.target.value)}
+                rows={3}
+                placeholder="Optional. Identity, priorities, do/don'ts for the orchestrator."
+                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs resize-y"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingBriefing(false);
+                    setBriefingDraft(team.instructions ?? '');
+                  }}
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveBriefing}
+                  disabled={savingBriefing}
+                  className="rounded bg-[var(--color-accent)] text-black px-2 py-1 text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          ) : team.instructions ? (
+            <button
+              type="button"
+              onClick={() => setEditingBriefing(true)}
+              title="Edit briefing"
+              className="w-full text-left rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs hover:border-[var(--color-accent)]"
+            >
+              <span className="text-[var(--color-ink-muted)] line-clamp-2 whitespace-pre-line">
+                {team.instructions}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditingBriefing(true)}
+              className="rounded border border-dashed border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] w-full text-left flex items-center gap-1.5"
+            >
+              <Plus size={12} />
+              Add briefing
+            </button>
+          )}
         </Section>
 
         <Section label={`Workers (${team.members.length})`}>

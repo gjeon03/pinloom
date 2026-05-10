@@ -138,6 +138,13 @@ export interface Team {
    * the team away.
    */
   orchestratorSessionId: string;
+  /**
+   * Optional system-prompt-style briefing for the orchestrator —
+   * "you are the PM of this crew, prefer X over Y, never auto-merge"
+   * etc. Mirrors `TeamMember.instructions`. Null = no extra prompt
+   * injection beyond the auto-generated team context block.
+   */
+  instructions: string | null;
   members: TeamMember[];
   createdAt: string;
   updatedAt: string;
