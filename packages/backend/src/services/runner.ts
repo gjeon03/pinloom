@@ -282,12 +282,13 @@ function buildEnvVarsContext(): string {
   ].join('\n');
 }
 
-// Worker persona is capped at 4000 chars in the service layer (per
-// member). Inlining N of those into the orchestrator's team context
-// every turn is a real bloat risk — 20 workers × 4000 chars = ~80kb
-// of duplicated prompt that also degrades routing. Worker self-prompt
-// uses the full text; only the orchestrator's listing is summarized.
-const ORCHESTRATOR_PERSONA_SUMMARY_CHARS = 280;
+// Worker instructions are capped at 4000 chars in the service layer
+// (per member). Inlining N of those into the orchestrator's team
+// context every turn is a real bloat risk — 20 workers × 4000 chars =
+// ~80kb of duplicated prompt that also degrades routing. Worker
+// self-prompt uses the full text; only the orchestrator's listing is
+// summarized.
+const ORCHESTRATOR_INSTRUCTIONS_SUMMARY_CHARS = 280;
 
 // If `sessionId` is the orchestrator of a team, return a markdown block
 // describing the workers and the dispatch tools available via the
@@ -323,23 +324,19 @@ function buildTeamContext(sessionId: string): string {
     const tagsPart =
       m.tags.length > 0 ? `, tags: ${m.tags.map((t) => `#${t}`).join(' ')}` : '';
     workerLines.push(`- **@${m.alias}** (${agent}${projectPart}${tagsPart})`);
-    if (m.persona) {
+    if (m.instructions) {
       // Aggressively summarize for the orchestrator listing — the full
-      // persona text lives in the worker's own systemPrompt
-      // (buildWorkerPersonaContext) where it actually drives behavior.
-      // Here we just need enough for the orchestrator to route work to
-      // the right alias; long personas inlined N-times would otherwise
-      // crowd the orchestrator's prompt and degrade routing accuracy.
-      // Single line, hard cap at ~280 chars.
-      const summary = m.persona
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, ORCHESTRATOR_PERSONA_SUMMARY_CHARS);
+      // instructions text lives in the worker's own systemPrompt
+      // (buildWorkerInstructionsContext) where it actually drives
+      // behavior. Here we just need enough for the orchestrator to
+      // route work to the right alias; long instructions inlined N
+      // times would otherwise crowd the orchestrator's prompt and
+      // degrade routing accuracy. Single line, hard cap at ~280 chars.
+      const flattened = m.instructions.replace(/\s+/g, ' ').trim();
       const truncated =
-        m.persona.replace(/\s+/g, ' ').trim().length >
-        ORCHESTRATOR_PERSONA_SUMMARY_CHARS
-          ? `${summary}…`
-          : summary;
+        flattened.length > ORCHESTRATOR_INSTRUCTIONS_SUMMARY_CHARS
+          ? `${flattened.slice(0, ORCHESTRATOR_INSTRUCTIONS_SUMMARY_CHARS)}…`
+          : flattened;
       workerLines.push(`  ${truncated}`);
     }
   }
@@ -367,21 +364,21 @@ function buildTeamContext(sessionId: string): string {
   ].join('\n');
 }
 
-// If `sessionId` is a worker in some team, inject a short block telling
-// the agent who it's role-playing in this team and its persona blurb
+// If `sessionId` is a worker in some team, inject a short block
+// telling the agent who it's playing in this team plus its instructions
 // (if any). Empty string for free sessions and orchestrators (which
 // already get their own block via buildTeamContext). Workers don't get
 // the dispatch tools — only the orchestrator's MCP server is wired up
 // — so this is purely identity / role context.
-function buildWorkerPersonaContext(sessionId: string): string {
+function buildWorkerInstructionsContext(sessionId: string): string {
   const member = getMemberBySessionId(sessionId);
   if (!member) return '';
-  // A worker with neither persona nor tags doesn't need any extra
+  // A worker with neither instructions nor tags doesn't need any extra
   // context — the orchestrator's MCP messages already prefix
   // `[from orchestrator]` so role attribution is unambiguous, and
-  // pre-migration rows (NULL persona + NULL tags) shouldn't suddenly
-  // grow a heading after upgrade.
-  if (!member.persona && member.tags.length === 0) return '';
+  // pre-migration rows (NULL instructions + NULL tags) shouldn't
+  // suddenly grow a heading after upgrade.
+  if (!member.instructions && member.tags.length === 0) return '';
   const lines = [
     '',
     `## Team role — you are worker @${member.alias}`,
@@ -394,8 +391,8 @@ function buildWorkerPersonaContext(sessionId: string): string {
   if (member.tags.length > 0) {
     lines.push('', `Tags: ${member.tags.map((t) => `#${t}`).join(' ')}`);
   }
-  if (member.persona) {
-    lines.push('', '### Persona', '', member.persona);
+  if (member.instructions) {
+    lines.push('', '### Instructions', '', member.instructions);
   }
   return lines.join('\n');
 }
@@ -1242,14 +1239,14 @@ async function runAssistant(
   // A session is at most one of: orchestrator OR worker, so these two
   // builders never both produce content for the same systemPrompt.
   const teamContext = buildTeamContext(ctx.id);
-  const workerPersonaContext = buildWorkerPersonaContext(ctx.id);
+  const workerInstructionsContext = buildWorkerInstructionsContext(ctx.id);
   const systemPrompt =
     SYSTEM_PROMPT +
     buildPlanContext(planItems) +
     buildWikiContext(ctx.projectId) +
     envVarsContext +
     teamContext +
-    workerPersonaContext +
+    workerInstructionsContext +
     (pinsContext ? `\n\n${pinsContext}` : '');
 
   // Mint the orchestrator's MCP token ONCE per turn (i.e. per

@@ -58,7 +58,7 @@ interface CanvasNodeData extends Record<string, unknown> {
   edgeFresh?: boolean;
   /** Worker-only — surfaced on the canvas so the user can see at a
    *  glance who plays which role without opening each tab. */
-  persona?: string | null;
+  instructions?: string | null;
   tags?: string[];
 }
 
@@ -269,7 +269,7 @@ export function TeamCanvasPage({
           sessionId: m.sessionId,
           running: state?.running ?? false,
           queued: state?.queued ?? 0,
-          persona: m.persona,
+          instructions: m.instructions,
           tags: m.tags,
         },
       };
@@ -450,12 +450,12 @@ function CanvasNode({ data }: CanvasNodeProps) {
           ))}
         </div>
       )}
-      {!isOrch && data.persona && (
+      {!isOrch && data.instructions && (
         <div
           className="mt-1 text-[9px] text-[var(--color-ink-muted)] line-clamp-2"
-          title={data.persona}
+          title={data.instructions}
         >
-          {data.persona}
+          {data.instructions}
         </div>
       )}
       {!isOrch && (

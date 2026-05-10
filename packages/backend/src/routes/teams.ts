@@ -5,11 +5,11 @@ import {
   createTeam,
   deleteTeam,
   getTeam,
+  InstructionsTooLongError,
   InvalidAliasError,
   InvalidTagError,
   listTeams,
   OrchestratorWorkerConflictError,
-  PersonaTooLongError,
   removeMember,
   SessionAlreadyInTeamError,
   SessionNotFoundError,
@@ -30,7 +30,7 @@ function replyForError(reply: FastifyReply, err: unknown): { error: string } {
     err instanceof InvalidAliasError ||
     err instanceof InvalidTagError ||
     err instanceof TooManyTagsError ||
-    err instanceof PersonaTooLongError
+    err instanceof InstructionsTooLongError
   ) {
     reply.code(400);
     return { error: err.message };
@@ -116,7 +116,7 @@ export async function teamRoutes(app: FastifyInstance) {
     Body: {
       sessionId?: string;
       alias?: string;
-      persona?: string | null;
+      instructions?: string | null;
       tags?: string[];
     };
   }>('/api/teams/:id/members', async (req, reply) => {
@@ -135,7 +135,7 @@ export async function teamRoutes(app: FastifyInstance) {
         teamId: req.params.id,
         sessionId,
         alias,
-        persona: req.body?.persona ?? null,
+        instructions: req.body?.instructions ?? null,
         tags: req.body?.tags,
       });
     } catch (err) {
@@ -147,7 +147,7 @@ export async function teamRoutes(app: FastifyInstance) {
     Params: { id: string; sessionId: string };
     Body: {
       alias?: string;
-      persona?: string | null;
+      instructions?: string | null;
       tags?: string[];
     };
   }>('/api/teams/:id/members/:sessionId', async (req, reply) => {
@@ -159,18 +159,21 @@ export async function teamRoutes(app: FastifyInstance) {
       return { error: 'alias cannot be empty' };
     }
     // PATCH semantics: an absent key means "leave alone"; an explicit
-    // value (including `null` for persona, `[]` for tags) means "set to
-    // that". `'key' in body` distinguishes absent from explicit-null
-    // because JSON.stringify drops `undefined` but preserves `null`.
+    // value (including `null` for instructions, `[]` for tags) means
+    // "set to that". `'key' in body` distinguishes absent from
+    // explicit-null because JSON.stringify drops `undefined` but
+    // preserves `null`.
     const body = req.body ?? {};
-    const personaProvided = 'persona' in body;
+    const instructionsProvided = 'instructions' in body;
     const tagsProvided = 'tags' in body;
     try {
       return updateMember({
         teamId: req.params.id,
         sessionId: req.params.sessionId,
         alias,
-        persona: personaProvided ? body.persona ?? null : undefined,
+        instructions: instructionsProvided
+          ? body.instructions ?? null
+          : undefined,
         tags: tagsProvided ? body.tags ?? [] : undefined,
       });
     } catch (err) {

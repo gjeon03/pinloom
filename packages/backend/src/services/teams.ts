@@ -26,8 +26,8 @@ const ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 // be unique within a team.
 const TAG_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const MAX_TAGS_PER_MEMBER = 16;
-// Plenty for system-prompt persona blurbs without becoming an essay box.
-const MAX_PERSONA_LENGTH = 4000;
+// Plenty for system-prompt instructions without becoming an essay box.
+const MAX_INSTRUCTIONS_LENGTH = 4000;
 
 export class TeamNotFoundError extends Error {
   constructor(id: string) {
@@ -93,12 +93,12 @@ export class TooManyTagsError extends Error {
   }
 }
 
-export class PersonaTooLongError extends Error {
+export class InstructionsTooLongError extends Error {
   constructor(length: number) {
     super(
-      `persona too long (${length} chars); the limit is ${MAX_PERSONA_LENGTH}`,
+      `instructions too long (${length} chars); the limit is ${MAX_INSTRUCTIONS_LENGTH}`,
     );
-    this.name = 'PersonaTooLongError';
+    this.name = 'InstructionsTooLongError';
   }
 }
 
@@ -116,7 +116,7 @@ interface MemberRow {
   alias: string;
   // SQLite returns NULL for nullable columns added via ALTER TABLE
   // when the row predates the migration.
-  persona: string | null;
+  instructions: string | null;
   tags: string | null;
   created_at: string;
 }
@@ -150,7 +150,7 @@ function rowToMember(row: MemberRow): TeamMember {
   return {
     sessionId: row.session_id,
     alias: row.alias,
-    persona: row.persona ?? null,
+    instructions: row.instructions ?? null,
     tags: parseTags(row.tags),
     createdAt: row.created_at,
   };
@@ -180,12 +180,14 @@ function validateTags(tags: string[]): void {
   }
 }
 
-function validatePersona(persona: string | null | undefined): string | null {
-  if (persona == null) return null;
-  const trimmed = persona.trim();
+function validateInstructions(
+  instructions: string | null | undefined,
+): string | null {
+  if (instructions == null) return null;
+  const trimmed = instructions.trim();
   if (trimmed.length === 0) return null;
-  if (trimmed.length > MAX_PERSONA_LENGTH) {
-    throw new PersonaTooLongError(trimmed.length);
+  if (trimmed.length > MAX_INSTRUCTIONS_LENGTH) {
+    throw new InstructionsTooLongError(trimmed.length);
   }
   return trimmed;
 }
@@ -296,13 +298,13 @@ interface AddMemberArgs {
   teamId: string;
   sessionId: string;
   alias: string;
-  persona?: string | null;
+  instructions?: string | null;
   tags?: string[];
 }
 
 export function addMember(args: AddMemberArgs): TeamMember {
   if (!ALIAS_PATTERN.test(args.alias)) throw new InvalidAliasError(args.alias);
-  const persona = validatePersona(args.persona);
+  const instructions = validateInstructions(args.instructions);
   const tags = normalizeTags(args.tags);
   validateTags(tags);
 
@@ -319,13 +321,13 @@ export function addMember(args: AddMemberArgs): TeamMember {
     assertAliasFree(args.teamId, args.alias);
 
     db.prepare(
-      `INSERT INTO team_members (team_id, session_id, alias, persona, tags, created_at)
+      `INSERT INTO team_members (team_id, session_id, alias, instructions, tags, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(
       args.teamId,
       args.sessionId,
       args.alias,
-      persona,
+      instructions,
       tags.length > 0 ? JSON.stringify(tags) : null,
       now,
     );
@@ -336,7 +338,7 @@ export function addMember(args: AddMemberArgs): TeamMember {
   return {
     sessionId: args.sessionId,
     alias: args.alias,
-    persona,
+    instructions,
     tags,
     createdAt: now,
   };
@@ -347,9 +349,9 @@ interface UpdateMemberArgs {
   sessionId: string;
   // All fields optional — partial PATCH semantics. Only the fields the
   // caller provides are touched, so the alias-edit flow and the
-  // persona-edit flow can both go through this single entry point.
+  // instructions-edit flow can both go through this single entry point.
   alias?: string;
-  persona?: string | null;
+  instructions?: string | null;
   tags?: string[];
 }
 
@@ -357,8 +359,10 @@ export function updateMember(args: UpdateMemberArgs): TeamMember {
   if (args.alias !== undefined && !ALIAS_PATTERN.test(args.alias)) {
     throw new InvalidAliasError(args.alias);
   }
-  const personaProvided = args.persona !== undefined;
-  const personaNext = personaProvided ? validatePersona(args.persona) : null;
+  const instructionsProvided = args.instructions !== undefined;
+  const instructionsNext = instructionsProvided
+    ? validateInstructions(args.instructions)
+    : null;
   const tagsProvided = args.tags !== undefined;
   const tagsNext = tagsProvided ? normalizeTags(args.tags) : [];
   if (tagsProvided) validateTags(tagsNext);
@@ -378,7 +382,9 @@ export function updateMember(args: UpdateMemberArgs): TeamMember {
     if (args.alias !== undefined && args.alias !== existing.alias) {
       assertAliasFree(args.teamId, args.alias);
     }
-    const nextPersona = personaProvided ? personaNext : existing.persona;
+    const nextInstructions = instructionsProvided
+      ? instructionsNext
+      : existing.instructions;
     const nextTagsRaw = tagsProvided
       ? tagsNext.length > 0
         ? JSON.stringify(tagsNext)
@@ -387,11 +393,11 @@ export function updateMember(args: UpdateMemberArgs): TeamMember {
 
     db.prepare(
       `UPDATE team_members
-         SET alias = ?, persona = ?, tags = ?
+         SET alias = ?, instructions = ?, tags = ?
        WHERE team_id = ? AND session_id = ?`,
     ).run(
       nextAlias,
-      nextPersona,
+      nextInstructions,
       nextTagsRaw,
       args.teamId,
       args.sessionId,

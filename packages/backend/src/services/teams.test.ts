@@ -12,7 +12,7 @@ import {
   listBoundSessionIds,
   listTeams,
   OrchestratorWorkerConflictError,
-  PersonaTooLongError,
+  InstructionsTooLongError,
   removeMember,
   SessionAlreadyInTeamError,
   SessionNotFoundError,
@@ -306,8 +306,8 @@ describe('cascade behavior', () => {
   });
 });
 
-describe('persona and tags', () => {
-  it('addMember stores persona and tags', () => {
+describe('instructions and tags', () => {
+  it('addMember stores instructions and tags', () => {
     seedSession('o');
     seedSession('w');
     const t = createTeam({ name: 'crew', orchestratorSessionId: 'o' });
@@ -315,11 +315,11 @@ describe('persona and tags', () => {
       teamId: t.id,
       sessionId: 'w',
       alias: 'be',
-      persona: 'Backend reviewer',
+      instructions: 'Backend reviewer',
       tags: ['backend', 'tests'],
     });
     const team = getTeam(t.id);
-    expect(team?.members[0].persona).toBe('Backend reviewer');
+    expect(team?.members[0].instructions).toBe('Backend reviewer');
     expect(team?.members[0].tags).toEqual(['backend', 'tests']);
   });
 
@@ -336,7 +336,7 @@ describe('persona and tags', () => {
     expect(getTeam(t.id)?.members[0].tags).toEqual(['backend', 'tests']);
   });
 
-  it('addMember treats empty/whitespace persona as null', () => {
+  it('addMember treats empty/whitespace instructions as null', () => {
     seedSession('o');
     seedSession('w');
     const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
@@ -344,9 +344,9 @@ describe('persona and tags', () => {
       teamId: t.id,
       sessionId: 'w',
       alias: 'be',
-      persona: '   ',
+      instructions: '   ',
     });
-    expect(getTeam(t.id)?.members[0].persona).toBeNull();
+    expect(getTeam(t.id)?.members[0].instructions).toBeNull();
   });
 
   it('rejects invalid tag tokens', () => {
@@ -377,7 +377,7 @@ describe('persona and tags', () => {
     ).toThrow(TooManyTagsError);
   });
 
-  it('rejects persona over the length cap', () => {
+  it('rejects instructions over the length cap', () => {
     seedSession('o');
     seedSession('w');
     const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
@@ -386,12 +386,12 @@ describe('persona and tags', () => {
         teamId: t.id,
         sessionId: 'w',
         alias: 'be',
-        persona: 'x'.repeat(5000),
+        instructions: 'x'.repeat(5000),
       }),
-    ).toThrow(PersonaTooLongError);
+    ).toThrow(InstructionsTooLongError);
   });
 
-  it('updateMember edits persona/tags partially without touching alias', () => {
+  it('updateMember edits instructions/tags partially without touching alias', () => {
     seedSession('o');
     seedSession('w');
     const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
@@ -399,16 +399,16 @@ describe('persona and tags', () => {
     updateMember({
       teamId: t.id,
       sessionId: 'w',
-      persona: 'Edited',
+      instructions: 'Edited',
       tags: ['x'],
     });
     const m = getTeam(t.id)?.members[0];
     expect(m?.alias).toBe('be');
-    expect(m?.persona).toBe('Edited');
+    expect(m?.instructions).toBe('Edited');
     expect(m?.tags).toEqual(['x']);
   });
 
-  it('updateMember can clear persona by passing null', () => {
+  it('updateMember can clear instructions by passing null', () => {
     seedSession('o');
     seedSession('w');
     const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
@@ -416,13 +416,13 @@ describe('persona and tags', () => {
       teamId: t.id,
       sessionId: 'w',
       alias: 'be',
-      persona: 'initial',
+      instructions: 'initial',
     });
-    updateMember({ teamId: t.id, sessionId: 'w', persona: null });
-    expect(getTeam(t.id)?.members[0].persona).toBeNull();
+    updateMember({ teamId: t.id, sessionId: 'w', instructions: null });
+    expect(getTeam(t.id)?.members[0].instructions).toBeNull();
   });
 
-  it('updateMember leaves persona/tags untouched when omitted', () => {
+  it('updateMember leaves instructions/tags untouched when omitted', () => {
     seedSession('o');
     seedSession('w');
     const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
@@ -430,13 +430,13 @@ describe('persona and tags', () => {
       teamId: t.id,
       sessionId: 'w',
       alias: 'be',
-      persona: 'keep',
+      instructions: 'keep',
       tags: ['t'],
     });
     updateMember({ teamId: t.id, sessionId: 'w', alias: 'fe' });
     const m = getTeam(t.id)?.members[0];
     expect(m?.alias).toBe('fe');
-    expect(m?.persona).toBe('keep');
+    expect(m?.instructions).toBe('keep');
     expect(m?.tags).toEqual(['t']);
   });
 
@@ -449,7 +449,7 @@ describe('persona and tags', () => {
     expect(getTeam(t.id)?.members[0].alias).toBe('fe');
   });
 
-  it('getMemberBySessionId returns persona/tags for a worker', () => {
+  it('getMemberBySessionId returns instructions/tags for a worker', () => {
     seedSession('o');
     seedSession('w');
     const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
@@ -457,12 +457,12 @@ describe('persona and tags', () => {
       teamId: t.id,
       sessionId: 'w',
       alias: 'be',
-      persona: 'Reviewer',
+      instructions: 'Reviewer',
       tags: ['backend'],
     });
     const m = getMemberBySessionId('w');
     expect(m?.alias).toBe('be');
-    expect(m?.persona).toBe('Reviewer');
+    expect(m?.instructions).toBe('Reviewer');
     expect(m?.tags).toEqual(['backend']);
   });
 
@@ -477,11 +477,11 @@ describe('persona and tags', () => {
     const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
     addMember({ teamId: t.id, sessionId: 'w', alias: 'be' });
     // The runner relies on this distinction: orchestrator gets
-    // buildTeamContext, members get buildWorkerPersonaContext, never both.
+    // buildTeamContext, members get buildWorkerInstructionsContext, never both.
     expect(getMemberBySessionId('o')).toBeNull();
   });
 
-  it('reads a row whose persona/tags are NULL (pre-mig-17 / cleared)', () => {
+  it('reads a row whose instructions/tags are NULL (pre-mig-17 / cleared)', () => {
     seedSession('o');
     seedSession('w');
     const t = createTeam({ name: 'c', orchestratorSessionId: 'o' });
@@ -489,11 +489,11 @@ describe('persona and tags', () => {
     // Simulate a row that predates migration 17: both columns NULL.
     getDb()
       .prepare(
-        'UPDATE team_members SET persona = NULL, tags = NULL WHERE session_id = ?',
+        'UPDATE team_members SET instructions = NULL, tags = NULL WHERE session_id = ?',
       )
       .run('w');
     const m = getMemberBySessionId('w');
-    expect(m?.persona).toBeNull();
+    expect(m?.instructions).toBeNull();
     expect(m?.tags).toEqual([]);
   });
 
