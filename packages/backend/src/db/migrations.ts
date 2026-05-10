@@ -271,6 +271,20 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE team_members ADD COLUMN tags TEXT;
     `,
   },
+  {
+    id: 18,
+    // Rename `persona` → `instructions`. The original name was too
+    // narrow — users actually put a mix of identity, guidelines,
+    // do/don'ts, and output conventions into that field, so a more
+    // general "instructions" label matches the industry convention
+    // (Anthropic system prompt / OpenAI custom GPT instructions /
+    // Cursor rules) and the freeform usage we already encourage.
+    // SQLite supports RENAME COLUMN since 3.25 and better-sqlite3
+    // ships well past that.
+    sql: `
+      ALTER TABLE team_members RENAME COLUMN persona TO instructions;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

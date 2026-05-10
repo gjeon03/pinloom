@@ -348,7 +348,7 @@ export const api = {
     body: {
       sessionId: string;
       alias: string;
-      persona?: string | null;
+      instructions?: string | null;
       tags?: string[];
     },
   ) =>
@@ -362,7 +362,7 @@ export const api = {
     body: {
       alias?: string;
       // Pass null to clear; omit to leave unchanged.
-      persona?: string | null;
+      instructions?: string | null;
       tags?: string[];
     },
   ) =>

@@ -547,10 +547,10 @@ function MemberRow({
 }: MemberRowProps) {
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState(member.alias);
-  // Persona / tags edit happens in a small inline panel below the row
+  // Instructions / tags edit happens in a small inline panel below the row
   // so users don't lose their place in the team list.
   const [editingExtras, setEditingExtras] = useState(false);
-  const [personaDraft, setPersonaDraft] = useState(member.persona ?? '');
+  const [instructionsDraft, setInstructionsDraft] = useState(member.instructions ?? '');
   const [tagsDraft, setTagsDraft] = useState(member.tags.join(', '));
   const [savingExtras, setSavingExtras] = useState(false);
   const meta = formatSessionLabel(member.sessionId, lookup);
@@ -560,10 +560,10 @@ function MemberRow({
   }, [member.alias]);
   useEffect(() => {
     if (!editingExtras) {
-      setPersonaDraft(member.persona ?? '');
+      setInstructionsDraft(member.instructions ?? '');
       setTagsDraft(member.tags.join(', '));
     }
-  }, [member.persona, member.tags, editingExtras]);
+  }, [member.instructions, member.tags, editingExtras]);
 
   async function saveAlias() {
     const next = aliasDraft.trim();
@@ -586,7 +586,7 @@ function MemberRow({
     setSavingExtras(true);
     try {
       await api.updateTeamMember(teamId, member.sessionId, {
-        persona: personaDraft.trim() || null,
+        instructions: instructionsDraft.trim() || null,
         tags: parseTags(tagsDraft),
       });
       setEditingExtras(false);
@@ -650,8 +650,8 @@ function MemberRow({
           <button
             type="button"
             onClick={() => setEditingExtras((v) => !v)}
-            aria-label="Edit persona and tags"
-            title="Edit persona and tags"
+            aria-label="Edit instructions and tags"
+            title="Edit instructions and tags"
             className={`text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] ${
               editingExtras ? 'text-[var(--color-accent)]' : ''
             }`}
@@ -684,20 +684,20 @@ function MemberRow({
           </button>
         </div>
       </div>
-      {!editingExtras && member.persona && (
+      {!editingExtras && member.instructions && (
         <div className="px-3 pb-1.5 text-[10px] text-[var(--color-ink-muted)] line-clamp-2">
-          {member.persona}
+          {member.instructions}
         </div>
       )}
       {editingExtras && (
         <div className="border-t border-[var(--color-border)]/50 px-3 py-2 space-y-2">
           <div>
             <label className="block text-[9px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-0.5">
-              Persona
+              Instructions
             </label>
             <textarea
-              value={personaDraft}
-              onChange={(e) => setPersonaDraft(e.target.value)}
+              value={instructionsDraft}
+              onChange={(e) => setInstructionsDraft(e.target.value)}
               rows={3}
               placeholder="Optional system-prompt-style blurb."
               className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs resize-y"
@@ -721,7 +721,7 @@ function MemberRow({
               type="button"
               onClick={() => {
                 setEditingExtras(false);
-                setPersonaDraft(member.persona ?? '');
+                setInstructionsDraft(member.instructions ?? '');
                 setTagsDraft(member.tags.join(', '));
               }}
               className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"

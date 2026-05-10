@@ -27,7 +27,7 @@ type TeamRole =
       teamId: string;
       teamName: string;
       alias: string;
-      persona: string | null;
+      instructions: string | null;
       tags: string[];
     };
 
@@ -60,7 +60,7 @@ function buildTeamRoles(teams: Team[]): Map<string, TeamRole> {
         teamId: team.id,
         teamName: team.name,
         alias: m.alias,
-        persona: m.persona,
+        instructions: m.instructions,
         tags: m.tags,
       });
     }
@@ -141,7 +141,7 @@ export function SessionTabs({
     teamName: string;
     sessionId: string;
     alias: string;
-    persona: string | null;
+    instructions: string | null;
     tags: string[];
   } | null>(null);
   const navigate = useNavigate();
@@ -653,8 +653,8 @@ export function SessionTabs({
               )}
               {role?.kind === 'worker' &&
                 (() => {
-                  // Resolve full membership row (persona/tags) from the
-                  // teams cache the strip already keeps in state.
+                  // Resolve full membership row (instructions/tags) from
+                  // the teams cache the strip already keeps in state.
                   const team = teams.find((t) => t.id === role.teamId);
                   const member = team?.members.find(
                     (m) => m.sessionId === tabMenu.sessionId,
@@ -670,7 +670,7 @@ export function SessionTabs({
                             teamName: role.teamName,
                             sessionId: tabMenu.sessionId,
                             alias: member.alias,
-                            persona: member.persona,
+                            instructions: member.instructions,
                             tags: member.tags,
                           });
                           setTabMenu(null);
@@ -678,7 +678,7 @@ export function SessionTabs({
                         className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
                       >
                         <Pencil size={12} />
-                        <span className="flex-1">Edit persona &amp; tags…</span>
+                        <span className="flex-1">Edit instructions &amp; tags…</span>
                       </button>
                       <button
                         type="button"
@@ -743,7 +743,7 @@ export function SessionTabs({
           teamName={editWorkerModal.teamName}
           sessionId={editWorkerModal.sessionId}
           initialAlias={editWorkerModal.alias}
-          initialPersona={editWorkerModal.persona}
+          initialInstructions={editWorkerModal.instructions}
           initialTags={editWorkerModal.tags}
           onClose={() => setEditWorkerModal(null)}
           onSaved={() => {
@@ -962,7 +962,7 @@ function AddWorkerFromTabModal({
   const [boundIds, setBoundIds] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [alias, setAlias] = useState('');
-  const [persona, setPersona] = useState('');
+  const [instructions, setInstructions] = useState('');
   const [tagsInput, setTagsInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -1037,7 +1037,7 @@ function AddWorkerFromTabModal({
       await api.addTeamMember(teamId, {
         sessionId: selected,
         alias: a,
-        persona: persona.trim() || null,
+        instructions: instructions.trim() || null,
         tags: parseTagsInput(tagsInput),
       });
       onAdded();
@@ -1117,17 +1117,19 @@ function AddWorkerFromTabModal({
           </div>
           <div>
             <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-              Persona <span className="normal-case text-[10px]">(optional)</span>
+              Instructions <span className="normal-case text-[10px]">(optional)</span>
             </label>
             <textarea
-              value={persona}
-              onChange={(e) => setPersona(e.target.value)}
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
               rows={3}
-              placeholder="e.g. You're the backend reviewer. Focus on schema, query plans, and migration safety."
+              placeholder="e.g. You're the backend reviewer. Focus on schema, query plans, and migration safety. Never auto-merge."
               className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm resize-y"
             />
             <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
-              Injected into this worker's system prompt at run time.
+              Identity, guidelines, do/don'ts — anything that should
+              color every reply. Injected into this worker's system
+              prompt at run time.
             </p>
           </div>
           <div>
@@ -1288,15 +1290,15 @@ function AddWorkerFromTabModal({
   );
 }
 
-// Edits an existing worker's alias / persona / tags without leaving the
-// project page. Mirrors the AddWorker form, minus session selection
-// (the session is fixed) and minus inline session creation.
+// Edits an existing worker's alias / instructions / tags without
+// leaving the project page. Mirrors the AddWorker form, minus session
+// selection (the session is fixed) and minus inline session creation.
 function EditWorkerModal({
   teamId,
   teamName,
   sessionId,
   initialAlias,
-  initialPersona,
+  initialInstructions,
   initialTags,
   onClose,
   onSaved,
@@ -1305,13 +1307,13 @@ function EditWorkerModal({
   teamName: string;
   sessionId: string;
   initialAlias: string;
-  initialPersona: string | null;
+  initialInstructions: string | null;
   initialTags: string[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [alias, setAlias] = useState(initialAlias);
-  const [persona, setPersona] = useState(initialPersona ?? '');
+  const [instructions, setInstructions] = useState(initialInstructions ?? '');
   const [tagsInput, setTagsInput] = useState(initialTags.join(', '));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1333,7 +1335,7 @@ function EditWorkerModal({
     try {
       await api.updateTeamMember(teamId, sessionId, {
         alias: a,
-        persona: persona.trim() || null,
+        instructions: instructions.trim() || null,
         tags: parseTagsInput(tagsInput),
       });
       onSaved();
@@ -1385,13 +1387,13 @@ function EditWorkerModal({
           </div>
           <div>
             <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-              Persona <span className="normal-case text-[10px]">(optional)</span>
+              Instructions <span className="normal-case text-[10px]">(optional)</span>
             </label>
             <textarea
-              value={persona}
-              onChange={(e) => setPersona(e.target.value)}
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
               rows={4}
-              placeholder="e.g. You're the backend reviewer. Focus on schema, query plans, and migration safety."
+              placeholder="e.g. You're the backend reviewer. Focus on schema, query plans, and migration safety. Never auto-merge."
               className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm resize-y"
             />
             <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
@@ -1587,21 +1589,21 @@ function TeamRoleBadge({ role }: { role: TeamRole | null }) {
       </Tooltip>
     );
   }
-  // Compose tooltip from team name + tags + truncated persona so the
-  // user can scan a worker's role without opening its tab. Tooltip
-  // renders as one line (whitespace-nowrap), so we use ' · ' as a
-  // soft separator and truncate long personas hard.
+  // Compose tooltip from team name + tags + truncated instructions so
+  // the user can scan a worker's role without opening its tab. Tooltip
+  // renders as one line (whitespace-nowrap), so we use ' · ' as a soft
+  // separator and truncate long instructions hard.
   const segments: string[] = [
     `@${role.alias} in team "${role.teamName}"`,
   ];
   if (role.tags.length > 0) {
     segments.push(role.tags.map((t) => `#${t}`).join(' '));
   }
-  if (role.persona) {
+  if (role.instructions) {
     const truncated =
-      role.persona.length > 120
-        ? role.persona.slice(0, 120) + '…'
-        : role.persona;
+      role.instructions.length > 120
+        ? role.instructions.slice(0, 120) + '…'
+        : role.instructions;
     segments.push(truncated.replace(/\s+/g, ' '));
   }
   return (

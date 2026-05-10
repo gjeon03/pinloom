@@ -137,12 +137,16 @@ describe('runMigrations', () => {
     }
   });
 
-  it('team_members has persona and tags after migration 17', () => {
+  it('team_members has instructions and tags after migrations 17+18', () => {
     const db = freshDb();
     runMigrations(db);
     const cols = tableInfo(db, 'team_members');
-    expect(cols).toContain('persona');
+    // Migration 17 added `persona`; migration 18 renamed it to
+    // `instructions`. After running every migration, only the renamed
+    // column should be present.
+    expect(cols).toContain('instructions');
     expect(cols).toContain('tags');
+    expect(cols).not.toContain('persona');
   });
 
   it('projects has order_index after migration 5', () => {
@@ -418,5 +422,49 @@ describe('schema integrity', () => {
       .prepare('SELECT plan_item_id FROM messages WHERE id = ?')
       .get('m') as { plan_item_id: string | null };
     expect(row.plan_item_id).toBeNull();
+  });
+});
+
+describe('migration 18 — persona → instructions rename', () => {
+  it('preserves data written into the old persona column', () => {
+    const db = freshDb();
+    // Run everything up to and including migration 17 (column = persona).
+    applyUpTo(db, 17);
+    db.pragma('foreign_keys = ON');
+
+    // Seed a row with the legacy column name to simulate a database
+    // upgraded from the previous release.
+    db.prepare(
+      `INSERT INTO projects (id, name, cwd, created_at, updated_at)
+       VALUES ('p', 'P', '/p', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO sessions (id, project_id, created_at, updated_at)
+       VALUES ('s-orch', 'p', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+              ('s-w',    'p', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO teams (id, name, orchestrator_session_id, created_at, updated_at)
+       VALUES ('t', 'crew', 's-orch', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO team_members (team_id, session_id, alias, persona, tags, created_at)
+       VALUES ('t', 's-w', 'be', 'old-style persona text', '["backend"]', '2020-01-01T00:00:00Z')`,
+    ).run();
+
+    // Now run the rest (migration 18 renames the column).
+    runMigrations(db);
+
+    // Old column gone, renamed column carries the legacy value forward.
+    const cols = tableInfo(db, 'team_members');
+    expect(cols).toContain('instructions');
+    expect(cols).not.toContain('persona');
+    const row = db
+      .prepare(
+        `SELECT instructions, tags FROM team_members WHERE session_id = 's-w'`,
+      )
+      .get() as { instructions: string; tags: string };
+    expect(row.instructions).toBe('old-style persona text');
+    expect(row.tags).toBe('["backend"]');
   });
 });

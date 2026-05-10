@@ -14,3 +14,6 @@ data/*.deleted-backup
 test-results
 playwright-report
 playwright/.cache
+
+# Claude Code local state
+.claude/

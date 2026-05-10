@@ -110,14 +110,14 @@ export interface TeamMember {
   sessionId: string;
   alias: string;
   /**
-   * Optional short markdown blurb describing the worker's role / system-
-   * prompt-style persona. Injected into the worker's systemPrompt at
-   * run time so the chat agent actually plays the role, and shown to
-   * the orchestrator in its team context block so it knows when to
-   * route work to this alias. Null = generalist worker (no extra
-   * prompt injection).
+   * Optional system-prompt-style instructions for this worker —
+   * identity, guidelines, do/don'ts, output conventions, anything
+   * else that should color every response. Injected verbatim into
+   * the worker's systemPrompt at run time, and surfaced (truncated)
+   * to the orchestrator so it knows when to route work to this
+   * alias. Null = generalist worker (no extra prompt injection).
    */
-  persona: string | null;
+  instructions: string | null;
   /**
    * Short, lowercase identifiers (e.g. "backend", "tests") used to
    * group workers. For now they're metadata — surfaced in the
