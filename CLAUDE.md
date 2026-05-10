@@ -61,7 +61,7 @@ become visible to the LLM.
 ## Teams workflow
 
 A team groups one orchestrator chat with N worker chats. The orchestrator
-agent (Claude or Codex) is given an MCP server that exposes seven tools
+agent (Claude or Codex) is given an MCP server that exposes nine tools
 for coordinating the team. Workers are normal chat sessions — they do not
 see each other and do not get MCP. Cross-worker synthesis only happens
 in the orchestrator.
@@ -71,16 +71,22 @@ in the orchestrator.
 | Tool | Purpose |
 |------|---------|
 | `team_list()` | Re-fetch worker status (alias / agent / model / project / running / queued) |
-| `team_send(alias, text)` | Enqueue a prompt to one worker. Returns immediately. |
-| `team_send_tag(tag, text)` | Broadcast the same prompt to every worker with that tag. Returns `{recipients[], failures[]}`. |
+| **`team_ask(alias, text, timeoutMs?)`** | **Default delegation tool.** Sends a prompt and blocks until the worker replies; returns the reply directly as the tool_result. Mirrors the Claude SDK's Task tool — orchestrator turn stays alive across the round trip. Default + max wait 5min. |
+| **`team_ask_tag(tag, text, timeoutMs?)`** | Broadcast variant of `team_ask`. Sends to every worker with that tag, waits for all in parallel, returns each reply concatenated. Total wall time ≈ slowest worker. |
+| `team_send(alias, text)` | Fire-and-forget alternative to `team_ask`. Returns immediately. Use only when you genuinely want to kick off a long task and continue other work in the same turn. |
+| `team_send_tag(tag, text)` | Fire-and-forget broadcast variant. Returns `{recipients[], failures[]}`. |
 | `team_update_member(alias, newAlias?, instructions?, tags?)` | Sharpen a worker's role mid-session. Cannot add or remove workers. |
-| `team_read(alias, sinceMessageId?, limit?)` | Read a worker's recent messages. `limit` defaults to 20, max 200. Without `sinceMessageId` it returns the latest N; with it, paginates forward. |
+| `team_read(alias, sinceMessageId?, limit?)` | Read a worker's recent messages. `limit` defaults to 20, max 200. |
 | `team_status(alias)` | Check a worker's idle / running / queued state. |
-| `team_wait(alias, timeoutMs?)` | Block until a worker idles. Default 5min, also the max. There is no `team_wait_tag` — iterate over recipients after broadcast. |
+| `team_wait(alias, timeoutMs?)` | Block until a worker idles. Used with the async `team_send` pattern; `team_ask` already waits internally. |
 
 ### How routing works
 
-The orchestrator's system prompt lists every worker's alias, agent, project, tags, and a 280-char (whitespace-collapsed) summary of `instructions`. The LLM picks `team_send` (alias) vs `team_send_tag` (tag) by **tool name** — there is no `@tag:foo` sigil grammar. Tag pattern matches alias pattern (`/^[a-z][a-z0-9_-]{0,31}$/`); the tools are intentionally separate so the namespace overlap doesn't matter.
+The orchestrator's system prompt lists every worker's alias, agent, project, tags, and a 280-char (whitespace-collapsed) summary of `instructions`. The LLM picks alias-vs-tag by **tool name** (`team_ask` vs `team_ask_tag`) — there is no `@tag:foo` sigil grammar. Tag pattern matches alias pattern (`/^[a-z][a-z0-9_-]{0,31}$/`); the tools are intentionally separate so the namespace overlap doesn't matter.
+
+### Default delegation pattern: `team_ask`
+
+`team_ask` mirrors the Claude SDK's Task tool — one tool call = one synchronous round trip with the worker, reply returned as the tool_result. Prefer it over the older `team_send` + `team_wait` + `team_read` triplet. The orchestrator's turn stays alive across the wait, so it can chain follow-up `team_ask` calls (or call them in parallel) and synthesize without ever ending its turn early. `team_send` is now the explicit fire-and-forget escape hatch.
 
 ### Known semantics
 
