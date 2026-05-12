@@ -137,6 +137,12 @@ class ClaudeAdapterImpl implements AgentAdapter {
       // covers runaway loops.
       permissionMode: 'bypassPermissions',
       allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
+      // Pull in the user's Claude Code environment — `~/.claude/` (skills,
+      // subagents, slash commands, hooks, MCP servers) and the project's
+      // `.claude/` + CLAUDE.md. The SDK defaults to `[]` ("isolation mode")
+      // which is why pinloom workers couldn't see any of that even though
+      // the files were present on disk.
+      settingSources: ['user', 'project'],
       abortController: args.abortController,
       includePartialMessages: true,
       thinking: { type: 'adaptive' },
