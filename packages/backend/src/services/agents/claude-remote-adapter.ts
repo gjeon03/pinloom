@@ -203,6 +203,13 @@ function* convertSdkMessage(
   if (anyMsg.type === 'user') {
     const usr = anyMsg.message as SdkUserMessage | undefined;
     const content = usr?.content ?? [];
+    // The local adapter only ever sees `tool_result` blocks in SDK
+    // user messages, because pinloom UI input is persisted in
+    // routes/sessions.ts before the adapter runs. In the remote
+    // adapter, claude.ai inbound prompts ALSO arrive as SDK user
+    // messages — but with text content. Capture those so the
+    // pinloom-side history isn't missing half the conversation.
+    let inboundText = '';
     for (const block of content) {
       if (block.type === 'tool_result') {
         const text = toolResultText(block.content);
@@ -213,7 +220,13 @@ function* convertSdkMessage(
             stream: block.is_error ? 'stderr' : 'stdout',
           };
         }
+      } else if (block.type === 'text') {
+        const t = (block as { text?: unknown }).text;
+        if (typeof t === 'string') inboundText += t;
       }
+    }
+    if (inboundText.length > 0) {
+      yield { type: 'inbound_user_message', text: inboundText };
     }
     return;
   }

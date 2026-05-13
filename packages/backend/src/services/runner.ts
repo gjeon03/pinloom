@@ -1232,6 +1232,22 @@ async function runAttempt(
         case 'model':
           if (!streamModel) streamModel = ev.model;
           break;
+        case 'inbound_user_message': {
+          // A prompt that arrived from outside pinloom (currently:
+          // claude.ai via the remote-control bridge). Close any
+          // in-flight assistant stream first so the user row doesn't
+          // get appended to an unfinished message, then persist as a
+          // `role: 'user'` row — `persistMessage` broadcasts the
+          // `message` event so the UI updates immediately.
+          closeStream();
+          persistMessage({
+            sessionId: ctx.id,
+            planItemId: active.currentPlanItemId,
+            role: 'user',
+            content: ev.text,
+          });
+          break;
+        }
         case 'adapter_error': {
           // Adapter-layer failure (credential, bridge auth/conflict,
           // network). Close any in-flight assistant stream first so the
