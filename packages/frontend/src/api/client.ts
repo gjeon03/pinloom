@@ -202,6 +202,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ title }),
     }),
+  setRemoteControl: (sessionId: string, enabled: boolean) =>
+    request<Session>(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ remoteControl: enabled }),
+    }),
   reorderSessions: (projectId: string, ids: string[]) =>
     request<Session[]>(`/api/projects/${projectId}/sessions/reorder`, {
       method: 'POST',

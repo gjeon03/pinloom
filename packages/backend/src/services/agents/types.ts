@@ -39,7 +39,18 @@ export type NormalizedEvent =
   // we accumulated via deltas. Orchestrator appends the missing tail.
   | { type: 'final_text_fallback'; text: string }
   // Actual model the agent reported using; stamped on the assistant row.
-  | { type: 'model'; model: string };
+  | { type: 'model'; model: string }
+  // Adapter-level failure (credential lookup, bridge connect, auth 401,
+  // conflict, network). Surfaced as a `role: system` message so the
+  // model can't mistake it for something the assistant said on the
+  // next turn. Distinct from `[runner error]` because the failure
+  // happens BEFORE any model interaction — it belongs to the adapter
+  // layer, not the run.
+  | {
+      type: 'adapter_error';
+      kind: 'auth' | 'conflict' | 'network' | 'credential' | 'unknown';
+      detail: string;
+    };
 
 // Stdio-transport MCP server config — matches what `claude-agent-sdk`
 // expects in its `mcpServers` Options field, and what we render into a

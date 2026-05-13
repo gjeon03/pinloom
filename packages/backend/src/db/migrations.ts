@@ -317,6 +317,17 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 21,
+    // Per-session opt-in to remote-control mode. Replaces the env-var
+    // global from PR 1: PINLOOM_REMOTE_CONTROL is now only a default
+    // for newly-created sessions, and each session's choice is sticky
+    // for the rest of its life. NOT NULL DEFAULT 0 so existing rows
+    // backfill to off — there is no tri-state.
+    sql: `
+      ALTER TABLE sessions ADD COLUMN remote_control INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
