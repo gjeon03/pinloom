@@ -40,6 +40,13 @@ export type NormalizedEvent =
   | { type: 'final_text_fallback'; text: string }
   // Actual model the agent reported using; stamped on the assistant row.
   | { type: 'model'; model: string }
+  // A user message that arrived from a channel other than the pinloom
+  // UI (currently: the claude.ai bridge in the remote-control adapter).
+  // The runner persists it as a `role: 'user'` message so pinloom's
+  // conversation history mirrors what the bridge worker actually saw.
+  // Local adapter never emits this — pinloom UI input is already
+  // persisted in routes/sessions.ts before runAssistant runs.
+  | { type: 'inbound_user_message'; text: string }
   // Adapter-level failure (credential lookup, bridge connect, auth 401,
   // conflict, network). Surfaced as a `role: system` message so the
   // model can't mistake it for something the assistant said on the
