@@ -58,6 +58,27 @@ become visible to the LLM.
 - 2-space indent (JS/TS/JSON/YAML)
 - DB: SQLite WAL mode, `data/pinloom.sqlite`
 
+## Remote control (experimental)
+
+`PINLOOM_REMOTE_CONTROL=1` routes every Claude session through
+`runAssistantWorker` (alpha API from `@anthropic-ai/claude-agent-sdk/assistant`),
+which bridges the worker to claude.ai mobile/web. Each session shows up as
+a worker on claude.ai and accepts prompts from both pinloom UI and the
+claude.ai client. Off by default; flip the env var and restart backend.
+
+Credentials are read from Claude Code's existing login (macOS Keychain
+`Claude Code-credentials`, or `~/.claude/.credentials.json` on
+Linux/Windows, or `CLAUDE_CODE_OAUTH_TOKEN` env). The org UUID is read
+from `~/.claude.json` (`oauthAccount.organizationUuid`). No separate
+OAuth flow — `claude login` once and pinloom inherits.
+
+Limitations in this MVP:
+- Stateless: every backend restart spins up a fresh bridge (PR 2 will
+  add SQLite persistence + `perpetual: true` reconnect).
+- No per-session toggle (PR 3 will add UI).
+- Resuming an existing Claude session over the bridge isn't yet wired
+  up — new sessions are recommended after flipping the flag.
+
 ## Teams workflow
 
 A team groups one orchestrator chat with N worker chats. The orchestrator
