@@ -106,11 +106,19 @@ interface SdkAssistantMessage {
 }
 
 interface SdkUserMessage {
-  content?: Array<{
-    type: string;
-    content?: unknown;
-    is_error?: boolean;
-  }>;
+  // `string` covers bridge inbound prompts (claude.ai). SDK echoes them
+  // verbatim as `message.content = "<text>"` (see assistant.mjs:
+  // `X.write({type:'user', message:{role:'user', content: YA.content}})`
+  // where YA.content is `InboundPrompt.content: string | unknown[]`).
+  // Local user turns always arrive as a block array carrying tool_result.
+  content?:
+    | string
+    | Array<{
+        type: string;
+        text?: string;
+        content?: unknown;
+        is_error?: boolean;
+      }>;
 }
 
 interface SdkStreamEvent {
@@ -202,13 +210,23 @@ function* convertSdkMessage(
 
   if (anyMsg.type === 'user') {
     const usr = anyMsg.message as SdkUserMessage | undefined;
-    const content = usr?.content ?? [];
-    // The local adapter only ever sees `tool_result` blocks in SDK
-    // user messages, because pinloom UI input is persisted in
-    // routes/sessions.ts before the adapter runs. In the remote
-    // adapter, claude.ai inbound prompts ALSO arrive as SDK user
-    // messages — but with text content. Capture those so the
-    // pinloom-side history isn't missing half the conversation.
+    const rawContent = usr?.content;
+
+    // Bridge inbound: claude.ai prompts arrive with `content` as a
+    // plain string (SDK echoes `InboundPrompt.content` verbatim — see
+    // SdkUserMessage comment above). Surface as an inbound_user_message
+    // so the runner persists a `role: 'user'` row in pinloom.
+    if (typeof rawContent === 'string') {
+      if (rawContent.length > 0) {
+        yield { type: 'inbound_user_message', text: rawContent };
+      }
+      return;
+    }
+
+    // Block-array form: tool_result (always) plus any text blocks
+    // (claude.ai may also send block-encoded content; keep both paths
+    // covered so this doesn't regress when the SDK changes encoding).
+    const content = rawContent ?? [];
     let inboundText = '';
     for (const block of content) {
       if (block.type === 'tool_result') {
@@ -221,7 +239,7 @@ function* convertSdkMessage(
           };
         }
       } else if (block.type === 'text') {
-        const t = (block as { text?: unknown }).text;
+        const t = block.text;
         if (typeof t === 'string') inboundText += t;
       }
     }
