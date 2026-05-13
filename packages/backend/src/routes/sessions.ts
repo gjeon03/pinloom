@@ -67,6 +67,7 @@ interface SessionRow {
   // Legacy column kept in sync with agent_session_id; will be dropped later.
   claude_session_id: string | null;
   title: string | null;
+  remote_control: number;
   next_image_number: number;
   last_synced_message_id: string | null;
   created_at: string;
@@ -101,6 +102,7 @@ export function toSession(row: SessionRow): Session {
     agentSessionId,
     claudeSessionId: agentSessionId,
     title: row.title,
+    remoteControl: row.remote_control === 1,
     nextImageNumber: row.next_image_number,
     lastSyncedMessageId: row.last_synced_message_id,
     createdAt: row.created_at,
@@ -180,16 +182,23 @@ export async function sessionRoutes(app: FastifyInstance) {
       )
       .get(req.params.projectId) as { max: number };
     const nextOrder = maxRow.max + 1;
+    // Default remote_control from PINLOOM_REMOTE_CONTROL env var (PR 1
+    // global) for newly-created sessions, only for Claude. Codex
+    // sessions ignore the flag entirely. Users can flip per-session
+    // afterwards via PATCH.
+    const defaultRemote =
+      agent === 'claude' && process.env.PINLOOM_REMOTE_CONTROL === '1' ? 1 : 0;
     db.prepare(
       `INSERT INTO sessions
-         (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+         (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, remote_control, order_index, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       req.params.projectId,
       req.body.planId ?? null,
       agent,
       req.body.title ?? null,
+      defaultRemote,
       nextOrder,
       now,
       now,
@@ -532,15 +541,25 @@ export async function sessionRoutes(app: FastifyInstance) {
 
   app.patch<{
     Params: { sessionId: string };
-    Body: { title?: string | null };
+    Body: { title?: string | null; remoteControl?: boolean };
   }>('/api/sessions/:sessionId', async (req) => {
-    const { title } = req.body;
     const now = new Date().toISOString();
-    db.prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?').run(
-      title ?? null,
-      now,
-      req.params.sessionId,
-    );
+    // Use 'in' so the caller can intentionally clear `title` (to null)
+    // without that being read as "left unspecified". `remoteControl` is
+    // a boolean toggle; missing means "don't touch". The flag applies
+    // to the next turn — an in-flight run keeps its current adapter.
+    const sets: string[] = ['updated_at = ?'];
+    const values: unknown[] = [now];
+    if ('title' in req.body) {
+      sets.push('title = ?');
+      values.push(req.body.title ?? null);
+    }
+    if ('remoteControl' in req.body) {
+      sets.push('remote_control = ?');
+      values.push(req.body.remoteControl ? 1 : 0);
+    }
+    values.push(req.params.sessionId);
+    db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...values);
     const row = db
       .prepare('SELECT * FROM sessions WHERE id = ?')
       .get(req.params.sessionId) as SessionRow;

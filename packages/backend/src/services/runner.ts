@@ -965,6 +965,13 @@ interface AttemptResult {
   // from `signal.reason instanceof SilentCancelled`. runAssistant uses
   // this to suppress the chat-visible "[cancelled by user]" row + error.
   silent: boolean;
+  // True when the attempt ended because the adapter surfaced an
+  // `adapter_error` event (credential / bridge connect / auth-401 /
+  // conflict). The error has already been persisted as a system
+  // message and broadcast as a run_status:error; the caller should
+  // skip the cancelled-by-user branch (this is NOT a user cancel)
+  // and the finished broadcast (the run is over).
+  adapterErrored?: boolean;
 }
 
 // Resolve the bundled MCP server entry once at module load. createRequire
@@ -1087,6 +1094,7 @@ async function runAttempt(
   }
 
   let attemptError: unknown = null;
+  let adapterErrored = false;
 
   try {
     for await (const ev of agentRun.events as AsyncIterable<NormalizedEvent>) {
@@ -1224,6 +1232,37 @@ async function runAttempt(
         case 'model':
           if (!streamModel) streamModel = ev.model;
           break;
+        case 'adapter_error': {
+          // Adapter-layer failure (credential, bridge auth/conflict,
+          // network). Close any in-flight assistant stream first so the
+          // error doesn't get appended to an unfinished message, then
+          // persist as a system message — `persistMessage` already
+          // broadcasts the `message` event, we just add a run_status
+          // so the UI can show an error banner. This is the dedicated
+          // channel that replaces PR 1's "[remote-control] …" via
+          // final_text_fallback workaround.
+          //
+          // Set `adapterErrored` so the caller skips the
+          // cancelled-by-user branch (the adapter MUST NOT abort the
+          // controller — abort means user-initiated cancel). The
+          // for-await loop will end naturally when the adapter closes
+          // its event queue.
+          closeStream();
+          persistMessage({
+            sessionId: ctx.id,
+            planItemId: active.currentPlanItemId,
+            role: 'system',
+            content: `[adapter:${ev.kind}] ${ev.detail}`,
+          });
+          broadcast(`session:${ctx.id}`, {
+            type: 'run_status',
+            sessionId: ctx.id,
+            status: 'error',
+            error: `${ev.kind}: ${ev.detail}`,
+          });
+          adapterErrored = true;
+          break;
+        }
       }
     }
   } catch (err) {
@@ -1247,6 +1286,17 @@ async function runAttempt(
     emitWorkerStatusIfMember(ctx.id);
   }
 
+  if (adapterErrored) {
+    // Adapter surfaced its own failure event; the system message and
+    // run_status:error are already out. Don't double-report via the
+    // cancelled-by-user or runAssistant catch paths.
+    return {
+      shouldFallback: false,
+      cancelled: false,
+      silent: false,
+      adapterErrored: true,
+    };
+  }
   if (abortController.signal.aborted) {
     return {
       shouldFallback: false,
@@ -1378,6 +1428,12 @@ async function runAssistant(
       );
     }
 
+    if (result.adapterErrored) {
+      // Adapter already persisted a [adapter:kind] system message and
+      // broadcast run_status:error. The run is over; skip the finished
+      // broadcast at the bottom of the try block.
+      return;
+    }
     if (result.cancelled) {
       // Silent cancel = orchestrator interrupted us to splice in queued
       // messages. The replacement run is already starting; suppress chat

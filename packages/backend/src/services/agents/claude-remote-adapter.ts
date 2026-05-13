@@ -17,7 +17,11 @@
 import { runAssistantWorker } from '@anthropic-ai/claude-agent-sdk/assistant';
 import type { ImageInput, ImageMediaType } from '../runner-types.js';
 import { UserPromptStream } from './message-stream.js';
-import { loadRemoteCredentials, CredentialError } from './claude-remote-credentials.js';
+import {
+  loadRemoteCredentials,
+  invalidateRemoteCredentials,
+  CredentialError,
+} from './claude-remote-credentials.js';
 import { createWorkerStateAdapter } from './claude-remote-state.js';
 import type {
   AgentAdapter,
@@ -327,15 +331,29 @@ class ClaudeRemoteAdapterImpl implements AgentAdapter {
     };
     let handle: WorkerHandleMin | undefined;
 
-    function fail(reason: string) {
-      // Don't push synthetic assistant text — the runner would persist it
-      // and the model would read it back on the next turn as if the
-      // assistant said it. Instead just log and abort; the runner's
-      // attemptError path turns abort into a `[runner error]` system
-      // message, which is the correct surface for adapter failures.
+    function fail(
+      kind: 'auth' | 'conflict' | 'network' | 'credential' | 'unknown',
+      reason: string,
+    ) {
       // eslint-disable-next-line no-console
-      console.error(`[claude-remote] ${reason}`);
-      args.abortController.abort();
+      console.error(`[claude-remote:${kind}] ${reason}`);
+      // Push a typed adapter_error event before closing so the runner
+      // can persist it as a system message (role: 'system'), keeping
+      // it out of the assistant transcript the next turn would
+      // otherwise read back as context.
+      //
+      // Deliberately DO NOT call `args.abortController.abort()` here —
+      // that signal is reserved for user-initiated cancel, and the
+      // runner uses it to decide whether to write a "[cancelled by
+      // user]" row. An adapter-level failure should look like an
+      // error, not a cancellation. If the bridge worker is up, tear
+      // it down so its internal wait can resolve.
+      eventQueue.push({ type: 'adapter_error', kind, detail: reason });
+      if (handle) {
+        void handle.teardown().catch(() => {
+          // best-effort
+        });
+      }
       eventQueue.close();
     }
 
@@ -350,7 +368,7 @@ class ClaudeRemoteAdapterImpl implements AgentAdapter {
             : err instanceof Error
               ? err.message
               : String(err);
-        fail(`credential lookup failed: ${detail}`);
+        fail('credential', detail);
         return;
       }
 
@@ -375,7 +393,12 @@ class ClaudeRemoteAdapterImpl implements AgentAdapter {
       const result = await runAssistantWorker({
         bridge: {
           dir: args.cwd,
-          getAccessToken: () => credentials.accessToken,
+          // Re-resolve through the cache rather than capturing the
+          // initial value — `onAuth401` calls `invalidateRemoteCredentials`,
+          // and the SDK's automatic retry needs the *next* getAccessToken
+          // call to return a fresh token. Closing over `credentials`
+          // would feed the same stale string back on retry.
+          getAccessToken: () => loadRemoteCredentials().accessToken,
           baseUrl: BASE_API_URL,
           orgUUID: credentials.orgUUID,
           model: args.model ?? 'claude-sonnet-4-5',
@@ -386,6 +409,29 @@ class ClaudeRemoteAdapterImpl implements AgentAdapter {
           // into SQLite), a backend restart lands on the same
           // claude.ai worker the user was already chatting with.
           perpetual: true,
+          // Token rotated since we last cached it — drop the cache and
+          // let the next bridge connect re-read from keychain (Claude
+          // Code refreshes it in the background). Return true to tell
+          // the SDK to retry with the new token.
+          onAuth401: async () => {
+            invalidateRemoteCredentials();
+            return true;
+          },
+          // claude.ai detected another machine already holding this
+          // env+session. Abort with a typed error rather than silently
+          // stealing — the user can resolve manually (sign out
+          // elsewhere, or rename / recreate the session). Also push
+          // the machine name through `adapter_error` so the user can
+          // see WHICH other machine; otherwise `onConflict` provides
+          // no UI signal and the whole callback is wasted.
+          onConflict: async (detail) => {
+            eventQueue.push({
+              type: 'adapter_error',
+              kind: 'conflict',
+              detail: `another machine "${detail.machineName}" already holds this session: ${detail.message}`,
+            });
+            return 'abort';
+          },
         },
         // SDK accepts undefined as "run stateless" — no need for a
         // conditional spread.
@@ -428,7 +474,18 @@ class ClaudeRemoteAdapterImpl implements AgentAdapter {
       });
 
       if (!result.ok) {
-        fail(`bridge connect failed (${result.error.kind}): ${result.error.detail}`);
+        // SDK error kinds map 1:1 to our adapter_error kinds; cast the
+        // discriminant after a narrow whitelist check so a future SDK
+        // addition doesn't silently fall through as 'unknown' details.
+        const kind: 'auth' | 'conflict' | 'network' | 'unknown' =
+          result.error.kind === 'auth'
+            ? 'auth'
+            : result.error.kind === 'conflict'
+              ? 'conflict'
+              : result.error.kind === 'network'
+                ? 'network'
+                : 'unknown';
+        fail(kind, result.error.detail);
         return;
       }
 
@@ -453,7 +510,7 @@ class ClaudeRemoteAdapterImpl implements AgentAdapter {
 
     setup().catch((err) => {
       const detail = err instanceof Error ? err.message : String(err);
-      fail(`setup error: ${detail}`);
+      fail('unknown', `setup error: ${detail}`);
     });
 
     return {
