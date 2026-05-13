@@ -1030,6 +1030,7 @@ async function runAttempt(
     abortController,
     initialPrompt: { text: prompt, images },
     mcpServers,
+    sessionId: ctx.id,
   });
 
   const active: ActiveRun = {

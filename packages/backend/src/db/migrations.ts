@@ -296,6 +296,27 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE teams ADD COLUMN instructions TEXT;
     `,
   },
+  {
+    id: 20,
+    // Persist the SDK's WorkerState for each remote-control-enabled
+    // session so a backend restart can resume the same bridge worker
+    // (perpetual: true reuses env + session id via bridge-pointer.json
+    // on the SDK side; this table is the pinloom-side mirror the SDK
+    // asks us to manage). One row per session. We do NOT overload
+    // `sessions.claude_session_id` — that column carries the local
+    // adapter's resume token, which has different ownership semantics
+    // than the bridge worker's session id.
+    sql: `
+      CREATE TABLE IF NOT EXISTS bridge_state (
+        session_id          TEXT PRIMARY KEY,
+        bridge_session_id   TEXT,
+        claude_session_id   TEXT,
+        last_sse_seq        INTEGER,
+        updated_at          TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

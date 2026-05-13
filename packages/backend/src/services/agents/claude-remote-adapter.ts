@@ -18,6 +18,7 @@ import { runAssistantWorker } from '@anthropic-ai/claude-agent-sdk/assistant';
 import type { ImageInput, ImageMediaType } from '../runner-types.js';
 import { UserPromptStream } from './message-stream.js';
 import { loadRemoteCredentials, CredentialError } from './claude-remote-credentials.js';
+import { createWorkerStateAdapter } from './claude-remote-state.js';
 import type {
   AgentAdapter,
   AgentRun,
@@ -361,6 +362,16 @@ class ClaudeRemoteAdapterImpl implements AgentAdapter {
         return;
       }
 
+      // Persist worker state per pinloom session so backend restart
+      // resumes the same bridge worker instead of spawning a new one
+      // on claude.ai. `sessionId` is optional on AgentRunArgs but the
+      // remote adapter only makes sense with one — fall back to a
+      // stateless adapter if a caller ever omits it (test harnesses
+      // do, today).
+      const stateAdapter = args.sessionId
+        ? createWorkerStateAdapter(args.sessionId)
+        : undefined;
+
       const result = await runAssistantWorker({
         bridge: {
           dir: args.cwd,
@@ -369,7 +380,16 @@ class ClaudeRemoteAdapterImpl implements AgentAdapter {
           orgUUID: credentials.orgUUID,
           model: args.model ?? 'claude-sonnet-4-5',
           name: deriveWorkerName(args),
+          // perpetual=true tells the SDK to reuse the env+session
+          // recorded in bridge-pointer.json across restarts. Combined
+          // with our stateAdapter (which mirrors the SDK's WorkerState
+          // into SQLite), a backend restart lands on the same
+          // claude.ai worker the user was already chatting with.
+          perpetual: true,
         },
+        // SDK accepts undefined as "run stateless" — no need for a
+        // conditional spread.
+        stateAdapter,
         // Spread `base` so the SDK-injected canUseTool survives, then
         // layer the pinloom-side options that match the local adapter.
         // `cwd` is set explicitly (not just via bridge.dir) so tool

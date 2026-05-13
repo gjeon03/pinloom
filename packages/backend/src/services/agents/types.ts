@@ -64,6 +64,10 @@ export interface AgentRunArgs {
    *  (e.g. "pinloom"). Only set for orchestrator sessions; workers run
    *  with vanilla agent config. */
   mcpServers?: Record<string, McpStdioServerConfig>;
+  /** Pinloom session id. Optional because local adapters don't need it,
+   *  but the remote-control adapter scopes its WorkerStateAdapter to
+   *  this id so a backend restart can resume the same bridge worker. */
+  sessionId?: string;
 }
 
 export interface AgentRun {
