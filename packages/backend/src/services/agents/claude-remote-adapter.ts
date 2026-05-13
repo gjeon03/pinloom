@@ -1,0 +1,461 @@
+// Remote-control variant of the Claude adapter. Wraps
+// `runAssistantWorker` from @anthropic-ai/claude-agent-sdk/assistant so the
+// worker is exposed on claude.ai via the Anthropic bridge.
+//
+// Wiring:
+//   - Pinloom local UI input → `handle.pushPrompt(content)` (skips bridge)
+//   - claude.ai remote input  → bridge forwards into the worker for us
+//   - All outbound SDK messages → `transformOutbound` callback, which we
+//     convert to pinloom's NormalizedEvent stream and feed back into the
+//     runner so chat history is persisted the same way as the local
+//     adapter.
+//
+// Selection: runner.ts picks this adapter via agents/index.ts when the
+// session has been marked as remote-control (env-var activation in PR 1;
+// per-session SQLite flag arrives in PR 2/3).
+
+import { runAssistantWorker } from '@anthropic-ai/claude-agent-sdk/assistant';
+import type { ImageInput, ImageMediaType } from '../runner-types.js';
+import { UserPromptStream } from './message-stream.js';
+import { loadRemoteCredentials, CredentialError } from './claude-remote-credentials.js';
+import type {
+  AgentAdapter,
+  AgentRun,
+  AgentRunArgs,
+  NormalizedEvent,
+  UserPrompt,
+} from './types.js';
+
+// ─── prompt content helpers ─────────────────────────────────────────────
+
+interface PromptTextBlock {
+  type: 'text';
+  text: string;
+}
+interface PromptImageBlock {
+  type: 'image';
+  source: { type: 'base64'; media_type: ImageMediaType; data: string };
+}
+type PromptContentBlock = PromptTextBlock | PromptImageBlock;
+
+function buildContentBlocks(text: string, images: ImageInput[]): PromptContentBlock[] {
+  const blocks: PromptContentBlock[] = [];
+  if (text.length > 0) blocks.push({ type: 'text', text });
+  for (const img of images) {
+    blocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+    });
+  }
+  return blocks;
+}
+
+// ─── SDK → NormalizedEvent converter ────────────────────────────────────
+// Mirrors claude-adapter.ts. Deliberately duplicated rather than shared:
+// PR 1 keeps the local adapter completely untouched, and the converter
+// will be extracted into a shared helper in a follow-up refactor once
+// remote-control stabilizes.
+
+function summarizeToolCall(name: string, input: Record<string, unknown>): string {
+  if (typeof input.command === 'string') return `${name}: ${input.command}`;
+  if (typeof input.file_path === 'string') {
+    const extra =
+      typeof input.old_string === 'string'
+        ? ' (edit)'
+        : typeof input.content === 'string'
+          ? ' (write)'
+          : '';
+    return `${name}: ${input.file_path}${extra}`;
+  }
+  if (typeof input.pattern === 'string') return `${name}: ${input.pattern}`;
+  return name;
+}
+
+function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (block && typeof block === 'object' && 'text' in block) {
+          const t = (block as { text?: unknown }).text;
+          if (typeof t === 'string') return t;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
+interface SdkAssistantMessage {
+  id?: string;
+  model?: string;
+  content?: Array<{
+    type: string;
+    text?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+  }>;
+}
+
+interface SdkUserMessage {
+  content?: Array<{
+    type: string;
+    content?: unknown;
+    is_error?: boolean;
+  }>;
+}
+
+interface SdkStreamEvent {
+  type: string;
+  index?: number;
+  delta?: {
+    type?: string;
+    text?: string;
+    partial_json?: string;
+    thinking?: string;
+  };
+  content_block?: { type?: string; text?: string; name?: string; input?: unknown };
+}
+
+interface SdkResultMessage {
+  subtype?: string;
+  result?: string;
+  session_id?: string;
+}
+
+// Per-run text accumulator so result.result can be diffed against deltas.
+interface ConvertState {
+  totalText: string;
+}
+
+function* convertSdkMessage(
+  message: unknown,
+  state: ConvertState,
+): Generator<NormalizedEvent> {
+  const anyMsg = message as {
+    type: string;
+    event?: SdkStreamEvent;
+    message?: SdkAssistantMessage | SdkUserMessage;
+    session_id?: string;
+  };
+
+  if (anyMsg.type === 'stream_event') {
+    const ev = anyMsg.event;
+    if (!ev) return;
+    if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+      const delta = ev.delta.text ?? '';
+      if (delta) {
+        state.totalText += delta;
+        yield { type: 'text_delta', text: delta };
+      }
+    } else if (
+      ev.type === 'content_block_delta' &&
+      ev.delta?.type === 'thinking_delta'
+    ) {
+      const delta = ev.delta.thinking ?? '';
+      if (delta) yield { type: 'thinking_delta', text: delta };
+    } else if (
+      ev.type === 'content_block_start' &&
+      ev.content_block?.type === 'thinking'
+    ) {
+      yield { type: 'thinking_start' };
+    } else if (
+      ev.type === 'content_block_start' &&
+      ev.content_block?.type === 'tool_use'
+    ) {
+      yield { type: 'text_block_end' };
+    } else if (ev.type === 'message_stop') {
+      yield { type: 'text_block_end' };
+    }
+    return;
+  }
+
+  if (anyMsg.type === 'assistant') {
+    if (anyMsg.session_id) {
+      yield { type: 'session_id', id: anyMsg.session_id };
+    }
+    const asst = anyMsg.message as SdkAssistantMessage | undefined;
+    if (asst?.model) yield { type: 'model', model: asst.model };
+    const content = asst?.content ?? [];
+    for (const block of content) {
+      if (block.type === 'tool_use') {
+        const input = (block.input ?? {}) as Record<string, unknown>;
+        const name = block.name ?? 'tool';
+        yield {
+          type: 'tool_use',
+          name,
+          input,
+          summary: summarizeToolCall(name, input),
+        };
+      }
+    }
+    return;
+  }
+
+  if (anyMsg.type === 'user') {
+    const usr = anyMsg.message as SdkUserMessage | undefined;
+    const content = usr?.content ?? [];
+    for (const block of content) {
+      if (block.type === 'tool_result') {
+        const text = toolResultText(block.content);
+        if (text) {
+          yield {
+            type: 'tool_result',
+            text,
+            stream: block.is_error ? 'stderr' : 'stdout',
+          };
+        }
+      }
+    }
+    return;
+  }
+
+  if (anyMsg.type === 'result') {
+    const result = message as SdkResultMessage;
+    if (result.session_id) {
+      yield { type: 'session_id', id: result.session_id };
+    }
+    if (
+      result.subtype === 'success' &&
+      result.result &&
+      result.result.length > state.totalText.length
+    ) {
+      const tail = result.result.slice(state.totalText.length);
+      state.totalText += tail;
+      yield { type: 'final_text_fallback', text: tail };
+    }
+    state.totalText = '';
+    yield { type: 'turn_complete' };
+  }
+}
+
+// ─── push/pull adapter for transformOutbound → AsyncIterable ────────────
+
+class AsyncEventQueue<T> {
+  private values: T[] = [];
+  private resolvers: Array<(v: IteratorResult<T>) => void> = [];
+  private closed = false;
+
+  push(v: T): void {
+    if (this.closed) return;
+    const next = this.resolvers.shift();
+    if (next) {
+      next({ value: v, done: false });
+    } else {
+      this.values.push(v);
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    while (this.resolvers.length > 0) {
+      const r = this.resolvers.shift();
+      r?.({ value: undefined as unknown as T, done: true });
+    }
+  }
+
+  iterator(): AsyncGenerator<T> {
+    const self = this;
+    return (async function* () {
+      while (true) {
+        if (self.values.length > 0) {
+          yield self.values.shift() as T;
+          continue;
+        }
+        if (self.closed) return;
+        const next = await new Promise<IteratorResult<T>>((resolve) => {
+          self.resolvers.push(resolve);
+        });
+        if (next.done) return;
+        yield next.value;
+      }
+    })();
+  }
+}
+
+// ─── adapter ────────────────────────────────────────────────────────────
+
+const BASE_API_URL = 'https://api.anthropic.com';
+
+function deriveWorkerName(args: AgentRunArgs): string {
+  // claude.ai shows this as the worker label. Keep it short and stable —
+  // the first line of systemPrompt is usually the orchestrator / role
+  // header which makes a reasonable name. Fall back to a generic label.
+  const firstLine = args.systemPrompt.split('\n').find((l) => l.trim().length > 0);
+  if (firstLine && firstLine.length > 0) {
+    const clean = firstLine.replace(/[#*`]/g, '').trim();
+    return clean.length > 60 ? `${clean.slice(0, 57)}…` : clean;
+  }
+  return 'pinloom-worker';
+}
+
+// Build a log callback that defensively redacts the access token, in case
+// the SDK ever surfaces a request URL or header containing it.
+function makeRedactingLogger(accessToken: string): (msg: string) => void {
+  const needle = accessToken.length > 8 ? accessToken : null;
+  return (msg: string) => {
+    const safe = needle && msg.includes(needle) ? msg.split(needle).join('[redacted]') : msg;
+    // eslint-disable-next-line no-console
+    console.log(`[claude-remote] ${safe}`);
+  };
+}
+
+class ClaudeRemoteAdapterImpl implements AgentAdapter {
+  readonly name = 'claude' as const;
+  // Remote-control sessions don't carry a pinloom-side resume token —
+  // the SDK manages claudeSessionId/SSE seq inside its bridge worker.
+  // See AgentAdapter.supportsResume in types.ts for why this matters
+  // (runner skips its stale-resume fallback ladder for us).
+  readonly supportsResume = false as const;
+
+  run(args: AgentRunArgs): AgentRun {
+    const promptStream = new UserPromptStream();
+    promptStream.push(args.initialPrompt);
+
+    const eventQueue = new AsyncEventQueue<NormalizedEvent>();
+    const convertState: ConvertState = { totalText: '' };
+
+    type WorkerHandleMin = {
+      pushPrompt(content: PromptContentBlock[] | string): void;
+      teardown(): Promise<void>;
+      done: Promise<void>;
+    };
+    let handle: WorkerHandleMin | undefined;
+
+    function fail(reason: string) {
+      // Don't push synthetic assistant text — the runner would persist it
+      // and the model would read it back on the next turn as if the
+      // assistant said it. Instead just log and abort; the runner's
+      // attemptError path turns abort into a `[runner error]` system
+      // message, which is the correct surface for adapter failures.
+      // eslint-disable-next-line no-console
+      console.error(`[claude-remote] ${reason}`);
+      args.abortController.abort();
+      eventQueue.close();
+    }
+
+    async function setup() {
+      let credentials: { accessToken: string; orgUUID: string };
+      try {
+        credentials = loadRemoteCredentials();
+      } catch (err) {
+        const detail =
+          err instanceof CredentialError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        fail(`credential lookup failed: ${detail}`);
+        return;
+      }
+
+      // Honor an abort that landed between adapter.run() returning and
+      // setup() reaching here — otherwise we'd kick off a bridge connect
+      // we already promised to skip.
+      if (args.abortController.signal.aborted) {
+        eventQueue.close();
+        return;
+      }
+
+      const result = await runAssistantWorker({
+        bridge: {
+          dir: args.cwd,
+          getAccessToken: () => credentials.accessToken,
+          baseUrl: BASE_API_URL,
+          orgUUID: credentials.orgUUID,
+          model: args.model ?? 'claude-sonnet-4-5',
+          name: deriveWorkerName(args),
+        },
+        // Spread `base` so the SDK-injected canUseTool survives, then
+        // layer the pinloom-side options that match the local adapter.
+        // `cwd` is set explicitly (not just via bridge.dir) so tool
+        // execution lands in the project directory even if the SDK ever
+        // changes how it derives cwd from bridge config.
+        buildQueryOptions: (base) => {
+          const options: Record<string, unknown> = {
+            ...(base as unknown as Record<string, unknown>),
+            cwd: args.cwd,
+            systemPrompt: args.systemPrompt,
+            permissionMode: 'bypassPermissions',
+            allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(command:*)'],
+            settingSources: ['user', 'project'],
+            includePartialMessages: true,
+            thinking: { type: 'adaptive' },
+          };
+          if (args.mcpServers) options.mcpServers = args.mcpServers;
+          if (args.model) options.model = args.model;
+          // PR 2 will wire WorkerStateAdapter so the SDK can resume
+          // its own claudeSessionId across backend restarts; for PR 1
+          // every restart starts a fresh bridge session.
+          return options as Parameters<typeof runAssistantWorker>[0]['buildQueryOptions'] extends (
+            base: infer _B,
+          ) => infer R | Promise<infer R>
+            ? R
+            : never;
+        },
+        transformOutbound: (msg) => {
+          for (const ev of convertSdkMessage(msg, convertState)) {
+            eventQueue.push(ev);
+          }
+          return msg;
+        },
+        signal: args.abortController.signal,
+        log: makeRedactingLogger(credentials.accessToken),
+      });
+
+      if (!result.ok) {
+        fail(`bridge connect failed (${result.error.kind}): ${result.error.detail}`);
+        return;
+      }
+
+      handle = result.handle as unknown as WorkerHandleMin;
+
+      try {
+        for await (const p of promptStream) {
+          const content = buildContentBlocks(p.text, p.images);
+          handle.pushPrompt(content);
+        }
+        // promptStream exhausted (runner called close()) — explicitly tear
+        // down the bridge so handle.done resolves. Without this the await
+        // below hangs forever and the run leaks.
+        await handle.teardown().catch(() => {
+          // best-effort
+        });
+        await handle.done;
+      } finally {
+        eventQueue.close();
+      }
+    }
+
+    setup().catch((err) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      fail(`setup error: ${detail}`);
+    });
+
+    return {
+      events: eventQueue.iterator(),
+      pushMessage(prompt: UserPrompt) {
+        promptStream.push(prompt);
+      },
+      close() {
+        // Abort propagates into the SDK's signal — if connect is still
+        // in flight, the SDK rejects with an abort error, fail() runs,
+        // and the queue closes. If connect already succeeded, handle
+        // teardown finishes the wind-down.
+        args.abortController.abort();
+        promptStream.close();
+        if (handle) {
+          void handle.teardown().catch(() => {
+            // best-effort
+          });
+        }
+      },
+    };
+  }
+}
+
+export const claudeRemoteAdapter: AgentAdapter = new ClaudeRemoteAdapterImpl();

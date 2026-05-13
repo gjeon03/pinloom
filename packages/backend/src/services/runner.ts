@@ -1020,7 +1020,7 @@ async function runAttempt(
   model?: string,
   mcpServers?: Record<string, McpStdioServerConfig>,
 ): Promise<AttemptResult> {
-  const adapter = getAgentAdapter(ctx.agent);
+  const adapter = getAgentAdapter(ctx.agent, ctx.id);
   const abortController = new AbortController();
   const agentRun = adapter.run({
     cwd: ctx.cwd,
@@ -1299,8 +1299,17 @@ async function runAssistant(
 
   let result: AttemptResult = { shouldFallback: false, cancelled: false, silent: false };
 
+  // Adapters that manage their own session lifecycle (remote-control via
+  // the Anthropic bridge) opt out of pinloom's resume + stale-resume
+  // fallback ladder — feeding them a claudeSessionId would either be a
+  // no-op or trigger a fabricated fallback prompt. Resolve the adapter
+  // once here so the decision is consistent within this runAssistant
+  // call.
+  const adapter = getAgentAdapter(ctx.agent, ctx.id);
+  const canResume = adapter.supportsResume !== false;
+
   try {
-    if (ctx.claudeSessionId) {
+    if (ctx.claudeSessionId && canResume) {
       try {
         result = await runAttempt(
           ctx,
@@ -1331,7 +1340,12 @@ async function runAssistant(
       }
     }
 
-    if (!ctx.claudeSessionId && !result.cancelled) {
+    // The second-attempt branch covers three cases:
+    //   1. canResume === false (the adapter opted out — only one attempt
+    //      ever runs, useResume=false; this branch IS that attempt).
+    //   2. ctx.claudeSessionId was null to begin with (fresh session).
+    //   3. The first attempt cleared claudeSessionId via shouldFallback.
+    if ((!ctx.claudeSessionId || !canResume) && !result.cancelled) {
       // Fallback race guard: between the first attempt's deregister and the
       // second attempt's register, an interrupt path may have spliced in a
       // brand-new run for this session (silent-cancel saw nothing in

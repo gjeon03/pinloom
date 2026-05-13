@@ -80,6 +80,17 @@ export interface AgentRun {
 
 export interface AgentAdapter {
   readonly name: 'claude' | 'codex';
+  /**
+   * Whether this adapter can pick up a prior session id via
+   * `AgentRunArgs.resume`. Adapters that manage their own session
+   * lifecycle outside the local Claude/Codex thread space (e.g.
+   * remote-control via the Anthropic bridge) should set this to
+   * `false`; the runner then skips both resume *and* its stale-resume
+   * fallback ladder, which would otherwise corrupt chat state.
+   *
+   * Defaults to `true` if omitted.
+   */
+  readonly supportsResume?: boolean;
   run(args: AgentRunArgs): AgentRun;
 }
 
