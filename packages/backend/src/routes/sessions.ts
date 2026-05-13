@@ -20,6 +20,7 @@ import {
   SessionNotFoundError,
 } from '../services/message-queue.js';
 import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
+import { clearBridgeState } from '../services/agents/claude-remote-state.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
 import { runWikiSync } from '../services/wiki-sync.js';
 
@@ -518,6 +519,12 @@ export async function sessionRoutes(app: FastifyInstance) {
       // producing FK errors and orphan in-memory state.
       cancelAiRun(sessionId);
       cancelExecRun(sessionId);
+      // Drop the bridge worker state ahead of the session row so any
+      // SDK `save()` racing the abort lands on an already-empty row
+      // instead of trying to upsert a row whose parent is about to
+      // vanish. FK CASCADE backs this up, but the explicit clear keeps
+      // the timing predictable and the lifecycle obvious in the route.
+      clearBridgeState(sessionId);
       db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
       return { ok: true };
     },
