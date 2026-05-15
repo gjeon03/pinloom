@@ -39,25 +39,7 @@ export type NormalizedEvent =
   // we accumulated via deltas. Orchestrator appends the missing tail.
   | { type: 'final_text_fallback'; text: string }
   // Actual model the agent reported using; stamped on the assistant row.
-  | { type: 'model'; model: string }
-  // A user message that arrived from a channel other than the pinloom
-  // UI (currently: the claude.ai bridge in the remote-control adapter).
-  // The runner persists it as a `role: 'user'` message so pinloom's
-  // conversation history mirrors what the bridge worker actually saw.
-  // Local adapter never emits this — pinloom UI input is already
-  // persisted in routes/sessions.ts before runAssistant runs.
-  | { type: 'inbound_user_message'; text: string }
-  // Adapter-level failure (credential lookup, bridge connect, auth 401,
-  // conflict, network). Surfaced as a `role: system` message so the
-  // model can't mistake it for something the assistant said on the
-  // next turn. Distinct from `[runner error]` because the failure
-  // happens BEFORE any model interaction — it belongs to the adapter
-  // layer, not the run.
-  | {
-      type: 'adapter_error';
-      kind: 'auth' | 'conflict' | 'network' | 'credential' | 'unknown';
-      detail: string;
-    };
+  | { type: 'model'; model: string };
 
 // Stdio-transport MCP server config — matches what `claude-agent-sdk`
 // expects in its `mcpServers` Options field, and what we render into a
@@ -82,10 +64,6 @@ export interface AgentRunArgs {
    *  (e.g. "pinloom"). Only set for orchestrator sessions; workers run
    *  with vanilla agent config. */
   mcpServers?: Record<string, McpStdioServerConfig>;
-  /** Pinloom session id. Optional because local adapters don't need it,
-   *  but the remote-control adapter scopes its WorkerStateAdapter to
-   *  this id so a backend restart can resume the same bridge worker. */
-  sessionId?: string;
 }
 
 export interface AgentRun {
@@ -102,17 +80,6 @@ export interface AgentRun {
 
 export interface AgentAdapter {
   readonly name: 'claude' | 'codex';
-  /**
-   * Whether this adapter can pick up a prior session id via
-   * `AgentRunArgs.resume`. Adapters that manage their own session
-   * lifecycle outside the local Claude/Codex thread space (e.g.
-   * remote-control via the Anthropic bridge) should set this to
-   * `false`; the runner then skips both resume *and* its stale-resume
-   * fallback ladder, which would otherwise corrupt chat state.
-   *
-   * Defaults to `true` if omitted.
-   */
-  readonly supportsResume?: boolean;
   run(args: AgentRunArgs): AgentRun;
 }
 

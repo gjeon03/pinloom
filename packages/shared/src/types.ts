@@ -51,10 +51,6 @@ export interface Session {
   /** @deprecated mirror of agentSessionId for legacy callers; will be removed. */
   claudeSessionId: string | null;
   title: string | null;
-  /** When true, this session's runs go through the remote-control adapter
-   *  (bridged to claude.ai). Sticky for the session's lifetime — toggling
-   *  applies to the next turn, current in-flight turn keeps its adapter. */
-  remoteControl: boolean;
   nextImageNumber: number;
   lastSyncedMessageId: string | null;
   createdAt: string;

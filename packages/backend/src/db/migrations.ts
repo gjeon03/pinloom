@@ -296,38 +296,6 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE teams ADD COLUMN instructions TEXT;
     `,
   },
-  {
-    id: 20,
-    // Persist the SDK's WorkerState for each remote-control-enabled
-    // session so a backend restart can resume the same bridge worker
-    // (perpetual: true reuses env + session id via bridge-pointer.json
-    // on the SDK side; this table is the pinloom-side mirror the SDK
-    // asks us to manage). One row per session. We do NOT overload
-    // `sessions.claude_session_id` — that column carries the local
-    // adapter's resume token, which has different ownership semantics
-    // than the bridge worker's session id.
-    sql: `
-      CREATE TABLE IF NOT EXISTS bridge_state (
-        session_id          TEXT PRIMARY KEY,
-        bridge_session_id   TEXT,
-        claude_session_id   TEXT,
-        last_sse_seq        INTEGER,
-        updated_at          TEXT NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-      );
-    `,
-  },
-  {
-    id: 21,
-    // Per-session opt-in to remote-control mode. Replaces the env-var
-    // global from PR 1: PINLOOM_REMOTE_CONTROL is now only a default
-    // for newly-created sessions, and each session's choice is sticky
-    // for the rest of its life. NOT NULL DEFAULT 0 so existing rows
-    // backfill to off — there is no tri-state.
-    sql: `
-      ALTER TABLE sessions ADD COLUMN remote_control INTEGER NOT NULL DEFAULT 0;
-    `,
-  },
 ];
 
 export function runMigrations(db: Database.Database) {

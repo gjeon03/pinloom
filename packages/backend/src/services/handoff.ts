@@ -11,7 +11,6 @@ interface SessionRow {
   agent_session_id: string | null;
   claude_session_id: string | null;
   title: string | null;
-  remote_control: number;
   next_image_number: number;
   last_synced_message_id: string | null;
   created_at: string;
@@ -44,7 +43,6 @@ function toSession(row: SessionRow): Session {
     agentSessionId,
     claudeSessionId: agentSessionId,
     title: row.title,
-    remoteControl: row.remote_control === 1,
     nextImageNumber: row.next_image_number,
     lastSyncedMessageId: row.last_synced_message_id,
     createdAt: row.created_at,
@@ -125,22 +123,19 @@ export function handoffFromSession(sourceSessionId: string): Session {
   const nextOrder = maxOrder.max + 1;
 
   // Inherit the source session's agent — handoffs continue the same kind
-  // of conversation, just with fresh context. Inherit remote_control for
-  // the same reason: a user who handed off a claude.ai-bridged session
-  // expects the new one to also be on the bridge.
+  // of conversation, just with fresh context.
   const sourceAgent = (source as SessionRow).agent === 'codex' ? 'codex' : 'claude';
   db.prepare(
     `INSERT INTO sessions
        (id, project_id, plan_id, agent, claude_session_id, agent_session_id,
-        title, remote_control, order_index, source_session_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+        title, order_index, source_session_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
   ).run(
     newId,
     source.project_id,
     source.plan_id,
     sourceAgent,
     title,
-    source.remote_control,
     nextOrder,
     sourceSessionId,
     now,

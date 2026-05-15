@@ -2,8 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
-  Cloud,
-  CloudOff,
   Crown,
   ExternalLink,
   FolderInput,
@@ -398,15 +396,6 @@ export function SessionTabs({
             >
               <AgentBadge agent={s.agent} size="xs" />
               <TeamRoleBadge role={rolesBySessionId.get(s.id) ?? null} />
-              {s.remoteControl && (
-                <span
-                  title="Bridged to claude.ai (remote control)"
-                  className="flex items-center gap-0.5 px-1.5 rounded-full text-[9px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-accent)] shrink-0"
-                >
-                  <Cloud size={9} />
-                  remote
-                </span>
-              )}
               {editing ? (
                 <input
                   autoFocus
@@ -421,30 +410,6 @@ export function SessionTabs({
                 />
               ) : (
                 <span className="truncate max-w-[180px]">{label}</span>
-              )}
-              {s.agent === 'claude' && !s.remoteControl && (
-                // Direct toggle for the OFF state — surfaces on hover so
-                // the bridge feature is discoverable without diving into
-                // the overflow menu. ON state is handled via the pill
-                // badge + the menu item (we don't show a "turn off"
-                // hover button to avoid two competing affordances on the
-                // same tab).
-                <button
-                  type="button"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    try {
-                      const updated = await api.setRemoteControl(s.id, true);
-                      onRename(updated);
-                    } catch (err) {
-                      setError(err instanceof Error ? err.message : String(err));
-                    }
-                  }}
-                  title="Bridge this session to claude.ai"
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded transition-opacity text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-                >
-                  <Cloud size={12} />
-                </button>
               )}
               <button
                 type="button"
@@ -752,42 +717,6 @@ export function SessionTabs({
                     </>
                   );
                 })()}
-              {session && session.agent === 'claude' && (
-                <>
-                  <div className="my-1 border-t border-[var(--color-border)]/50" />
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const target = session;
-                      setTabMenu(null);
-                      try {
-                        const updated = await api.setRemoteControl(
-                          target.id,
-                          !target.remoteControl,
-                        );
-                        onRename(updated);
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : String(err));
-                      }
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
-                  >
-                    {session.remoteControl ? (
-                      <CloudOff size={12} />
-                    ) : (
-                      <Cloud size={12} />
-                    )}
-                    <span className="flex-1">
-                      {session.remoteControl
-                        ? 'Disable remote control'
-                        : 'Enable remote control'}
-                      <span className="ml-1 text-[10px] text-[var(--color-ink-muted)]">
-                        (claude.ai bridge)
-                      </span>
-                    </span>
-                  </button>
-                </>
-              )}
               {canDelete && session && (
                 <>
                   <div className="my-1 border-t border-[var(--color-border)]/50" />
