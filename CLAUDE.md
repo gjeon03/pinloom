@@ -58,42 +58,6 @@ become visible to the LLM.
 - 2-space indent (JS/TS/JSON/YAML)
 - DB: SQLite WAL mode, `data/pinloom.sqlite`
 
-## Remote control (experimental)
-
-Bridges a Claude session to claude.ai mobile/web via `runAssistantWorker`
-(alpha API from `@anthropic-ai/claude-agent-sdk/assistant`). When
-enabled, the session shows up as a worker on claude.ai and accepts
-prompts from both pinloom UI and the claude.ai client.
-
-**Activation (per-session)**: each session has a `remote_control` flag.
-Toggle it from the tab actions menu ("Enable / Disable remote control").
-`PINLOOM_REMOTE_CONTROL=1` env-var becomes the default for newly-created
-sessions; existing sessions keep their stored value.
-
-**Credentials**: read from Claude Code's existing login (macOS Keychain
-`Claude Code-credentials`, or `~/.claude/.credentials.json` on
-Linux/Windows, or `CLAUDE_CODE_OAUTH_TOKEN` env). The org UUID comes
-from `~/.claude.json` (`oauthAccount.organizationUuid`). No separate
-OAuth flow — `claude login` once and pinloom inherits. Module-scope
-cache; invalidates on 401 from the bridge.
-
-**Persistence**: `bridge_state` table mirrors the SDK's `WorkerState`
-(`bridgeSessionId`, `claudeSessionId`, `lastSSESequenceNum`).
-`runAssistantWorker` runs with `perpetual: true`, so a backend restart
-reconnects to the same claude.ai worker the user was already chatting
-with. Session deletion cascades the row out.
-
-**Errors**: credential lookup / bridge connect / auth-401 /
-conflict-409 surface as a `role: system` message
-(`[adapter:<kind>] …`) plus a `run_status: error` event. The adapter
-never writes synthetic assistant text, so the model can't read its own
-failure back as context on a future turn.
-
-**Known limitations**:
-- Resuming a local-adapter session over the bridge isn't supported —
-  enable remote control on a fresh session.
-- Alpha SDK surface; signatures may shift in minor SDK versions.
-
 ## Teams workflow
 
 A team groups one orchestrator chat with N worker chats. The orchestrator
