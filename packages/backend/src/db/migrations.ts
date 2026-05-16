@@ -296,6 +296,21 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE teams ADD COLUMN instructions TEXT;
     `,
   },
+  // Note: ids 20 and 21 were used by the remote-control feature that
+  // was reverted in PR #80. Some developer DBs may still have those
+  // entries in `schema_migrations`; we skip to 22 to avoid collision.
+  {
+    id: 22,
+    // Composite index for (session_id, created_at) so paginated reads
+    // (`SELECT … WHERE session_id = ? ORDER BY created_at`) can serve
+    // ORDER BY from the index without a temp B-tree sort. Hot paths:
+    // listMessages (UI initial fetch), loadRecentHistory (resume
+    // fallback), and queue-drain reads.
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_messages_session_created
+        ON messages(session_id, created_at);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

@@ -1016,6 +1016,7 @@ async function runAttempt(
   images: ImageInput[],
   initialPlanItemId: string | null,
   systemPrompt: string,
+  systemPromptDynamic: string,
   useResume: boolean,
   model?: string,
   mcpServers?: Record<string, McpStdioServerConfig>,
@@ -1025,6 +1026,7 @@ async function runAttempt(
   const agentRun = adapter.run({
     cwd: ctx.cwd,
     systemPrompt,
+    systemPromptDynamic,
     model,
     resume: useResume ? ctx.claudeSessionId : null,
     abortController,
@@ -1280,11 +1282,24 @@ async function runAssistant(
   // builders never both produce content for the same systemPrompt.
   const teamContext = buildTeamContext(ctx.id);
   const workerInstructionsContext = buildWorkerInstructionsContext(ctx.id);
+
+  // Split for the Claude SDK's prompt cache: the static prefix stays
+  // identical turn after turn for a given session, so the SDK can serve
+  // it from the prompt cache; the dynamic suffix mutates with plan
+  // edits, pin add/remove, and team changes and is the only part that
+  // gets re-cached. Codex concatenates them back together internally
+  // (see codex-adapter.ts).
+  //
+  // Static prefix: framework prompt + project wiki + env vars. Wiki
+  // changes happen when the user re-syncs, which is an explicit action
+  // and worth a re-cache. Env vars almost never change at runtime.
   const systemPrompt =
-    SYSTEM_PROMPT +
+    SYSTEM_PROMPT + buildWikiContext(ctx.projectId) + envVarsContext;
+  // Dynamic suffix: plan + team + worker instructions + pins. These
+  // are the surfaces a user actively mutates between turns of the same
+  // session, so they go after the cache boundary.
+  const systemPromptDynamic =
     buildPlanContext(planItems) +
-    buildWikiContext(ctx.projectId) +
-    envVarsContext +
     teamContext +
     workerInstructionsContext +
     (pinsContext ? `\n\n${pinsContext}` : '');
@@ -1308,6 +1323,7 @@ async function runAssistant(
           images,
           initialPlanItemId,
           systemPrompt,
+          systemPromptDynamic,
           true,
           model,
           mcpServers,
@@ -1357,6 +1373,7 @@ async function runAssistant(
         images,
         initialPlanItemId,
         systemPrompt,
+        systemPromptDynamic,
         false,
         model,
         mcpServers,

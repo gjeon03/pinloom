@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   BookPlus,
@@ -140,6 +140,13 @@ function loadPersistedInput(sessionId: string): string {
 
 export function ChatView({ session, onPinChange }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
+  // groupConsecutiveTools is O(N) over the whole message list. Without
+  // memoization every `stream_chunk` event (~10/sec while a turn is
+  // streaming) re-runs it and produces a new array, which combined with
+  // an un-memoized MessageBubble forces a full reconciliation of every
+  // row. Memoizing here means only adds/updates trigger a re-group, and
+  // identical messages keep their row instances.
+  const renderItems = useMemo(() => groupConsecutiveTools(messages), [messages]);
   const [input, setInput] = useState(() => loadPersistedInput(session.id));
   const [runKind, setRunKind] = useState<AiRunState>(null);
   const [shellRunning, setShellRunning] = useState(false);
@@ -786,15 +793,22 @@ export function ChatView({ session, onPinChange }: Props) {
     }
   }
 
-  async function togglePin(message: Message) {
-    try {
-      const updated = await api.updateMessage(message.id, { pinned: !message.pinned });
-      setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-      onPinChange(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
+  // useCallback so MessageBubble (now memoized below) doesn't re-render
+  // every row on every parent render just because togglePin gets a new
+  // identity. setMessages takes a functional updater so we don't need
+  // messages in the deps.
+  const togglePin = useCallback(
+    async (message: Message) => {
+      try {
+        const updated = await api.updateMessage(message.id, { pinned: !message.pinned });
+        setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+        onPinChange(updated);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [onPinChange],
+  );
 
   function scrollToBottom() {
     const el = scrollRef.current;
@@ -839,7 +853,7 @@ export function ChatView({ session, onPinChange }: Props) {
             Start the conversation. AI answers can be pinned so they stay visible.
           </p>
         )}
-        {groupConsecutiveTools(messages).map((item) => {
+        {renderItems.map((item) => {
           if (item.kind === 'tool-group') {
             return <ToolGroup key={item.key} messages={item.messages} />;
           }
@@ -1201,7 +1215,11 @@ export function ChatView({ session, onPinChange }: Props) {
   );
 }
 
-function MessageBubble({
+// Renamed inner component so we can wrap with React.memo at the bottom
+// without changing the call site. Without memoization every stream_chunk
+// (~10/sec while a turn is streaming) re-renders all N rows; on a 2800-
+// message session that was the main source of frame drops.
+function MessageBubbleInner({
   message,
   sessionAgent,
   onTogglePin,
@@ -1287,3 +1305,5 @@ function MessageBubble({
     </div>
   );
 }
+
+const MessageBubble = memo(MessageBubbleInner);
