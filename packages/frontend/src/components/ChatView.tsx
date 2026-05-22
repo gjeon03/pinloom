@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import useSWR from 'swr';
 import {
   ArrowDown,
   BookPlus,
@@ -18,6 +19,7 @@ import type {
   Session,
 } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { cacheKeys } from '../api/cacheKeys.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
 import { ToolGroup } from './ToolGroup.js';
@@ -363,15 +365,19 @@ export function ChatView({ session, onPinChange }: Props) {
     }
   }, [input, session.id]);
 
+  // Reset transient/derived state on session switch. The actual data
+  // (messages / queue / runStatus) now arrives via the SWR hooks below —
+  // those return cached data synchronously when the session was visited
+  // before, so the tab switch feels instant instead of waiting on three
+  // serial HTTP round trips. We still clear the local mirrors here so a
+  // cold-cache switch doesn't briefly show the previous session's data
+  // before SWR's fetcher resolves.
   useEffect(() => {
-    let cancelled = false;
     setMessages([]);
-    setError(null);
+    setQueue([]);
     setRunKind(null);
     setShellRunning(false);
-    // Don't clear input or queue here: they were loaded from localStorage
-    // by the useState initializer for this session and we want them to
-    // survive the mount-time reset of derived state below.
+    setError(null);
     setUnseenCount(0);
     setAtBottom(true);
     setStreamingIds(new Set());
@@ -390,38 +396,51 @@ export function ChatView({ session, onPinChange }: Props) {
     } catch {
       setModel(null);
     }
-    api
-      .listMessages(session.id)
-      .then((msgs) => {
-        if (cancelled) return;
-        setMessages(msgs);
-      })
-      .catch((e) => !cancelled && setError(String(e)));
-    api
-      .listQueue(session.id)
-      .then((items) => {
-        if (cancelled) return;
-        setQueue(items);
-      })
-      .catch(() => {
-        // Best-effort initial fetch — WS will keep us in sync from here.
-      });
-    api
-      .getRunStatus(session.id)
-      .then((s) => {
-        if (cancelled) return;
-        if (s.ai) setRunKind('ai');
-        if (s.exec) setShellRunning(true);
-      })
-      .catch(() => {
-        // non-critical
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [session.id]);
+  }, [session.id, session.nextImageNumber]);
 
-  useWebSocket(`session:${session.id}`, (ev) => {
+  // SWR caches per-session payloads so tab switches render from cache
+  // instantly. WS handlers keep `messages`/`queue` live during a streaming
+  // turn — SWR's role here is the "snap-to-fresh" safety net on focus and
+  // network reconnect, not a per-event mirror.
+  const { data: messagesData, error: messagesError, mutate: mutateMessages } =
+    useSWR(cacheKeys.sessionMessages(session.id), () =>
+      api.listMessages(session.id),
+    );
+  const { data: queueData } = useSWR(cacheKeys.sessionQueue(session.id), () =>
+    api.listQueue(session.id),
+  );
+  const { data: runStatusData } = useSWR(
+    cacheKeys.runStatus(session.id),
+    () => api.getRunStatus(session.id),
+  );
+
+  // When SWR delivers a payload (initial or revalidate), replace the local
+  // working copy. Mid-turn WS streams continue mutating from there.
+  // Comparing identity is enough: SWR returns the same reference unless
+  // the underlying fetch returned new data.
+  useEffect(() => {
+    if (messagesData) setMessages(messagesData);
+  }, [messagesData]);
+  useEffect(() => {
+    if (queueData) setQueue(queueData);
+  }, [queueData]);
+  useEffect(() => {
+    if (!runStatusData) return;
+    setRunKind(runStatusData.ai ? 'ai' : null);
+    setShellRunning(runStatusData.exec);
+  }, [runStatusData]);
+  useEffect(() => {
+    if (messagesError) setError(String(messagesError));
+  }, [messagesError]);
+
+  // When the WS reconnects (e.g. tab woke up after browser throttling
+  // killed the socket), pull fresh state for this session. SWR's focus
+  // revalidate covers most cases, but a long backgrounded tab may have a
+  // dead socket without losing focus, so the reconnect-specific signal
+  // matters as a separate trigger.
+  useWebSocket(
+    `session:${session.id}`,
+    (ev) => {
     if (ev.type === 'message' && ev.sessionId === session.id) {
       if (ev.message.sourceMessageId) {
         onPinChange(ev.message);
@@ -491,7 +510,13 @@ export function ChatView({ session, onPinChange }: Props) {
         }
       }
     }
-  });
+    },
+    {
+      onReconnect: () => {
+        void mutateMessages();
+      },
+    },
+  );
 
   // Track bottom-ness
   const handleScroll = useCallback(() => {

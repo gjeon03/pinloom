@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import useSWR from 'swr';
 import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { cacheKeys } from '../api/cacheKeys.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
@@ -30,8 +32,6 @@ export function SessionPage() {
             if (cancelled) return;
             setProject(p);
             setSession(found);
-            const pinList = await api.listPins(sessionId);
-            if (!cancelled) setPins(pinList);
             document.title = found.title ?? 'pinloom session';
             return;
           }
@@ -46,6 +46,17 @@ export function SessionPage() {
       cancelled = true;
     };
   }, [sessionId]);
+
+  // Pins via SWR — same cache as ProjectPage so the standalone session
+  // window inherits any pins already loaded in the main app, and a focus
+  // revalidate keeps both views in sync.
+  const { data: pinsData } = useSWR(
+    sessionId ? cacheKeys.sessionPins(sessionId) : null,
+    sessionId ? () => api.listPins(sessionId) : null,
+  );
+  useEffect(() => {
+    if (pinsData) setPins(pinsData);
+  }, [pinsData]);
 
   useWebSocket(sessionId ? `session:${sessionId}` : null, (ev) => {
     if (!sessionId) return;

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import useSWR from 'swr';
 import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { cacheKeys } from '../api/cacheKeys.js';
 import {
   SessionTabs,
   type InlineCanvasTab,
@@ -130,13 +132,21 @@ export function ProjectPage({
     );
   }, [project.id, activeSession?.id]);
 
+  // Per-session pins via SWR — the cache survives session tab switches
+  // so going back to a previously visited session renders pins from memory
+  // instead of waiting on a fresh HTTP fetch. WS handles incremental
+  // updates; SWR is just the initial seed + focus revalidate safety net.
+  const { data: pinsData } = useSWR(
+    activeSession ? cacheKeys.sessionPins(activeSession.id) : null,
+    activeSession ? () => api.listPins(activeSession.id) : null,
+  );
   useEffect(() => {
     if (!activeSession) {
       setPins([]);
       return;
     }
-    api.listPins(activeSession.id).then(setPins);
-  }, [activeSession?.id]);
+    if (pinsData) setPins(pinsData);
+  }, [activeSession?.id, pinsData]);
 
   // Canvas "go to tab" button. Cross-project navigation is handled by
   // the canvas via navigate() + lastSession seeding; for same-project
