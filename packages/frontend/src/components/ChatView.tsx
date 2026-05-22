@@ -6,7 +6,6 @@ import {
   ChevronRight,
   ChevronUp,
   ImagePlus,
-  Pin,
   Send,
   Square,
   Terminal,
@@ -27,6 +26,13 @@ import { ModelPicker, findModelLabel } from './ModelPicker.js';
 import { AgentBadge } from './AgentBadge.js';
 import { MentionPopup, type MentionWorker } from './MentionPopup.js';
 import { useNotifications } from '../stores/notifications.js';
+import { Markdown } from './Markdown.js';
+import {
+  CopyMarkdownButton,
+  DownloadMarkdownButton,
+  PinToggleButton,
+  RawViewToggle,
+} from './MessageActions.js';
 
 type AiRunState = 'ai' | null;
 
@@ -1247,6 +1253,16 @@ function MessageBubbleInner({
   // Tool/system messages are typically short and not pin targets — sticky there
   // just adds visual noise as it follows the scroll. Limit sticky to user/assistant.
   const stickyHeader = message.role === 'assistant' || message.role === 'user';
+  // Show the action toolbar (copy / raw toggle / download / pin) only for
+  // user+assistant once streaming is done. Mid-stream toggling to rendered
+  // markdown re-parses on every chunk, and tool/system rows render via
+  // ToolMessage / plain text where the actions don't carry the same meaning.
+  const showActions = canPin;
+  // Default to rendered markdown once the turn settles; force raw while
+  // streaming since re-parsing on every chunk drops frames. The toggle is
+  // a user override that persists for the bubble's lifetime.
+  const [rawView, setRawView] = useState(false);
+  const renderAsMarkdown = !streaming && !rawView;
 
   return (
     <div
@@ -1275,24 +1291,32 @@ function MessageBubbleInner({
             </span>
           )}
           <span>{new Date(message.createdAt).toLocaleTimeString()}</span>
+          {showActions && (
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+              <RawViewToggle rawView={rawView} onChange={setRawView} />
+              <CopyMarkdownButton content={message.content} />
+              <DownloadMarkdownButton
+                content={message.content}
+                filenameHint={`${message.role}-${message.id.slice(0, 8)}`}
+              />
+            </div>
+          )}
           {canPin && (
-            <button
+            <PinToggleButton
+              pinned={message.pinned}
               onClick={() => onTogglePin(message)}
-              title={message.pinned ? 'Unpin' : 'Pin'}
-              className={`p-0.5 rounded transition-opacity ${
-                message.pinned
-                  ? 'text-[var(--color-accent)]'
-                  : 'opacity-0 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
-              }`}
-            >
-              <Pin size={12} fill={message.pinned ? 'currentColor' : 'none'} />
-            </button>
+              hoverOnly
+            />
           )}
         </div>
       </div>
       <div className="px-3 py-2 min-w-0">
         {message.role === 'tool' ? (
           <ToolMessage message={message} />
+        ) : renderAsMarkdown ? (
+          <div className="text-sm">
+            <Markdown content={message.content} />
+          </div>
         ) : (
           <div className="whitespace-pre-wrap break-words text-sm">
             {message.content}
