@@ -1202,7 +1202,7 @@ export function ChatView({ session, onPinChange }: Props) {
                   : 'Message the AI (Shift+Enter for newline · paste/attach images · start with ! to run a shell command)'
             }
             rows={1}
-            className={`w-full resize-none rounded border px-3 py-2 text-sm leading-snug ${
+            className={`block w-full resize-none rounded border px-3 py-[7px] text-sm leading-5 ${
               isShellMode
                 ? 'bg-[var(--color-tool-bg)] border-[var(--color-tool-border)] font-mono text-[var(--color-tool-ink)]'
                 : 'bg-[var(--color-surface-2)] border-[var(--color-border)]'
@@ -1212,7 +1212,7 @@ export function ChatView({ session, onPinChange }: Props) {
           <button
             type="submit"
             disabled={(!input.trim() && attachments.length === 0) || uploadingAttachments}
-            className={`rounded px-3 py-2 text-sm disabled:opacity-40 font-medium flex items-center gap-1.5 ${
+            className={`shrink-0 h-9 rounded px-3 text-sm disabled:opacity-40 font-medium flex items-center justify-center gap-1.5 ${
               isShellMode
                 ? 'bg-yellow-400 text-black'
                 : 'bg-[var(--color-accent)] text-black'
