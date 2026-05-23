@@ -244,6 +244,22 @@ export const api = {
   wikiOverview: () => request<WikiOverview>('/api/wiki/overview'),
   wikiPage: (filename: string) =>
     request<WikiPage>(`/api/wiki/pages/${encodeURI(filename)}`),
+  updateWikiPage: (
+    filename: string,
+    body: {
+      meta: {
+        appliesTo: string[];
+        topic: string[];
+        related: string[];
+        summary: string;
+      };
+      body: string;
+    },
+  ) =>
+    request<WikiPage>(`/api/wiki/pages/${encodeURI(filename)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
   wikiOpenInEditor: (filename: string) =>
     request<{ ok: true; path: string }>('/api/wiki/open', {
       method: 'POST',

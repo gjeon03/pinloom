@@ -1,9 +1,38 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Eye, ExternalLink, Pencil, Save, X } from 'lucide-react';
 import { api, type WikiPage } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
 import { Tooltip } from '../components/Tooltip.js';
+
+interface EditDraft {
+  body: string;
+  appliesTo: string;
+  topic: string;
+  related: string;
+  summary: string;
+}
+
+function arrayToInput(values: string[]): string {
+  return values.join(', ');
+}
+
+function inputToArray(value: string): string[] {
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function draftFromPage(page: WikiPage): EditDraft {
+  return {
+    body: page.body,
+    appliesTo: arrayToInput(page.meta.appliesTo),
+    topic: arrayToInput(page.meta.topic),
+    related: arrayToInput(page.meta.related),
+    summary: page.meta.summary,
+  };
+}
 
 export function WikiDetailPage() {
   const params = useParams<{ '*': string }>();
@@ -11,6 +40,9 @@ export function WikiDetailPage() {
   const [page, setPage] = useState<WikiPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState<EditDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
 
   async function load() {
     try {
@@ -26,6 +58,7 @@ export function WikiDetailPage() {
   useEffect(() => {
     setLoading(true);
     setError(null);
+    setDraft(null);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filename]);
@@ -38,6 +71,61 @@ export function WikiDetailPage() {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  function startEdit() {
+    if (!page) return;
+    setError(null);
+    setDraft(draftFromPage(page));
+  }
+
+  function cancelEdit() {
+    setDraft(null);
+    setError(null);
+  }
+
+  async function saveEdit() {
+    if (!page || !draft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await api.updateWikiPage(filename, {
+        meta: {
+          appliesTo: inputToArray(draft.appliesTo),
+          topic: inputToArray(draft.topic),
+          related: inputToArray(draft.related),
+          summary: draft.summary.trim(),
+        },
+        body: draft.body,
+      });
+      setPage(updated);
+      setDraft(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Cmd/Ctrl-S to save while editing, Esc to cancel. Without this the
+  // user has to chase the buttons on each save which gets old fast on a
+  // page they're iterating on.
+  useEffect(() => {
+    if (!draft) return;
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        void saveEdit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelEdit();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, page, filename]);
+
+  const editing = draft !== null;
 
   return (
     <div className="flex h-full flex-col">
@@ -52,16 +140,64 @@ export function WikiDetailPage() {
         <div className="text-[11px] font-mono text-[var(--color-ink-muted)] truncate flex-1 text-center">
           {filename}
         </div>
-        <Tooltip label="Open in default editor (macOS)" side="bottom">
-          <button
-            onClick={handleOpenInEditor}
-            disabled={!page}
-            className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
-          >
-            <ExternalLink size={12} />
-            Open
-          </button>
-        </Tooltip>
+        <div className="flex items-center gap-2">
+          {editing ? (
+            <>
+              <Tooltip label="Toggle live preview" side="bottom">
+                <button
+                  onClick={() => setShowPreview((v) => !v)}
+                  className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs ${
+                    showPreview
+                      ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface-3)] hover:border-[var(--color-accent)]'
+                  }`}
+                >
+                  <Eye size={12} />
+                  Preview
+                </button>
+              </Tooltip>
+              <button
+                onClick={cancelEdit}
+                disabled={saving}
+                className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+              >
+                <X size={12} />
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={saving}
+                className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] text-black px-2.5 py-1.5 text-xs font-medium disabled:opacity-50"
+              >
+                <Save size={12} />
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          ) : (
+            <>
+              <Tooltip label="Edit this page in place" side="bottom">
+                <button
+                  onClick={startEdit}
+                  disabled={!page}
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+                >
+                  <Pencil size={12} />
+                  Edit
+                </button>
+              </Tooltip>
+              <Tooltip label="Open in default editor (macOS)" side="bottom">
+                <button
+                  onClick={handleOpenInEditor}
+                  disabled={!page}
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+                >
+                  <ExternalLink size={12} />
+                  Open
+                </button>
+              </Tooltip>
+            </>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -76,29 +212,175 @@ export function WikiDetailPage() {
         <div className="p-8 text-sm text-[var(--color-ink-muted)]">
           Page not found.
         </div>
+      ) : editing && draft ? (
+        <EditView
+          draft={draft}
+          onChange={setDraft}
+          showPreview={showPreview}
+        />
       ) : (
-        <div className="flex-1 overflow-hidden flex">
-          <div className="flex-1 min-w-0 overflow-auto px-8 py-6">
-            <Markdown content={page.body} />
-          </div>
-          <aside className="w-64 shrink-0 border-l border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-auto px-4 py-4">
-            <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-2">
-              Frontmatter
-            </h3>
-            <MetaList label="applies_to" values={page.meta.appliesTo} fallback="(global)" />
-            <MetaList label="topic" values={page.meta.topic} fallback="(none)" />
-            <MetaRelated values={page.meta.related} />
-            {page.meta.summary && (
-              <div className="mt-3">
-                <div className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-1">
-                  summary
-                </div>
-                <div className="text-xs text-[var(--color-ink)]">{page.meta.summary}</div>
-              </div>
-            )}
-          </aside>
-        </div>
+        <ReadView page={page} />
       )}
+    </div>
+  );
+}
+
+function ReadView({ page }: { page: WikiPage }) {
+  return (
+    <div className="flex-1 overflow-hidden flex">
+      <div className="flex-1 min-w-0 overflow-auto px-8 py-6">
+        <Markdown content={page.body} />
+      </div>
+      <aside className="w-64 shrink-0 border-l border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-auto px-4 py-4">
+        <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-2">
+          Frontmatter
+        </h3>
+        <MetaList label="applies_to" values={page.meta.appliesTo} fallback="(global)" />
+        <MetaList label="topic" values={page.meta.topic} fallback="(none)" />
+        <MetaRelated values={page.meta.related} />
+        {page.meta.summary && (
+          <div className="mt-3">
+            <div className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-1">
+              summary
+            </div>
+            <div className="text-xs text-[var(--color-ink)]">{page.meta.summary}</div>
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+function EditView({
+  draft,
+  onChange,
+  showPreview,
+}: {
+  draft: EditDraft;
+  onChange: (next: EditDraft) => void;
+  showPreview: boolean;
+}) {
+  // Memoize the preview source so an unrelated frontmatter keystroke
+  // doesn't re-run the markdown parser on every render.
+  const previewBody = useMemo(() => draft.body, [draft.body]);
+
+  // Ratio-based scroll sync: when the user scrolls one pane we map its
+  // scroll fraction onto the other. The flag ref suppresses the second
+  // pane's onScroll (triggered by the programmatic scrollTop assignment)
+  // from echoing back and fighting the user.
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const syncingRef = useRef<'editor' | 'preview' | null>(null);
+  const syncResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function syncFrom(side: 'editor' | 'preview') {
+    if (syncingRef.current && syncingRef.current !== side) return;
+    const src = side === 'editor' ? editorRef.current : previewRef.current;
+    const dst = side === 'editor' ? previewRef.current : editorRef.current;
+    if (!src || !dst) return;
+    const maxSrc = src.scrollHeight - src.clientHeight;
+    const maxDst = dst.scrollHeight - dst.clientHeight;
+    if (maxSrc <= 0 || maxDst <= 0) return;
+    const ratio = src.scrollTop / maxSrc;
+
+    syncingRef.current = side;
+    dst.scrollTop = ratio * maxDst;
+    if (syncResetTimer.current) clearTimeout(syncResetTimer.current);
+    syncResetTimer.current = setTimeout(() => {
+      syncingRef.current = null;
+    }, 60);
+  }
+
+  return (
+    <div className="flex-1 overflow-hidden flex">
+      <div className="flex-1 min-w-0 flex overflow-hidden">
+        <div className={`${showPreview ? 'flex-1 border-r border-[var(--color-border)]' : 'flex-1'} min-w-0 flex flex-col`}>
+          <div className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold px-6 pt-4 pb-1">
+            Body (markdown)
+          </div>
+          <textarea
+            ref={editorRef}
+            value={draft.body}
+            onChange={(e) => onChange({ ...draft, body: e.target.value })}
+            onScroll={() => syncFrom('editor')}
+            spellCheck={false}
+            className="flex-1 min-h-0 w-full resize-none bg-[var(--color-surface)] px-6 py-3 text-sm font-mono leading-6 outline-none"
+          />
+        </div>
+        {showPreview && (
+          <div
+            ref={previewRef}
+            onScroll={() => syncFrom('preview')}
+            className="flex-1 min-w-0 overflow-auto px-8 py-6 bg-[var(--color-surface-2)]/40"
+          >
+            <Markdown content={previewBody} />
+          </div>
+        )}
+      </div>
+      <aside className="w-64 shrink-0 border-l border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-auto px-4 py-4 space-y-3 text-sm">
+        <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold">
+          Frontmatter
+        </h3>
+        <MetaInput
+          label="applies_to"
+          value={draft.appliesTo}
+          hint="comma-separated project slugs"
+          onChange={(v) => onChange({ ...draft, appliesTo: v })}
+        />
+        <MetaInput
+          label="topic"
+          value={draft.topic}
+          hint="comma-separated topic tags"
+          onChange={(v) => onChange({ ...draft, topic: v })}
+        />
+        <MetaInput
+          label="related"
+          value={draft.related}
+          hint="comma-separated page filenames"
+          onChange={(v) => onChange({ ...draft, related: v })}
+        />
+        <div>
+          <div className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-1">
+            summary
+          </div>
+          <textarea
+            value={draft.summary}
+            onChange={(e) => onChange({ ...draft, summary: e.target.value })}
+            rows={3}
+            className="w-full resize-y rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-xs"
+          />
+        </div>
+        <div className="text-[10px] text-[var(--color-ink-muted)] pt-2">
+          ⌘S to save · Esc to cancel
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function MetaInput({
+  label,
+  value,
+  hint,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-1">
+        {label}
+      </div>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={hint}
+        className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs font-mono"
+      />
     </div>
   );
 }
