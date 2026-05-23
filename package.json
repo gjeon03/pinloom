@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Plan-first AI workspace. Every task starts with a living plan.",
+  "description": "Local Claude Code workspace. Persistent history, pinned answers, project Wiki, Teams orchestration, GitHub-backed backup.",
   "license": "MIT",
   "scripts": {
     "build:shared": "pnpm --filter @pinloom/shared build",

@@ -91,9 +91,11 @@ The header chips filter by:
 
 ## Where this fits in the design
 
-The Wiki is the *long-term* layer — durable knowledge that survives
-session resets. The plan (currently in progress) will be the
-*current task* layer; chat is the *current turn* layer. Each layer
-hands knowledge upward: chat → plan → wiki. The agent reads
-top-down: wiki → plan → chat — so you accumulate knowledge once and
-reuse it forever.
+The Wiki is the *long-term* layer — durable, project-scoped knowledge
+that survives session resets. Chat is the *current turn* layer. The
+agent reads the wiki on every turn, so anything you commit there
+becomes context the agent always sees; anything that only lives in a
+single session's chat history is fleeting. The Wiki sync action is
+the bridge: it asks Claude to read the session's recent messages and
+write the lessons learned out as wiki updates, so a finished task
+ends up as durable knowledge instead of buried-in-chat lore.
