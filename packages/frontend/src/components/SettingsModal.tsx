@@ -347,8 +347,310 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </section>
 
           <EnvVarsSection />
+
+          <BackupSection />
         </div>
       </div>
     </div>
+  );
+}
+
+// GitHub backup configuration. Phase A surfaces token + repo selection
+// only; the Sync / Restore buttons (Phases B/C) will live in the same
+// section once their backends land.
+interface BackupConfig {
+  connected: boolean;
+  user: { login: string } | null;
+  repo: { fullName: string; cloneUrl: string } | null;
+  lastSyncAt: string | null;
+}
+
+interface BackupRepo {
+  fullName: string;
+  name: string;
+  private: boolean;
+  cloneUrl: string;
+  defaultBranch: string;
+  updatedAt: string;
+}
+
+function BackupSection() {
+  const [config, setConfig] = useState<BackupConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState('');
+  const [repos, setRepos] = useState<BackupRepo[] | null>(null);
+  const [createName, setCreateName] = useState('pinloom-backup');
+  const [mode, setMode] = useState<'select' | 'create'>('create');
+
+  async function refresh() {
+    try {
+      setConfig(await api.getBackupConfig());
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  async function saveToken() {
+    if (tokenDraft.trim().length === 0) {
+      setError('Token is required');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.setBackupToken(tokenDraft.trim());
+      setConfig(next);
+      setTokenDraft('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.clearBackupToken();
+      setConfig(next);
+      setRepos(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadRepos() {
+    setBusy(true);
+    setError(null);
+    try {
+      setRepos(await api.listBackupRepos());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function selectRepo(r: BackupRepo) {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.setBackupRepo({
+        mode: 'select',
+        fullName: r.fullName,
+        cloneUrl: r.cloneUrl,
+      });
+      setConfig(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createRepo() {
+    const name = createName.trim();
+    if (!name) {
+      setError('Repo name is required');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.setBackupRepo({
+        mode: 'create',
+        name,
+        private: true,
+      });
+      setConfig(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        GitHub Backup
+      </h3>
+      {config === null ? (
+        <p className="text-sm text-[var(--color-ink-muted)]">Loading…</p>
+      ) : (
+        <div className="space-y-3 text-sm">
+          {!config.connected ? (
+            <div className="space-y-2">
+              <p className="text-[var(--color-ink-muted)]">
+                Paste a GitHub Personal Access Token to enable backup of wikis
+                and sessions to a private repository. Easiest path:{' '}
+                <a
+                  href="https://github.com/settings/tokens/new?scopes=repo&description=pinloom-backup"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[var(--color-accent)] underline"
+                >
+                  generate a classic token with <code>repo</code> scope
+                </a>
+                . Fine-grained tokens work too but only if you give them{' '}
+                <em>Administration: write</em> on <em>All repositories</em> —
+                otherwise pinloom can read repos but cannot create new ones.
+                The token is stored as-is in pinloom's local DB — anyone with
+                the DB file effectively has the token, so revoke it on GitHub
+                if the file leaks.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={tokenDraft}
+                  onChange={(e) => setTokenDraft(e.target.value)}
+                  placeholder="github_pat_..."
+                  className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={saveToken}
+                  disabled={busy || tokenDraft.trim().length === 0}
+                  className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
+                >
+                  Connect
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[var(--color-ink-muted)]">
+                    Connected as{' '}
+                  </span>
+                  <span className="font-medium">
+                    {config.user?.login ?? '(unknown)'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={disconnect}
+                  disabled={busy}
+                  className="text-xs text-[var(--color-ink-muted)] hover:text-red-400"
+                >
+                  Disconnect
+                </button>
+              </div>
+              {config.repo ? (
+                <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] uppercase text-[var(--color-ink-muted)]">
+                      Backup repository
+                    </div>
+                    <div className="font-mono text-sm">{config.repo.fullName}</div>
+                  </div>
+                  <a
+                    href={`https://github.com/${config.repo.fullName}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-[var(--color-accent)] underline"
+                  >
+                    Open on GitHub
+                  </a>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMode('create')}
+                      className={`px-2 py-1 rounded text-xs ${
+                        mode === 'create'
+                          ? 'bg-[var(--color-accent)] text-black'
+                          : 'border border-[var(--color-border)] text-[var(--color-ink-muted)]'
+                      }`}
+                    >
+                      Create new
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('select');
+                        if (repos === null) void loadRepos();
+                      }}
+                      className={`px-2 py-1 rounded text-xs ${
+                        mode === 'select'
+                          ? 'bg-[var(--color-accent)] text-black'
+                          : 'border border-[var(--color-border)] text-[var(--color-ink-muted)]'
+                      }`}
+                    >
+                      Select existing
+                    </button>
+                  </div>
+                  {mode === 'create' ? (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={createName}
+                        onChange={(e) => setCreateName(e.target.value)}
+                        placeholder="pinloom-backup"
+                        className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={createRepo}
+                        disabled={busy || createName.trim().length === 0}
+                        className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
+                      >
+                        Create
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="max-h-48 overflow-auto rounded border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
+                      {repos === null ? (
+                        <p className="px-3 py-2 text-[var(--color-ink-muted)]">
+                          Loading…
+                        </p>
+                      ) : repos.length === 0 ? (
+                        <p className="px-3 py-2 text-[var(--color-ink-muted)]">
+                          No repositories.
+                        </p>
+                      ) : (
+                        repos.map((r) => (
+                          <button
+                            key={r.fullName}
+                            type="button"
+                            onClick={() => selectRepo(r)}
+                            disabled={busy}
+                            className="block w-full text-left px-3 py-1.5 hover:bg-[var(--color-surface-3)] disabled:opacity-40"
+                          >
+                            <span className="font-mono">{r.fullName}</span>
+                            {r.private && (
+                              <span className="ml-2 text-[10px] uppercase text-[var(--color-ink-muted)]">
+                                private
+                              </span>
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {config.lastSyncAt && (
+                <div className="text-xs text-[var(--color-ink-muted)]">
+                  Last sync: {new Date(config.lastSyncAt).toLocaleString()}
+                </div>
+              )}
+            </div>
+          )}
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+        </div>
+      )}
+    </section>
   );
 }

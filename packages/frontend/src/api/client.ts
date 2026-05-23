@@ -320,6 +320,56 @@ export const api = {
       method: 'DELETE',
     }),
 
+  // GitHub backup — Phase A: token + repo configuration. Sync / restore
+  // endpoints land in subsequent phases.
+  getBackupConfig: () =>
+    request<{
+      connected: boolean;
+      user: { login: string } | null;
+      repo: { fullName: string; cloneUrl: string } | null;
+      lastSyncAt: string | null;
+    }>('/api/settings/backup'),
+  setBackupToken: (token: string) =>
+    request<{
+      connected: boolean;
+      user: { login: string } | null;
+      repo: { fullName: string; cloneUrl: string } | null;
+      lastSyncAt: string | null;
+    }>('/api/settings/backup/token', {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    }),
+  clearBackupToken: () =>
+    request<{ connected: boolean; user: null; repo: null; lastSyncAt: null }>(
+      '/api/settings/backup/token',
+      { method: 'DELETE' },
+    ),
+  listBackupRepos: () =>
+    request<
+      Array<{
+        fullName: string;
+        name: string;
+        private: boolean;
+        cloneUrl: string;
+        defaultBranch: string;
+        updatedAt: string;
+      }>
+    >('/api/settings/backup/repos'),
+  setBackupRepo: (
+    body:
+      | { mode: 'select'; fullName: string; cloneUrl: string }
+      | { mode: 'create'; name: string; private?: boolean },
+  ) =>
+    request<{
+      connected: boolean;
+      user: { login: string } | null;
+      repo: { fullName: string; cloneUrl: string } | null;
+      lastSyncAt: string | null;
+    }>('/api/settings/backup/repo', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   // Cross-project session list — used by Teams UI to populate pickers
   // without an N+1 fetch per project.
   listAllSessions: () => request<Session[]>('/api/sessions'),
