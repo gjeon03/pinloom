@@ -317,12 +317,15 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Settings"
         className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 cursor-default"
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-semibold">Settings</h2>
           <button
             onClick={onClose}
+            aria-label="Close settings"
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
             <X size={16} />

@@ -17,6 +17,16 @@ function arrayToInput(values: string[]): string {
   return values.join(', ');
 }
 
+// Strip HTML comments before handing markdown to react-markdown. The
+// renderer is configured without raw-HTML support (intentional, since
+// the body comes from user / agent edits), so comments like
+// `<!-- pinloom:auto-section -->` end up showing as visible text in the
+// preview. The comments themselves stay in the on-disk file — this is
+// purely a display filter.
+function stripHtmlComments(body: string): string {
+  return body.replace(/<!--[\s\S]*?-->/g, '');
+}
+
 function inputToArray(value: string): string[] {
   return value
     .split(',')
@@ -229,7 +239,7 @@ function ReadView({ page }: { page: WikiPage }) {
   return (
     <div className="flex-1 overflow-hidden flex">
       <div className="flex-1 min-w-0 overflow-auto px-8 py-6">
-        <Markdown content={page.body} />
+        <Markdown content={stripHtmlComments(page.body)} />
       </div>
       <aside className="w-64 shrink-0 border-l border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-auto px-4 py-4">
         <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-2">
@@ -261,8 +271,10 @@ function EditView({
   showPreview: boolean;
 }) {
   // Memoize the preview source so an unrelated frontmatter keystroke
-  // doesn't re-run the markdown parser on every render.
-  const previewBody = useMemo(() => draft.body, [draft.body]);
+  // doesn't re-run the markdown parser on every render. Comments are
+  // stripped for the same reason ReadView does it — the renderer shows
+  // them as visible text otherwise.
+  const previewBody = useMemo(() => stripHtmlComments(draft.body), [draft.body]);
 
   // Ratio-based scroll sync: when the user scrolls one pane we map its
   // scroll fraction onto the other. The flag ref suppresses the second

@@ -2,7 +2,7 @@
 
 Thanks for your interest. pinloom is a small, local-first project — keep PRs
 focused and the bar is "does it ship something useful without breaking the
-plan-first model?"
+local-only model or the per-project Wiki + Sessions contract?"
 
 ## Setup
 
@@ -42,8 +42,8 @@ green.
 The four rules in [`README.md`](./README.md#design-principles) are
 load-bearing:
 
-1. Plan is the source of truth.
-2. pinloom's SQLite owns conversation history (not `~/.claude/`).
+1. pinloom's SQLite owns conversation history (not `~/.claude/`).
+2. The agent's memory lives on disk you control (Wiki + DB), exportable to GitHub or a file.
 3. No auto-deletion.
 4. Local-only — no auth, no cloud sync.
 
@@ -54,8 +54,8 @@ Changes that contradict these need a discussion in an issue first.
 - **Bugs**: include reproduction steps, the agent CLI you used, and relevant
   log output. pinloom logs to stdout when run with `pnpm dev` or `pnpm start`.
 - **Feature requests**: describe the workflow you're trying to support, not
-  just the UI you want. The plan-first model often suggests a different
-  shape than the obvious one.
+  just the UI you want. The local-only + Wiki-aware model often suggests a
+  different shape than the obvious one.
 
 ## License
 

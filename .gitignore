@@ -21,3 +21,7 @@ playwright/.cache
 # Playwright MCP transient snapshots / e2e screenshots
 .playwright-mcp/
 e2e-*.png
+e2e/artifacts/
+
+# oh-my-claudecode local project state
+.omc/

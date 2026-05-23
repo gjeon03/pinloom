@@ -1,6 +1,6 @@
 # pinloom
 
-Plan-first AI workspace. Local open-source tool.
+Local Claude Code workspace. Persistent history, pinned answers, project Wiki, Teams orchestration, GitHub-backed backup.
 
 ## Quick start
 
@@ -20,20 +20,20 @@ pnpm dev:frontend    # frontend only
 
 ## Core concepts
 
-- **Project**: a directory on disk + its associated plans/sessions.
-- **Plan**: a structured, hierarchical document of plan items. First-class object.
-- **PlanItem**: one node in the plan (title, body, status). Chat messages and runs attach here.
-- **Session**: a conversation with the AI scoped to a project (optionally pinned to a plan item).
+- **Project**: a directory on disk + its associated sessions and wiki pages.
+- **Session**: a conversation with the AI scoped to a project.
 - **Message**: stored in pinloom's SQLite. Mirrors what the SDK streams. Survives `~/.claude/` resets.
+- **Wiki**: per-project markdown notes at `~/.pinloom/wiki/` injected into the system prompt every turn. Editable in-place from the UI.
 - **Team**: groups one **orchestrator** session with N **worker** sessions. The orchestrator addresses workers by `alias` (`@be`, `@fe`) via the pinloom MCP server.
 - **Worker `instructions`** (TEXT, ≤ 4000 chars, nullable): system-prompt-style guidance — identity / do's / don'ts / output conventions — injected verbatim into the worker's system prompt every turn.
 - **Worker `tags`** (JSON array of lowercase tokens, ≤ 16, alias-style regex): logical groups for broadcast dispatch and visual grouping on the canvas.
+- **Plan / PlanItem**: hierarchical to-do tables (`plans`, `plan_items`) — the schema and API exist but the user-facing UI was deliberately not shipped (see `archive/plan-ui-mvp` for an unmerged attempt). Treat plans as a dormant primitive: data layer is wired through `runner.ts` (`buildPlanContext`, `resolveMentionedItem`) but no production code paths surface them today.
 
 ## Design rules
 
-1. Plan is the source of truth. Diffs/logs/chat hang off plan items.
-2. pinloom's SQLite owns the conversation history. Do not depend on `~/.claude/projects/*.jsonl`.
-3. No auto-deletion. Sessions/plans/messages only go away via explicit user action.
+1. pinloom's SQLite owns the conversation history. Do not depend on `~/.claude/projects/*.jsonl`.
+2. The agent's memory lives on disk the user controls — wiki at `~/.pinloom/wiki/`, sessions in `data/pinloom.sqlite`. Both back up to GitHub / a file.
+3. No auto-deletion. Sessions/messages/wiki pages only go away via explicit user action.
 4. Local-only. No auth, no multi-user, no cloud sync in MVP.
 
 ## Build & verify

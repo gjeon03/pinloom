@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, ScrollText, TerminalSquare } from 'lucide-react';
+import { ChevronDown, ChevronRight, ScrollText } from 'lucide-react';
 import type { Session } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 
@@ -92,19 +92,19 @@ export function BottomPanel({ session }: Props) {
           )}
         </button>
 
-        <span className="mx-1 h-4 w-px bg-[var(--color-border)]" />
-
-        <div
-          title="Terminal — coming soon"
-          className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-[var(--color-ink-muted)] opacity-50 cursor-not-allowed"
-        >
-          <TerminalSquare size={12} />
-          <span>Terminal</span>
-          <span className="text-[9px] uppercase tracking-wide opacity-80">soon</span>
-        </div>
-
         <div className="flex-1" />
-        <span className="font-mono text-[10px] text-[var(--color-ink-muted)] px-1">
+        {/*
+          A grey 'Terminal — soon' pill used to sit here next to the
+          session id badge. It read as half-finished work in launch
+          screenshots and the Terminal feature wasn't actually on a
+          schedule, so we pulled the pill. The session-id badge stays —
+          it's a short-hash identifier the operator can quote in bug
+          reports or use to distinguish sessions that share a title.
+        */}
+        <span
+          title={`Session ${session.id}`}
+          className="font-mono text-[10px] text-[var(--color-ink-muted)] px-1"
+        >
           {session.id.slice(0, 8)}
         </span>
       </div>
