@@ -2,9 +2,38 @@
 
 Plan-first AI workspace. Local-only. Every task starts with a living plan you can tag, chat with, and reshape.
 
+![pinloom workspace](docs/screenshots/05-project-workspace.png)
+
 ## Why
 
 Most AI coding UIs treat the plan as a throwaway artifact. pinloom treats it as a first-class object: you build the plan, tag its items in chat, update it as you learn, and execute items one at a time. Think of it as a loom — weaving plan items into code, one pass at a time.
+
+## What you get
+
+- **Persistent conversation history.** Every message and tool call is
+  mirrored to pinloom's own SQLite, so `~/.claude/` resets, version
+  bumps, and machine moves never lose history.
+- **Plan as a first-class object.** Hierarchical plan items with chat
+  and runs attached. Edit the plan as the task evolves.
+- **Environment variables, registered once.** Settings → Environment
+  Variables. Every Claude/Codex agent run inherits them. No more
+  `~/.bashrc` edits per integration.
+  → [docs/features/env-vars.md](docs/features/env-vars.md)
+- **Persistent Wiki the agent reads at the start of every turn.**
+  Per-project + cross-project markdown notes at `~/.pinloom/wiki/`.
+  Sync from chat sessions, or analyze a codebase for conventions.
+  → [docs/features/wiki.md](docs/features/wiki.md)
+- **Teams — orchestrator + workers via MCP.** Group one orchestrator
+  session with N workers; the orchestrator dispatches by alias
+  (`@be`, `@fe`) or by tag (broadcast). Synchronous `team_ask` mirrors
+  the SDK's Task tool.
+- **Local-only.** No auth, no cloud, no multi-user. Runs on
+  `localhost:4747` on your machine.
+
+| | |
+|---|---|
+| ![env vars](docs/screenshots/03-env-var-add-form.png) | ![wiki](docs/screenshots/06-wiki-populated.png) |
+| **Env vars** — registered once, inherited by every agent run | **Wiki** — persistent project memory the agent reads on every turn |
 
 ## Stack
 
@@ -54,10 +83,44 @@ use.
 
 ```
 packages/
-  shared/     # types, constants, zod schemas (planned)
-  backend/    # Fastify app, SQLite, WS hub, claude-agent-sdk runner
-  frontend/   # React UI: Plan panel / Chat panel / Terminal
+  shared/      # types, constants, zod schemas
+  backend/     # Fastify app, SQLite, WS hub, claude-agent-sdk runner
+  frontend/    # React UI: Plan panel / Chat panel / Terminal
+  mcp-server/  # pinloom MCP tools for the Teams orchestrator
+docs/
+  features/    # deep-dives on individual features
+  screenshots/ # committed UI screenshots for the README + features docs
+e2e/
+  smoke.spec.ts        # CI smoke test
+  walkthrough.spec.ts  # regenerates docs/screenshots/ + a .webm walkthrough
 ```
+
+## Regenerating the screenshots + demo video
+
+The screenshots in `docs/screenshots/` and the walkthrough video at
+`docs/walkthrough.webm` are produced by a Playwright spec:
+
+```bash
+pnpm exec playwright test --config e2e/walkthrough.config.ts
+cp e2e/artifacts/screenshots/*.png docs/screenshots/
+cp e2e/artifacts/walkthrough.webm docs/walkthrough.webm
+```
+
+The walkthrough:
+
+- Spawns a fresh backend + frontend on `localhost:4747` with a throwaway
+  SQLite under `$TMPDIR` and an overridden `$HOME` — it never touches
+  `data/pinloom.sqlite` or your real `~/.pinloom/`.
+- Pre-fetches a real Claude answer via the local `claude` CLI before the
+  test starts (so the recording isn't a blank tab waiting on the SDK),
+  inserts the Q+A via direct SQLite, and pins the assistant message via
+  the public `PATCH /api/messages/:id` route.
+- Seeds three wiki pages on disk so the Wiki dashboard captures real
+  content instead of an empty state.
+
+Requires the host's `claude` CLI to be authenticated — the SDK's
+bundled native binary picker prefers a musl build that doesn't run on
+glibc Linux, so we shell out to the system CLI instead.
 
 ## License
 
