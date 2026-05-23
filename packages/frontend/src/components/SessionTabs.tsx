@@ -5,6 +5,7 @@ import {
   Crown,
   ExternalLink,
   FolderInput,
+  ListChecks,
   MoreVertical,
   Network,
   Pencil,
@@ -88,6 +89,9 @@ interface Props {
   onSelectCanvas?: (teamId: string) => void;
   onCloseCanvas?: (teamId: string) => void;
   onOpenCanvasTab?: (tab: InlineCanvasTab) => void;
+  /** Project-scoped plan pseudo-tab. There's exactly one per project. */
+  planActive?: boolean;
+  onSelectPlan?: () => void;
 }
 
 export function SessionTabs({
@@ -104,6 +108,8 @@ export function SessionTabs({
   onSelectCanvas,
   onCloseCanvas,
   onOpenCanvasTab,
+  planActive = false,
+  onSelectPlan,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -312,6 +318,21 @@ export function SessionTabs({
         setDropTarget(null);
       }}
     >
+      {onSelectPlan && (
+        <button
+          type="button"
+          onClick={onSelectPlan}
+          className={`group flex items-center gap-1.5 rounded-t px-3 py-1.5 text-sm cursor-pointer border-b-2 mr-1 ${
+            planActive
+              ? 'border-[var(--color-accent)] text-[var(--color-ink)] bg-[var(--color-surface-2)]'
+              : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+          }`}
+          title="Project plan — hierarchical to-do tree the AI reads on every turn"
+        >
+          <ListChecks size={12} className="text-[var(--color-accent)] shrink-0" />
+          <span>Plan</span>
+        </button>
+      )}
       {sessions.map((s, i) => {
         const active = s.id === activeSessionId;
         const label = s.title ?? `Chat ${s.id.slice(0, 6)}`;

@@ -9,6 +9,7 @@ import {
 } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
+import { PlanPanel } from '../components/PlanPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
 import { EditableTitle } from '../components/EditableTitle.js';
@@ -35,6 +36,19 @@ export function ProjectPage({
   const [activeCanvasTeamId, setActiveCanvasTeamId] = useState<string | null>(
     null,
   );
+  // Plan pseudo-tab — exactly one per project. When active, the right
+  // pane renders PlanPanel instead of ChatView/Canvas.
+  const [planActive, setPlanActive] = useState(false);
+
+  function persistPlanActive(projectId: string, active: boolean) {
+    try {
+      const key = `pinloom:planActive:${projectId}`;
+      if (active) localStorage.setItem(key, '1');
+      else localStorage.removeItem(key);
+    } catch {
+      // see persistCanvasTabs
+    }
+  }
 
   function persistCanvasTabs(projectId: string, tabs: InlineCanvasTab[]) {
     try {
@@ -100,6 +114,12 @@ export function ProjectPage({
     const restoreCanvas =
       lastCanvasId && restored.some((t) => t.teamId === lastCanvasId);
     setActiveCanvasTeamId(restoreCanvas ? lastCanvasId : null);
+
+    // Restore Plan tab focus — but only if no canvas is being restored.
+    // Plan/canvas/session are mutually exclusive views for the right pane.
+    const wasPlanActive =
+      localStorage.getItem(`pinloom:planActive:${project.id}`) === '1';
+    setPlanActive(!restoreCanvas && wasPlanActive);
 
     const lastKey = `pinloom:lastSession:${project.id}`;
     const lastId = localStorage.getItem(lastKey);
@@ -235,17 +255,23 @@ export function ProjectPage({
         projectId={project.id}
         sessions={sessions}
         activeSessionId={
-          activeCanvasTeamId === null ? activeSession?.id ?? null : null
+          activeCanvasTeamId === null && !planActive
+            ? activeSession?.id ?? null
+            : null
         }
         onSelect={(s) => {
           setActiveCanvasTeamId(null);
           persistActiveCanvas(project.id, null);
+          setPlanActive(false);
+          persistPlanActive(project.id, false);
           setActiveSession(s);
         }}
         onCreate={(s) => {
           setSessions((prev) => [...prev, s]);
           setActiveCanvasTeamId(null);
           persistActiveCanvas(project.id, null);
+          setPlanActive(false);
+          persistPlanActive(project.id, false);
           setActiveSession(s);
         }}
         onDelete={(id) => {
@@ -265,6 +291,8 @@ export function ProjectPage({
         onSelectCanvas={(teamId) => {
           setActiveCanvasTeamId(teamId);
           persistActiveCanvas(project.id, teamId);
+          setPlanActive(false);
+          persistPlanActive(project.id, false);
         }}
         onCloseCanvas={(teamId) => {
           setCanvasTabs((prev) => {
@@ -287,6 +315,15 @@ export function ProjectPage({
           });
           setActiveCanvasTeamId(tab.teamId);
           persistActiveCanvas(project.id, tab.teamId);
+          setPlanActive(false);
+          persistPlanActive(project.id, false);
+        }}
+        planActive={planActive}
+        onSelectPlan={() => {
+          setActiveCanvasTeamId(null);
+          persistActiveCanvas(project.id, null);
+          setPlanActive(true);
+          persistPlanActive(project.id, true);
         }}
       />
 
@@ -296,7 +333,7 @@ export function ProjectPage({
           minLeft={320}
           minRight={420}
           left={
-            pins.length > 0 && activeSession ? (
+            !planActive && !activeCanvasTeamId && pins.length > 0 && activeSession ? (
               <PinnedPanel
                 key={activeSession.id}
                 pins={pins}
@@ -312,7 +349,9 @@ export function ProjectPage({
             ) : null
           }
           right={
-            activeCanvasTeamId ? (
+            planActive ? (
+              <PlanPanel projectId={project.id} />
+            ) : activeCanvasTeamId ? (
               // Inline canvas — wraps the dedicated route's component so
               // updates / fixes flow into both surfaces. The page reads
               // teamId from the URL via useParams, so we route inline by
@@ -336,7 +375,7 @@ export function ProjectPage({
         />
       </div>
 
-      {activeSession && (
+      {activeSession && !planActive && !activeCanvasTeamId && (
         <BottomPanel
           key={activeSession.id}
           projectId={project.id}

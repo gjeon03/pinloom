@@ -120,6 +120,10 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+  deletePlanItem: (itemId: string) =>
+    request<{ ok: true }>(`/api/plan-items/${itemId}`, {
+      method: 'DELETE',
+    }),
 
   listSessions: (projectId: string) =>
     request<Session[]>(`/api/projects/${projectId}/sessions`),
