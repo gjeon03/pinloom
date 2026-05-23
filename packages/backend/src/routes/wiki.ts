@@ -17,6 +17,7 @@ import {
   importWikiZip,
   type ImportMode,
 } from '../services/wiki-archive.js';
+import { writeWikiPage, WikiWriteError } from '../services/wiki-writer.js';
 
 interface SessionRow {
   id: string;
@@ -75,6 +76,42 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
       return page;
     },
   );
+
+  // Write the page back to disk. The frontend hands us the body +
+  // frontmatter fields it just edited; we re-serialise them in the
+  // canonical shape so a subsequent GET returns equivalent values.
+  app.put<{
+    Params: { '*': string };
+    Body: { meta?: unknown; body?: unknown };
+  }>('/api/wiki/pages/*', async (req, reply) => {
+    const filename = (req.params as { '*'?: string })['*'];
+    if (!filename) {
+      reply.code(400);
+      return { error: 'filename is required' };
+    }
+    // Refuse to write a brand-new file via PUT — page creation should
+    // go through the explicit "new page" flow, not a typo'd URL.
+    const existing = await readWikiPage(filename);
+    if (!existing) {
+      reply.code(404);
+      return { error: `page not found: ${filename}` };
+    }
+    try {
+      await writeWikiPage(filename, {
+        meta: req.body?.meta,
+        body: req.body?.body,
+      });
+      const refreshed = await readWikiPage(filename);
+      return refreshed;
+    } catch (err) {
+      if (err instanceof WikiWriteError) {
+        reply.code(err.status);
+        return { error: err.message };
+      }
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
 
   app.post<{ Body: { filename?: string } }>('/api/wiki/open', async (req, reply) => {
     const filename = req.body?.filename;
