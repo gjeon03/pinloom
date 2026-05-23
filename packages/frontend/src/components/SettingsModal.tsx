@@ -347,8 +347,525 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </section>
 
           <EnvVarsSection />
+
+          <BackupSection />
+
+          <DatabaseFileSection />
         </div>
       </div>
     </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Session DB backup is decoupled from the GitHub repo — the operator
+// downloads a single JSON file and stores it wherever they want (USB,
+// Dropbox, iCloud) and uploads it back into pinloom on the other
+// machine to restore. Existing projects/sessions in the target DB are
+// preserved by id-based skip-if-exists, so a repeated import is a
+// no-op.
+function DatabaseFileSection() {
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    projectsImported: number;
+    sessionsImported: number;
+    messagesImported: number;
+    projectsSkipped: number;
+    sessionsSkipped: number;
+  } | null>(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+
+  function download() {
+    // Anchor click instead of fetch+Blob — letting the browser handle
+    // Content-Disposition keeps memory usage flat on big exports and
+    // gives us the right filename for free.
+    const a = document.createElement('a');
+    a.href = api.exportDbUrl();
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  async function upload(file: File) {
+    setImporting(true);
+    setError(null);
+    setResult(null);
+    try {
+      const text = await file.text();
+      const summary = await api.importDb(text);
+      setResult(summary);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+      // Force the file input to remount so re-importing the same file
+      // works (browsers don't fire onChange when the same path is
+      // re-picked).
+      setFileInputKey((k) => k + 1);
+    }
+  }
+
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        Database file
+      </h3>
+      <div className="space-y-2 text-sm">
+        <p className="text-[var(--color-ink-muted)]">
+          Save your projects, sessions and messages as a single JSON file you
+          can keep anywhere. On another machine, upload that file to merge it
+          into the local DB. Existing project/session ids are skipped, so
+          re-importing the same file is a no-op.
+        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={download}
+            className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm"
+          >
+            Download backup
+          </button>
+          <label
+            className={`rounded border border-[var(--color-border)] text-sm px-3 py-1.5 hover:border-[var(--color-accent)] cursor-pointer ${
+              importing ? 'opacity-50 pointer-events-none' : ''
+            }`}
+          >
+            {importing ? 'Importing…' : 'Upload backup…'}
+            <input
+              key={fileInputKey}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void upload(file);
+              }}
+            />
+          </label>
+          {result && !importing && (
+            <span className="text-xs text-[var(--color-ink-muted)]">
+              Imported {result.projectsImported} project(s),{' '}
+              {result.sessionsImported} session(s),{' '}
+              {result.messagesImported} message(s)
+              {result.projectsSkipped + result.sessionsSkipped > 0 && (
+                <>
+                  {' '}(skipped {result.projectsSkipped} existing project(s),{' '}
+                  {result.sessionsSkipped} existing session(s))
+                </>
+              )}
+              .
+            </span>
+          )}
+        </div>
+        {error && <p className="text-red-400 text-xs">{error}</p>}
+      </div>
+    </section>
+  );
+}
+
+// GitHub-backed wiki sync. Token + repo come from this section; the
+// db-export path uses the same plumbing but is presented as a file
+// operation rather than a git operation.
+interface BackupConfig {
+  connected: boolean;
+  user: { login: string } | null;
+  repo: { fullName: string; cloneUrl: string } | null;
+  lastSyncAt: string | null;
+}
+
+interface BackupRepo {
+  fullName: string;
+  name: string;
+  private: boolean;
+  cloneUrl: string;
+  defaultBranch: string;
+  updatedAt: string;
+}
+
+function BackupSection() {
+  const [config, setConfig] = useState<BackupConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState('');
+  const [repos, setRepos] = useState<BackupRepo[] | null>(null);
+  const [createName, setCreateName] = useState('pinloom-wiki');
+  const [mode, setMode] = useState<'select' | 'create'>('create');
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{
+    wikiBytes: number;
+    committed: boolean;
+    pushed: boolean;
+  } | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<{
+    wikiFilesImported: number;
+  } | null>(null);
+
+  async function refresh() {
+    try {
+      setConfig(await api.getBackupConfig());
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  async function saveToken() {
+    if (tokenDraft.trim().length === 0) {
+      setError('Token is required');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.setBackupToken(tokenDraft.trim());
+      setConfig(next);
+      setTokenDraft('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.clearBackupToken();
+      setConfig(next);
+      setRepos(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadRepos() {
+    setBusy(true);
+    setError(null);
+    try {
+      setRepos(await api.listBackupRepos());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function selectRepo(r: BackupRepo) {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.setBackupRepo({
+        mode: 'select',
+        fullName: r.fullName,
+        cloneUrl: r.cloneUrl,
+      });
+      setConfig(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createRepo() {
+    const name = createName.trim();
+    if (!name) {
+      setError('Repo name is required');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.setBackupRepo({
+        mode: 'create',
+        name,
+        private: true,
+      });
+      setConfig(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncNow() {
+    setSyncing(true);
+    setError(null);
+    setSyncResult(null);
+    try {
+      const result = await api.runBackupSync();
+      setSyncResult({
+        wikiBytes: result.exported.wikiBytes,
+        committed: result.committed,
+        pushed: result.pushed,
+      });
+      // Refresh the config so the lastSyncAt label updates.
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function restoreNow() {
+    if (
+      !window.confirm(
+        'Pull wiki pages from the backup repo? Existing pages in pinloom will be left untouched — only files missing locally will be added.',
+      )
+    ) {
+      return;
+    }
+    setRestoring(true);
+    setError(null);
+    setRestoreResult(null);
+    try {
+      const result = await api.runBackupRestore();
+      setRestoreResult({
+        wikiFilesImported: result.imported.wikiFilesImported,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRestoring(false);
+    }
+  }
+
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        Wiki sync (GitHub)
+      </h3>
+      {config === null ? (
+        <p className="text-sm text-[var(--color-ink-muted)]">Loading…</p>
+      ) : (
+        <div className="space-y-3 text-sm">
+          {!config.connected ? (
+            <div className="space-y-2">
+              <p className="text-[var(--color-ink-muted)]">
+                Paste a GitHub Personal Access Token to back up your wiki tree
+                to a private repository. Either token type works:
+              </p>
+              <ul className="text-[var(--color-ink-muted)] text-xs list-disc pl-5 space-y-1">
+                <li>
+                  <strong>Classic</strong> (<code>ghp_…</code>) — easiest;{' '}
+                  <a
+                    href="https://github.com/settings/tokens/new?scopes=repo&description=pinloom-wiki"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[var(--color-accent)] underline"
+                  >
+                    generate with <code>repo</code> scope
+                  </a>{' '}
+                  and pinloom can both read and create repos.
+                </li>
+                <li>
+                  <strong>Fine-grained</strong> (<code>github_pat_…</code>) —
+                  more locked down. To create a new repo from inside pinloom
+                  you'll need <em>Administration: write</em> on{' '}
+                  <em>All repositories</em>. If you create the repo on GitHub
+                  first, the token only needs <em>Contents: write</em> on that
+                  specific repo.
+                </li>
+              </ul>
+              <p className="text-[var(--color-ink-muted)] text-xs">
+                The token is stored as-is in pinloom's local DB — anyone with
+                the DB file effectively has the token, so revoke it on GitHub
+                if the file leaks.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={tokenDraft}
+                  onChange={(e) => setTokenDraft(e.target.value)}
+                  placeholder="ghp_… or github_pat_…"
+                  className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={saveToken}
+                  disabled={busy || tokenDraft.trim().length === 0}
+                  className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
+                >
+                  Connect
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[var(--color-ink-muted)]">
+                    Connected as{' '}
+                  </span>
+                  <span className="font-medium">
+                    {config.user?.login ?? '(unknown)'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={disconnect}
+                  disabled={busy}
+                  className="text-xs text-[var(--color-ink-muted)] hover:text-red-400"
+                >
+                  Disconnect
+                </button>
+              </div>
+              {config.repo ? (
+                <div className="space-y-2">
+                  <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 flex items-center justify-between">
+                    <div>
+                      <div className="text-[10px] uppercase text-[var(--color-ink-muted)]">
+                        Backup repository
+                      </div>
+                      <div className="font-mono text-sm">
+                        {config.repo.fullName}
+                      </div>
+                    </div>
+                    <a
+                      href={`https://github.com/${config.repo.fullName}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-[var(--color-accent)] underline"
+                    >
+                      Open on GitHub
+                    </a>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={syncNow}
+                      disabled={syncing || busy || restoring}
+                      className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
+                    >
+                      {syncing ? 'Syncing…' : 'Sync now'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={restoreNow}
+                      disabled={syncing || busy || restoring}
+                      className="rounded border border-[var(--color-border)] text-sm px-3 py-1.5 hover:border-[var(--color-accent)] disabled:opacity-40"
+                    >
+                      {restoring ? 'Restoring…' : 'Restore from repo'}
+                    </button>
+                    {syncResult && !syncing && (
+                      <span className="text-xs text-[var(--color-ink-muted)]">
+                        {syncResult.committed
+                          ? `Pushed wiki snapshot (${formatBytes(syncResult.wikiBytes)}).`
+                          : 'No wiki changes to push.'}
+                      </span>
+                    )}
+                    {restoreResult && !restoring && (
+                      <span className="text-xs text-[var(--color-ink-muted)]">
+                        Imported {restoreResult.wikiFilesImported} wiki file(s).
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMode('create')}
+                      className={`px-2 py-1 rounded text-xs ${
+                        mode === 'create'
+                          ? 'bg-[var(--color-accent)] text-black'
+                          : 'border border-[var(--color-border)] text-[var(--color-ink-muted)]'
+                      }`}
+                    >
+                      Create new
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('select');
+                        if (repos === null) void loadRepos();
+                      }}
+                      className={`px-2 py-1 rounded text-xs ${
+                        mode === 'select'
+                          ? 'bg-[var(--color-accent)] text-black'
+                          : 'border border-[var(--color-border)] text-[var(--color-ink-muted)]'
+                      }`}
+                    >
+                      Select existing
+                    </button>
+                  </div>
+                  {mode === 'create' ? (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={createName}
+                        onChange={(e) => setCreateName(e.target.value)}
+                        placeholder="pinloom-wiki"
+                        className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={createRepo}
+                        disabled={busy || createName.trim().length === 0}
+                        className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
+                      >
+                        Create
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="max-h-48 overflow-auto rounded border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
+                      {repos === null ? (
+                        <p className="px-3 py-2 text-[var(--color-ink-muted)]">
+                          Loading…
+                        </p>
+                      ) : repos.length === 0 ? (
+                        <p className="px-3 py-2 text-[var(--color-ink-muted)]">
+                          No repositories.
+                        </p>
+                      ) : (
+                        repos.map((r) => (
+                          <button
+                            key={r.fullName}
+                            type="button"
+                            onClick={() => selectRepo(r)}
+                            disabled={busy}
+                            className="block w-full text-left px-3 py-1.5 hover:bg-[var(--color-surface-3)] disabled:opacity-40"
+                          >
+                            <span className="font-mono">{r.fullName}</span>
+                            {r.private && (
+                              <span className="ml-2 text-[10px] uppercase text-[var(--color-ink-muted)]">
+                                private
+                              </span>
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {config.lastSyncAt && (
+                <div className="text-xs text-[var(--color-ink-muted)]">
+                  Last sync: {new Date(config.lastSyncAt).toLocaleString()}
+                </div>
+              )}
+            </div>
+          )}
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+        </div>
+      )}
+    </section>
   );
 }

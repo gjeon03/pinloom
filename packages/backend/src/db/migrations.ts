@@ -311,6 +311,21 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         ON messages(session_id, created_at);
     `,
   },
+  {
+    id: 23,
+    // Generic key/value store for app-level settings that aren't
+    // user_env variables. First user: the GitHub backup feature
+    // (PAT, remote URL, last sync timestamp). PAT is stored in plain
+    // text — the UI warns the operator that the DB file leaking is
+    // equivalent to the token leaking. Same trust boundary as user_env.
+    sql: `
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

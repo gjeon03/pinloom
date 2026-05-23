@@ -115,7 +115,6 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
                 p.name AS project_name, p.cwd AS project_cwd
          FROM sessions s
          JOIN projects p ON p.id = s.project_id
-         WHERE s.hidden = 0
          ORDER BY s.updated_at DESC
          LIMIT 100`,
       )

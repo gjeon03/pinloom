@@ -320,6 +320,85 @@ export const api = {
       method: 'DELETE',
     }),
 
+  // GitHub backup — Phase A: token + repo configuration. Sync / restore
+  // endpoints land in subsequent phases.
+  getBackupConfig: () =>
+    request<{
+      connected: boolean;
+      user: { login: string } | null;
+      repo: { fullName: string; cloneUrl: string } | null;
+      lastSyncAt: string | null;
+    }>('/api/settings/backup'),
+  setBackupToken: (token: string) =>
+    request<{
+      connected: boolean;
+      user: { login: string } | null;
+      repo: { fullName: string; cloneUrl: string } | null;
+      lastSyncAt: string | null;
+    }>('/api/settings/backup/token', {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    }),
+  clearBackupToken: () =>
+    request<{ connected: boolean; user: null; repo: null; lastSyncAt: null }>(
+      '/api/settings/backup/token',
+      { method: 'DELETE' },
+    ),
+  listBackupRepos: () =>
+    request<
+      Array<{
+        fullName: string;
+        name: string;
+        private: boolean;
+        cloneUrl: string;
+        defaultBranch: string;
+        updatedAt: string;
+      }>
+    >('/api/settings/backup/repos'),
+  setBackupRepo: (
+    body:
+      | { mode: 'select'; fullName: string; cloneUrl: string }
+      | { mode: 'create'; name: string; private?: boolean },
+  ) =>
+    request<{
+      connected: boolean;
+      user: { login: string } | null;
+      repo: { fullName: string; cloneUrl: string } | null;
+      lastSyncAt: string | null;
+    }>('/api/settings/backup/repo', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  // Wiki sync — pushes the local wiki tree to the connected GitHub repo.
+  runBackupSync: () =>
+    request<{
+      exported: { wikiBytes: number; exportedAt: string };
+      committed: boolean;
+      pushed: boolean;
+      message: string;
+    }>('/api/backup/sync', { method: 'POST' }),
+  runBackupRestore: () =>
+    request<{
+      imported: { wikiFilesImported: number; wikiFilesSkipped: number };
+      fromCommit: string | null;
+    }>('/api/backup/restore', { method: 'POST' }),
+
+  // Database file export/import — decoupled from the GitHub repo.
+  // exportDb triggers a file download via window.location; the response
+  // doesn't need typing because it's not consumed via fetch.
+  exportDbUrl: () => '/api/backup/db/export',
+  importDb: (file: string) =>
+    request<{
+      projectsImported: number;
+      projectsSkipped: number;
+      sessionsImported: number;
+      sessionsSkipped: number;
+      messagesImported: number;
+    }>('/api/backup/db/import', {
+      method: 'POST',
+      body: JSON.stringify({ file }),
+    }),
+
   // Cross-project session list — used by Teams UI to populate pickers
   // without an N+1 fetch per project.
   listAllSessions: () => request<Session[]>('/api/sessions'),

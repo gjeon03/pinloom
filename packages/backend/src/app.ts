@@ -10,6 +10,7 @@ import { messageRoutes } from './routes/messages.js';
 import { fsRoutes } from './routes/fs.js';
 import { wikiRoutes } from './routes/wiki.js';
 import { settingsRoutes } from './routes/settings.js';
+import { backupRoutes } from './routes/backup.js';
 import { teamRoutes } from './routes/teams.js';
 import { teamDispatchRoutes } from './routes/team-dispatch.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
@@ -52,6 +53,7 @@ export async function createApp() {
   await app.register(fsRoutes);
   await app.register(wikiRoutes);
   await app.register(settingsRoutes);
+  await app.register(backupRoutes);
   await app.register(teamRoutes);
   await app.register(teamDispatchRoutes);
 
