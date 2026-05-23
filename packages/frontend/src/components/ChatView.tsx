@@ -525,9 +525,24 @@ export function ChatView({ session, onPinChange }: Props) {
   // dropped — Virtuoso's `followOutput` keeps the latest item anchored
   // when at bottom, including across textarea growth and queue mounts.
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  // While the initial scroll-to-bottom is in flight Virtuoso first reports
+  // atBottom=true (empty data) then atBottom=false (data populates, mounted
+  // at top) and only after our scrollToIndex lands does it flip back to
+  // true. Without a gate the jump-to-latest pill pops in for one frame on
+  // every tab switch. Track our own "scroll has actually landed" signal
+  // and only let the pill render once that has happened for this session.
+  const didInitialScroll = useRef(false);
+  const [initialScrollSettled, setInitialScrollSettled] = useState(false);
   const handleAtBottomChange = useCallback((next: boolean) => {
     setAtBottom(next);
-    if (next) setUnseenCount(0);
+    if (next) {
+      setUnseenCount(0);
+      // The first atBottom=true that arrives BEFORE we've kicked off
+      // scrollToIndex is just Virtuoso reporting on the empty/partial
+      // mount state — ignore it. Only the at-bottom that follows our own
+      // scroll attempt counts as "settled".
+      if (didInitialScroll.current) setInitialScrollSettled(true);
+    }
   }, []);
   const followOutput = useCallback(
     (isAtBottom: boolean) => (isAtBottom ? ('smooth' as const) : false),
@@ -537,11 +552,11 @@ export function ChatView({ session, onPinChange }: Props) {
   // `initialTopMostItemIndex` only captures the value at Virtuoso's first
   // render, which lands while messages are still being seeded from cache.
   // Once the first non-empty batch arrives for a session, jump to the tail
-  // ourselves. The ref resets on session switch so each tab gets one
-  // landing scroll instead of fighting the user mid-conversation.
-  const didInitialScroll = useRef(false);
+  // ourselves. The ref + settled flag reset on session switch so each tab
+  // gets one landing scroll instead of fighting the user mid-conversation.
   useEffect(() => {
     didInitialScroll.current = false;
+    setInitialScrollSettled(false);
   }, [session.id]);
   useEffect(() => {
     if (didInitialScroll.current) return;
@@ -955,7 +970,7 @@ export function ChatView({ session, onPinChange }: Props) {
           initialTopMostItemIndex={Math.max(0, renderItems.length - 1)}
         />
 
-        {!atBottom && (
+        {initialScrollSettled && !atBottom && (
           <button
             type="button"
             onClick={scrollToBottom}
