@@ -16,6 +16,10 @@ if (!tempDb.startsWith(os.tmpdir())) {
 
 export default defineConfig({
   testDir: '.',
+  // Walkthrough has its own config with HOME override + video recording.
+  // Running it under the smoke config (which doesn't set HOME) leaves
+  // wiki-related assertions failing because the wiki path is real.
+  testMatch: /smoke\.spec\.ts$/,
   // The smoke test mutates shared backend state; serialize.
   fullyParallel: false,
   workers: 1,
