@@ -94,11 +94,19 @@ export function BottomPanel({ session }: Props) {
 
         <div className="flex-1" />
         {/*
-          A grey 'Terminal — soon' pill + a session-id mono badge used to
-          sit here. Both bled into the marketing screenshots and read as
-          half-finished work — pulled until Terminal actually ships and
-          the session id has a real reason to be visible.
+          A grey 'Terminal — soon' pill used to sit here next to the
+          session id badge. It read as half-finished work in launch
+          screenshots and the Terminal feature wasn't actually on a
+          schedule, so we pulled the pill. The session-id badge stays —
+          it's a short-hash identifier the operator can quote in bug
+          reports or use to distinguish sessions that share a title.
         */}
+        <span
+          title={`Session ${session.id}`}
+          className="font-mono text-[10px] text-[var(--color-ink-muted)] px-1"
+        >
+          {session.id.slice(0, 8)}
+        </span>
       </div>
 
       {open && (
