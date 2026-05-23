@@ -307,6 +307,17 @@ test.describe('walkthrough', () => {
     await beat(page);
     await snap(page, '07-wiki-page-detail');
 
+    // 7b. Inline editor — same page, click "Edit" to capture the
+    //     split-pane (textarea + live preview + frontmatter sidebar).
+    //     Closes via Cancel so the page is back in read mode before the
+    //     next surface is captured.
+    await page.getByRole('button', { name: /^Edit$/ }).click();
+    await expect(page.getByRole('button', { name: /^Save$/ })).toBeVisible();
+    await beat(page);
+    await snap(page, '07b-wiki-page-edit');
+    await page.getByRole('button', { name: /^Cancel$/ }).click();
+    await expect(page.getByRole('button', { name: /^Edit$/ })).toBeVisible();
+
     // 8. Wiki Analyze picker.
     await page.goBack();
     await expect(page.getByRole('heading', { name: 'Wiki' })).toBeVisible();
