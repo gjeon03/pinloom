@@ -21,6 +21,8 @@ export function WikiAnalyzePicker({
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Analyze project for conventions"
         className="w-full max-w-lg rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col cursor-default"
         style={{ maxHeight: 'min(640px, 85vh)' }}
       >
@@ -38,6 +40,7 @@ export function WikiAnalyzePicker({
           </div>
           <button
             onClick={onClose}
+            aria-label="Close analyze picker"
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
             <X size={14} />
