@@ -5,7 +5,7 @@
 // surfaced to the SDK's prompt AsyncIterable so it picks them up at the
 // next turn boundary instead of restarting.
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
 import type { ImageInput, ImageMediaType } from '../runner-types.js';
 import { UserPromptStream } from './message-stream.js';
 import type {
@@ -130,9 +130,21 @@ class ClaudeAdapterImpl implements AgentAdapter {
       }
     }
 
+    // When the caller provided a static/dynamic split, pass it to the SDK
+    // as a block array with `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` between them.
+    // The SDK keeps the static prefix in its prompt cache across turns;
+    // editing a pin or plan item only invalidates the suffix instead of
+    // busting the cache for the whole prompt. Falls back to a single
+    // string for the legacy path so behavior is unchanged when the runner
+    // doesn't supply a split.
+    const systemPromptOption =
+      args.systemPromptDynamic !== undefined
+        ? [args.systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, args.systemPromptDynamic]
+        : args.systemPrompt;
+
     const options: Record<string, unknown> = {
       cwd: args.cwd,
-      systemPrompt: args.systemPrompt,
+      systemPrompt: systemPromptOption,
       // No maxTurns ceiling — pinloom is single-user and the cancel button
       // covers runaway loops.
       permissionMode: 'bypassPermissions',

@@ -14,6 +14,10 @@ import type { WsEvent } from '@pinloom/shared';
 // loads `query` from the SDK module.
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: vi.fn(),
+  // Mirror the real SDK constant so the adapter can compose its
+  // [static, boundary, dynamic] systemPrompt block array. Value must
+  // match @anthropic-ai/claude-agent-sdk's `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`.
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY: '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__',
 }));
 
 import { query } from '@anthropic-ai/claude-agent-sdk';

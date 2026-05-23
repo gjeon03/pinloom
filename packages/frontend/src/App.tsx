@@ -1,4 +1,5 @@
 import { Routes, Route } from 'react-router-dom';
+import { SWRConfig } from 'swr';
 import { AppShell } from './components/AppShell.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
 import { ProjectPage } from './pages/ProjectPage.js';
@@ -9,9 +10,18 @@ import { TeamCanvasPage } from './pages/TeamCanvasPage.js';
 import { WikiPage } from './pages/WikiPage.js';
 import { WikiDetailPage } from './pages/WikiDetailPage.js';
 
+// SWR defaults: revalidate on browser focus + network reconnect so a tab
+// that's been backgrounded snaps to fresh server state, dedupingInterval
+// caps the burst when many keyed queries are mounted on the same view.
+const swrConfig = {
+  revalidateOnFocus: true,
+  revalidateOnReconnect: true,
+  dedupingInterval: 2000,
+};
+
 export function App() {
   return (
-    <>
+    <SWRConfig value={swrConfig}>
       <NotificationCenter />
       <Routes>
         <Route path="/pins/:sessionId" element={<PinsPage />} />
@@ -75,6 +85,6 @@ export function App() {
           }
         />
       </Routes>
-    </>
+    </SWRConfig>
   );
 }

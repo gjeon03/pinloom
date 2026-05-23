@@ -300,9 +300,13 @@ class CodexAdapterImpl implements AgentAdapter {
 
       // Compose stdin: systemPrompt is only included on the very first turn
       // (subsequent resumes already have it baked in via thread context).
+      // Codex has no prompt-cache split concept, so concatenate the static
+      // and dynamic halves back together.
+      const fullSystemPrompt =
+        args.systemPrompt + (args.systemPromptDynamic ?? '');
       const stdinPayload =
-        isFirstTurn && args.systemPrompt.length > 0
-          ? `${args.systemPrompt}\n\n---\n\n${prompt.text}`
+        isFirstTurn && fullSystemPrompt.length > 0
+          ? `${fullSystemPrompt}\n\n---\n\n${prompt.text}`
           : prompt.text;
 
       cliArgs.push('-');

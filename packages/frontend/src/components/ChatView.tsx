@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import useSWR from 'swr';
 import {
   ArrowDown,
   BookPlus,
@@ -6,7 +8,6 @@ import {
   ChevronRight,
   ChevronUp,
   ImagePlus,
-  Pin,
   Send,
   Square,
   Terminal,
@@ -19,6 +20,7 @@ import type {
   Session,
 } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { cacheKeys } from '../api/cacheKeys.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { ToolMessage } from './ToolMessage.js';
 import { ToolGroup } from './ToolGroup.js';
@@ -27,6 +29,13 @@ import { ModelPicker, findModelLabel } from './ModelPicker.js';
 import { AgentBadge } from './AgentBadge.js';
 import { MentionPopup, type MentionWorker } from './MentionPopup.js';
 import { useNotifications } from '../stores/notifications.js';
+import { Markdown } from './Markdown.js';
+import {
+  CopyMarkdownButton,
+  DownloadMarkdownButton,
+  PinToggleButton,
+  RawViewToggle,
+} from './MessageActions.js';
 
 type AiRunState = 'ai' | null;
 
@@ -140,6 +149,13 @@ function loadPersistedInput(sessionId: string): string {
 
 export function ChatView({ session, onPinChange }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
+  // groupConsecutiveTools is O(N) over the whole message list. Without
+  // memoization every `stream_chunk` event (~10/sec while a turn is
+  // streaming) re-runs it and produces a new array, which combined with
+  // an un-memoized MessageBubble forces a full reconciliation of every
+  // row. Memoizing here means only adds/updates trigger a re-group, and
+  // identical messages keep their row instances.
+  const renderItems = useMemo(() => groupConsecutiveTools(messages), [messages]);
   const [input, setInput] = useState(() => loadPersistedInput(session.id));
   const [runKind, setRunKind] = useState<AiRunState>(null);
   const [shellRunning, setShellRunning] = useState(false);
@@ -327,7 +343,6 @@ export function ChatView({ session, onPinChange }: Props) {
       el.setSelectionRange(pos, pos);
     });
   }
-  const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queueScrollRef = useRef<HTMLUListElement>(null);
@@ -350,15 +365,19 @@ export function ChatView({ session, onPinChange }: Props) {
     }
   }, [input, session.id]);
 
+  // Reset transient/derived state on session switch. The actual data
+  // (messages / queue / runStatus) now arrives via the SWR hooks below —
+  // those return cached data synchronously when the session was visited
+  // before, so the tab switch feels instant instead of waiting on three
+  // serial HTTP round trips. We still clear the local mirrors here so a
+  // cold-cache switch doesn't briefly show the previous session's data
+  // before SWR's fetcher resolves.
   useEffect(() => {
-    let cancelled = false;
     setMessages([]);
-    setError(null);
+    setQueue([]);
     setRunKind(null);
     setShellRunning(false);
-    // Don't clear input or queue here: they were loaded from localStorage
-    // by the useState initializer for this session and we want them to
-    // survive the mount-time reset of derived state below.
+    setError(null);
     setUnseenCount(0);
     setAtBottom(true);
     setStreamingIds(new Set());
@@ -377,38 +396,51 @@ export function ChatView({ session, onPinChange }: Props) {
     } catch {
       setModel(null);
     }
-    api
-      .listMessages(session.id)
-      .then((msgs) => {
-        if (cancelled) return;
-        setMessages(msgs);
-      })
-      .catch((e) => !cancelled && setError(String(e)));
-    api
-      .listQueue(session.id)
-      .then((items) => {
-        if (cancelled) return;
-        setQueue(items);
-      })
-      .catch(() => {
-        // Best-effort initial fetch — WS will keep us in sync from here.
-      });
-    api
-      .getRunStatus(session.id)
-      .then((s) => {
-        if (cancelled) return;
-        if (s.ai) setRunKind('ai');
-        if (s.exec) setShellRunning(true);
-      })
-      .catch(() => {
-        // non-critical
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [session.id]);
+  }, [session.id, session.nextImageNumber]);
 
-  useWebSocket(`session:${session.id}`, (ev) => {
+  // SWR caches per-session payloads so tab switches render from cache
+  // instantly. WS handlers keep `messages`/`queue` live during a streaming
+  // turn — SWR's role here is the "snap-to-fresh" safety net on focus and
+  // network reconnect, not a per-event mirror.
+  const { data: messagesData, error: messagesError, mutate: mutateMessages } =
+    useSWR(cacheKeys.sessionMessages(session.id), () =>
+      api.listMessages(session.id),
+    );
+  const { data: queueData } = useSWR(cacheKeys.sessionQueue(session.id), () =>
+    api.listQueue(session.id),
+  );
+  const { data: runStatusData } = useSWR(
+    cacheKeys.runStatus(session.id),
+    () => api.getRunStatus(session.id),
+  );
+
+  // When SWR delivers a payload (initial or revalidate), replace the local
+  // working copy. Mid-turn WS streams continue mutating from there.
+  // Comparing identity is enough: SWR returns the same reference unless
+  // the underlying fetch returned new data.
+  useEffect(() => {
+    if (messagesData) setMessages(messagesData);
+  }, [messagesData]);
+  useEffect(() => {
+    if (queueData) setQueue(queueData);
+  }, [queueData]);
+  useEffect(() => {
+    if (!runStatusData) return;
+    setRunKind(runStatusData.ai ? 'ai' : null);
+    setShellRunning(runStatusData.exec);
+  }, [runStatusData]);
+  useEffect(() => {
+    if (messagesError) setError(String(messagesError));
+  }, [messagesError]);
+
+  // When the WS reconnects (e.g. tab woke up after browser throttling
+  // killed the socket), pull fresh state for this session. SWR's focus
+  // revalidate covers most cases, but a long backgrounded tab may have a
+  // dead socket without losing focus, so the reconnect-specific signal
+  // matters as a separate trigger.
+  useWebSocket(
+    `session:${session.id}`,
+    (ev) => {
     if (ev.type === 'message' && ev.sessionId === session.id) {
       if (ev.message.sourceMessageId) {
         onPinChange(ev.message);
@@ -478,53 +510,67 @@ export function ChatView({ session, onPinChange }: Props) {
         }
       }
     }
-  });
+    },
+    {
+      onReconnect: () => {
+        void mutateMessages();
+      },
+    },
+  );
 
-  // Track bottom-ness
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const next = distance < BOTTOM_STICKY_PX;
+  // Virtuoso owns scroll mechanics now. We track atBottom via its
+  // atBottomStateChange callback instead of an onScroll handler, and
+  // call scrollToIndex through the imperative handle for the jump-to-
+  // latest button. ResizeObserver / auto-scroll-on-message effects are
+  // dropped — Virtuoso's `followOutput` keeps the latest item anchored
+  // when at bottom, including across textarea growth and queue mounts.
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  // While the initial scroll-to-bottom is in flight Virtuoso first reports
+  // atBottom=true (empty data) then atBottom=false (data populates, mounted
+  // at top) and only after our scrollToIndex lands does it flip back to
+  // true. Without a gate the jump-to-latest pill pops in for one frame on
+  // every tab switch. Track our own "scroll has actually landed" signal
+  // and only let the pill render once that has happened for this session.
+  const didInitialScroll = useRef(false);
+  const [initialScrollSettled, setInitialScrollSettled] = useState(false);
+  const handleAtBottomChange = useCallback((next: boolean) => {
     setAtBottom(next);
-    if (next) setUnseenCount(0);
-  }, []);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    // initial position
-    handleScroll();
-  }, [handleScroll, session.id]);
-
-  // Keep the latest content anchored when the chat area shrinks — e.g. while
-  // the user types and the textarea grows, pushing the bottom up.
-  const atBottomRef = useRef(true);
-  useEffect(() => {
-    atBottomRef.current = atBottom;
-  }, [atBottom]);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver(() => {
-      if (atBottomRef.current) {
-        el.scrollTo({ top: el.scrollHeight });
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // Auto-scroll only when user is already near bottom.
-  // Depends on full `messages` array so streaming content growth (same
-  // length, content changes) also triggers the scroll.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    if (atBottom) {
-      el.scrollTo({ top: el.scrollHeight });
+    if (next) {
+      setUnseenCount(0);
+      // The first atBottom=true that arrives BEFORE we've kicked off
+      // scrollToIndex is just Virtuoso reporting on the empty/partial
+      // mount state — ignore it. Only the at-bottom that follows our own
+      // scroll attempt counts as "settled".
+      if (didInitialScroll.current) setInitialScrollSettled(true);
     }
-  }, [messages, running, atBottom, queue.length, attachments.length]);
+  }, []);
+  const followOutput = useCallback(
+    (isAtBottom: boolean) => (isAtBottom ? ('smooth' as const) : false),
+    [],
+  );
+
+  // `initialTopMostItemIndex` only captures the value at Virtuoso's first
+  // render, which lands while messages are still being seeded from cache.
+  // Once the first non-empty batch arrives for a session, jump to the tail
+  // ourselves. The ref + settled flag reset on session switch so each tab
+  // gets one landing scroll instead of fighting the user mid-conversation.
+  useEffect(() => {
+    didInitialScroll.current = false;
+    setInitialScrollSettled(false);
+  }, [session.id]);
+  useEffect(() => {
+    if (didInitialScroll.current) return;
+    if (renderItems.length === 0) return;
+    didInitialScroll.current = true;
+    // Defer to after the list has measured its rows; otherwise Virtuoso
+    // scrolls to an estimated position and stops short of the real bottom.
+    requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: renderItems.length - 1,
+        align: 'end',
+      });
+    });
+  }, [renderItems.length]);
 
   // Textarea auto-grow.
   // When the input is empty we DON'T compute height from scrollHeight, because
@@ -786,20 +832,28 @@ export function ChatView({ session, onPinChange }: Props) {
     }
   }
 
-  async function togglePin(message: Message) {
-    try {
-      const updated = await api.updateMessage(message.id, { pinned: !message.pinned });
-      setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-      onPinChange(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
+  // useCallback so MessageBubble (now memoized below) doesn't re-render
+  // every row on every parent render just because togglePin gets a new
+  // identity. setMessages takes a functional updater so we don't need
+  // messages in the deps.
+  const togglePin = useCallback(
+    async (message: Message) => {
+      try {
+        const updated = await api.updateMessage(message.id, { pinned: !message.pinned });
+        setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+        onPinChange(updated);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [onPinChange],
+  );
 
   function scrollToBottom() {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    virtuosoRef.current?.scrollToIndex({
+      index: 'LAST',
+      behavior: 'smooth',
+    });
     setUnseenCount(0);
     setAtBottom(true);
   }
@@ -827,102 +881,109 @@ export function ChatView({ session, onPinChange }: Props) {
         </div>
       </header>
       <div className="flex-1 min-h-0 relative flex flex-col">
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto overflow-x-hidden px-4 text-sm"
-      >
-        <div className="h-4" aria-hidden />
-        <div className="space-y-3">
-        {messages.length === 0 && (
-          <p className="text-[var(--color-ink-muted)]">
-            Start the conversation. AI answers can be pinned so they stay visible.
-          </p>
-        )}
-        {groupConsecutiveTools(messages).map((item) => {
-          if (item.kind === 'tool-group') {
-            return <ToolGroup key={item.key} messages={item.messages} />;
+        <Virtuoso
+          ref={virtuosoRef}
+          className="flex-1 text-sm"
+          data={renderItems}
+          computeItemKey={(_, item) =>
+            item.kind === 'tool-group' ? item.key : item.message.id
           }
-          const m = item.message;
-          return (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              sessionAgent={session.agent}
-              onTogglePin={togglePin}
-              streaming={streamingIds.has(m.id)}
-            />
-          );
-        })}
-        {aiRunning && streamingIds.size === 0 && (
-          <div className="text-xs text-[var(--color-ink-muted)] space-y-0.5">
-            <div className="flex items-center gap-2">
-              <span className="italic">
-                {verb}…
-                {elapsedSec > 0 && (
-                  <span className="not-italic opacity-70"> ({formatElapsed(elapsedSec)})</span>
-                )}
-              </span>
-              <button
-                type="button"
-                onClick={cancelRun}
-                title="Cancel (Esc)"
-                className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
-              >
-                <Square size={10} fill="currentColor" />
-                <span>Stop</span>
-                <span className="opacity-60 text-[10px]">Esc</span>
-              </button>
-            </div>
-            {thinkingText.trim().length > 0 && (
-              <div className="relative pl-4 border-l-2 border-[var(--color-border)] opacity-70 max-h-24 overflow-hidden flex items-end">
-                {/* Subtle fade so the top edge looks intentional rather than abruptly clipped */}
-                <div
-                  aria-hidden
-                  className="pointer-events-none absolute top-0 left-0 right-0 h-3 bg-gradient-to-b from-[var(--color-surface)] to-transparent"
+          itemContent={(_, item) => (
+            <div className="px-4 pb-3">
+              {item.kind === 'tool-group' ? (
+                <ToolGroup messages={item.messages} />
+              ) : (
+                <MessageBubble
+                  message={item.message}
+                  sessionAgent={session.agent}
+                  onTogglePin={togglePin}
+                  streaming={streamingIds.has(item.message.id)}
                 />
-                <div className="whitespace-pre-wrap w-full">
-                  {thinkingText.slice(-1500)}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-        {shellRunning && (
-          <div className="flex items-center gap-2 text-xs text-[var(--color-tool-ink)] font-mono">
-            <span>$ running…</span>
-            <button
-              type="button"
-              onClick={cancelRun}
-              title="Cancel"
-              className="inline-flex items-center gap-1 rounded border border-[var(--color-tool-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
-            >
-              <Square size={10} fill="currentColor" />
-              <span>Stop</span>
-            </button>
-          </div>
-        )}
-        {error && <p className="text-red-400 text-xs">{error}</p>}
-        </div>
-        <div className="h-4" aria-hidden />
-      </div>
-
-      {!atBottom && (
-        <button
-          type="button"
-          onClick={scrollToBottom}
-          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 rounded-full bg-[var(--color-surface-3)] border border-[var(--color-border)] shadow-lg px-3 py-1.5 text-xs flex items-center gap-1.5 hover:border-[var(--color-accent)]"
-        >
-          <ArrowDown size={12} />
-          {unseenCount > 0 ? (
-            <span>
-              {unseenCount} new
-            </span>
-          ) : (
-            <span>Jump to latest</span>
+              )}
+            </div>
           )}
-        </button>
-      )}
+          components={{
+            Header: () => <div className="h-4" aria-hidden />,
+            Footer: () => (
+              <div className="px-4 pb-4 space-y-3">
+                {aiRunning && streamingIds.size === 0 && (
+                  <div className="text-xs text-[var(--color-ink-muted)] space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="italic">
+                        {verb}…
+                        {elapsedSec > 0 && (
+                          <span className="not-italic opacity-70">
+                            {' '}({formatElapsed(elapsedSec)})
+                          </span>
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={cancelRun}
+                        title="Cancel (Esc)"
+                        className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
+                      >
+                        <Square size={10} fill="currentColor" />
+                        <span>Stop</span>
+                        <span className="opacity-60 text-[10px]">Esc</span>
+                      </button>
+                    </div>
+                    {thinkingText.trim().length > 0 && (
+                      <div className="relative pl-4 border-l-2 border-[var(--color-border)] opacity-70 max-h-24 overflow-hidden flex items-end">
+                        <div
+                          aria-hidden
+                          className="pointer-events-none absolute top-0 left-0 right-0 h-3 bg-gradient-to-b from-[var(--color-surface)] to-transparent"
+                        />
+                        <div className="whitespace-pre-wrap w-full">
+                          {thinkingText.slice(-1500)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {shellRunning && (
+                  <div className="flex items-center gap-2 text-xs text-[var(--color-tool-ink)] font-mono">
+                    <span>$ running…</span>
+                    <button
+                      type="button"
+                      onClick={cancelRun}
+                      title="Cancel"
+                      className="inline-flex items-center gap-1 rounded border border-[var(--color-tool-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
+                    >
+                      <Square size={10} fill="currentColor" />
+                      <span>Stop</span>
+                    </button>
+                  </div>
+                )}
+                {error && <p className="text-red-400 text-xs">{error}</p>}
+              </div>
+            ),
+            EmptyPlaceholder: () => (
+              <div className="px-4 pt-4 text-[var(--color-ink-muted)]">
+                Start the conversation. AI answers can be pinned so they stay visible.
+              </div>
+            ),
+          }}
+          followOutput={followOutput}
+          atBottomStateChange={handleAtBottomChange}
+          increaseViewportBy={{ top: 600, bottom: 600 }}
+          initialTopMostItemIndex={Math.max(0, renderItems.length - 1)}
+        />
+
+        {initialScrollSettled && !atBottom && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 rounded-full bg-[var(--color-surface-3)] border border-[var(--color-border)] shadow-lg px-3 py-1.5 text-xs flex items-center gap-1.5 hover:border-[var(--color-accent)]"
+          >
+            <ArrowDown size={12} />
+            {unseenCount > 0 ? (
+              <span>{unseenCount} new</span>
+            ) : (
+              <span>Jump to latest</span>
+            )}
+          </button>
+        )}
       </div>
 
       {queue.length > 0 && (
@@ -1141,7 +1202,7 @@ export function ChatView({ session, onPinChange }: Props) {
                   : 'Message the AI (Shift+Enter for newline · paste/attach images · start with ! to run a shell command)'
             }
             rows={1}
-            className={`w-full resize-none rounded border px-3 py-2 text-sm leading-snug ${
+            className={`block w-full resize-none rounded border px-3 py-[7px] text-sm leading-5 ${
               isShellMode
                 ? 'bg-[var(--color-tool-bg)] border-[var(--color-tool-border)] font-mono text-[var(--color-tool-ink)]'
                 : 'bg-[var(--color-surface-2)] border-[var(--color-border)]'
@@ -1151,7 +1212,7 @@ export function ChatView({ session, onPinChange }: Props) {
           <button
             type="submit"
             disabled={(!input.trim() && attachments.length === 0) || uploadingAttachments}
-            className={`rounded px-3 py-2 text-sm disabled:opacity-40 font-medium flex items-center gap-1.5 ${
+            className={`shrink-0 h-9 rounded px-3 text-sm disabled:opacity-40 font-medium flex items-center justify-center gap-1.5 ${
               isShellMode
                 ? 'bg-yellow-400 text-black'
                 : 'bg-[var(--color-accent)] text-black'
@@ -1201,7 +1262,11 @@ export function ChatView({ session, onPinChange }: Props) {
   );
 }
 
-function MessageBubble({
+// Renamed inner component so we can wrap with React.memo at the bottom
+// without changing the call site. Without memoization every stream_chunk
+// (~10/sec while a turn is streaming) re-renders all N rows; on a 2800-
+// message session that was the main source of frame drops.
+function MessageBubbleInner({
   message,
   sessionAgent,
   onTogglePin,
@@ -1229,6 +1294,16 @@ function MessageBubble({
   // Tool/system messages are typically short and not pin targets — sticky there
   // just adds visual noise as it follows the scroll. Limit sticky to user/assistant.
   const stickyHeader = message.role === 'assistant' || message.role === 'user';
+  // Show the action toolbar (copy / raw toggle / download / pin) only for
+  // user+assistant once streaming is done. Mid-stream toggling to rendered
+  // markdown re-parses on every chunk, and tool/system rows render via
+  // ToolMessage / plain text where the actions don't carry the same meaning.
+  const showActions = canPin;
+  // Default to rendered markdown once the turn settles; force raw while
+  // streaming since re-parsing on every chunk drops frames. The toggle is
+  // a user override that persists for the bubble's lifetime.
+  const [rawView, setRawView] = useState(false);
+  const renderAsMarkdown = !streaming && !rawView;
 
   return (
     <div
@@ -1257,24 +1332,32 @@ function MessageBubble({
             </span>
           )}
           <span>{new Date(message.createdAt).toLocaleTimeString()}</span>
+          {showActions && (
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+              <RawViewToggle rawView={rawView} onChange={setRawView} />
+              <CopyMarkdownButton content={message.content} />
+              <DownloadMarkdownButton
+                content={message.content}
+                filenameHint={`${message.role}-${message.id.slice(0, 8)}`}
+              />
+            </div>
+          )}
           {canPin && (
-            <button
+            <PinToggleButton
+              pinned={message.pinned}
               onClick={() => onTogglePin(message)}
-              title={message.pinned ? 'Unpin' : 'Pin'}
-              className={`p-0.5 rounded transition-opacity ${
-                message.pinned
-                  ? 'text-[var(--color-accent)]'
-                  : 'opacity-0 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
-              }`}
-            >
-              <Pin size={12} fill={message.pinned ? 'currentColor' : 'none'} />
-            </button>
+              hoverOnly
+            />
           )}
         </div>
       </div>
       <div className="px-3 py-2 min-w-0">
         {message.role === 'tool' ? (
           <ToolMessage message={message} />
+        ) : renderAsMarkdown ? (
+          <div className="text-sm">
+            <Markdown content={message.content} />
+          </div>
         ) : (
           <div className="whitespace-pre-wrap break-words text-sm">
             {message.content}
@@ -1287,3 +1370,5 @@ function MessageBubble({
     </div>
   );
 }
+
+const MessageBubble = memo(MessageBubbleInner);

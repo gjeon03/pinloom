@@ -1,28 +1,25 @@
 import { useEffect, useState } from 'react';
 import {
   ArrowLeft,
-  Check,
   ChevronDown,
   ChevronRight,
-  Code,
-  Copy,
   Download,
   ExternalLink,
-  FileText,
   Maximize2,
-  Pin,
   Send,
   Split,
 } from 'lucide-react';
 import type { Message, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
-import {
-  copyText,
-  downloadManyAsZip,
-  downloadMarkdown,
-  slugify,
-} from '../utils/download.js';
+import { downloadManyAsZip, slugify } from '../utils/download.js';
 import { Markdown } from './Markdown.js';
+import {
+  ActionIconButton,
+  CopyMarkdownButton,
+  DownloadMarkdownButton,
+  PinToggleButton,
+  RawViewToggle,
+} from './MessageActions.js';
 
 interface Props {
   pins: Message[];
@@ -195,7 +192,6 @@ function PinCard({
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(pin.pinTitle ?? '');
   const [collapsed, setCollapsed] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [rawView, setRawView] = useState(false);
 
   async function saveTitle() {
@@ -210,16 +206,8 @@ function PinCard({
     onChange(updated);
   }
 
-  async function copy() {
-    await copyText(buildPinMarkdown(pin));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
-  async function download() {
-    const base = slugify(pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`);
-    await downloadMarkdown(`${base}.md`, buildPinMarkdown(pin));
-  }
+  const markdown = buildPinMarkdown(pin);
+  const filenameHint = pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`;
 
   return (
     <article className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] overflow-auto max-h-96">
@@ -257,50 +245,18 @@ function PinCard({
             {pin.pinTitle ?? '(untitled pin)'}
           </button>
         )}
-        <button
-          onClick={onFocus}
-          title="Expand this pin"
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
-        >
+        <ActionIconButton onClick={onFocus} title="Expand this pin">
           <Maximize2 size={14} />
-        </button>
-        <button
-          onClick={() => setRawView((v) => !v)}
-          title={rawView ? 'Show rendered markdown' : 'Show raw text'}
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
-        >
-          {rawView ? <FileText size={14} /> : <Code size={14} />}
-        </button>
-        <button
-          onClick={copy}
-          title={copied ? 'Copied!' : 'Copy as Markdown'}
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
-        >
-          {copied ? <Check size={14} /> : <Copy size={14} />}
-        </button>
-        <button
-          onClick={download}
-          title="Download as .md"
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
-        >
-          <Download size={14} />
-        </button>
+        </ActionIconButton>
+        <RawViewToggle rawView={rawView} onChange={setRawView} />
+        <CopyMarkdownButton content={markdown} />
+        <DownloadMarkdownButton content={markdown} filenameHint={filenameHint} />
         {onSend && (
-          <button
-            onClick={() => onSend(pin)}
-            title="Send this pin to another session"
-            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-0.5"
-          >
+          <ActionIconButton onClick={() => onSend(pin)} title="Send this pin to another session">
             <Send size={14} />
-          </button>
+          </ActionIconButton>
         )}
-        <button
-          onClick={unpin}
-          title="Unpin"
-          className="text-[var(--color-accent)] hover:text-red-400 p-0.5"
-        >
-          <Pin size={14} fill="currentColor" />
-        </button>
+        <PinToggleButton pinned onClick={unpin} />
       </header>
       {!collapsed && (
         <div className="px-3 py-2 text-[var(--color-ink)]/90">
@@ -326,7 +282,6 @@ function FocusedPinView({
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(pin.pinTitle ?? '');
-  const [copied, setCopied] = useState(false);
   const [rawView, setRawView] = useState(false);
 
   useEffect(() => {
@@ -345,16 +300,8 @@ function FocusedPinView({
     onChange(updated);
   }
 
-  async function copy() {
-    await copyText(buildPinMarkdown(pin));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
-  async function download() {
-    const base = slugify(pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`);
-    await downloadMarkdown(`${base}.md`, buildPinMarkdown(pin));
-  }
+  const markdown = buildPinMarkdown(pin);
+  const filenameHint = pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -386,43 +333,19 @@ function FocusedPinView({
             {pin.pinTitle ?? '(untitled pin)'}
           </button>
         )}
-        <button
-          onClick={() => setRawView((v) => !v)}
-          title={rawView ? 'Show rendered markdown' : 'Show raw text'}
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
-        >
-          {rawView ? <FileText size={14} /> : <Code size={14} />}
-        </button>
-        <button
-          onClick={copy}
-          title={copied ? 'Copied!' : 'Copy as Markdown'}
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
-        >
-          {copied ? <Check size={14} /> : <Copy size={14} />}
-        </button>
-        <button
-          onClick={download}
-          title="Download as .md"
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
-        >
-          <Download size={14} />
-        </button>
+        <RawViewToggle rawView={rawView} onChange={setRawView} size="md" />
+        <CopyMarkdownButton content={markdown} size="md" />
+        <DownloadMarkdownButton content={markdown} filenameHint={filenameHint} size="md" />
         {onSend && (
-          <button
+          <ActionIconButton
             onClick={() => onSend(pin)}
             title="Send this pin to another session"
-            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
+            size="md"
           >
             <Send size={14} />
-          </button>
+          </ActionIconButton>
         )}
-        <button
-          onClick={unpin}
-          title="Unpin"
-          className="text-[var(--color-accent)] hover:text-red-400 p-1 rounded hover:bg-[var(--color-surface-3)]"
-        >
-          <Pin size={14} fill="currentColor" />
-        </button>
+        <PinToggleButton pinned onClick={unpin} size="md" />
       </div>
       <div className="flex-1 overflow-auto p-4 text-[var(--color-ink)]/90">
         {rawView ? (

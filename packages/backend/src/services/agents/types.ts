@@ -53,7 +53,23 @@ export interface McpStdioServerConfig {
 
 export interface AgentRunArgs {
   cwd: string;
+  /**
+   * Stable / cacheable portion of the system prompt: the framework prompt,
+   * project wiki context, env vars — anything that doesn't change across
+   * turns within a session. Adapters that support prompt-cache splits
+   * (Claude SDK) treat this as the static prefix and put a cache boundary
+   * after it.
+   */
   systemPrompt: string;
+  /**
+   * Volatile portion appended after the cache boundary: plan items, pin
+   * blocks, team membership, worker instructions. Anything that mutates
+   * with user actions during the session. Adapters without cache splits
+   * (Codex) concatenate this onto the static prompt.
+   *
+   * Optional — when omitted, behaves as a single-prompt adapter.
+   */
+  systemPromptDynamic?: string;
   model?: string;
   /** Prior session/thread id; null = start fresh. */
   resume?: string | null;
