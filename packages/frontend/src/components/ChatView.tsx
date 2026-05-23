@@ -534,6 +534,29 @@ export function ChatView({ session, onPinChange }: Props) {
     [],
   );
 
+  // `initialTopMostItemIndex` only captures the value at Virtuoso's first
+  // render, which lands while messages are still being seeded from cache.
+  // Once the first non-empty batch arrives for a session, jump to the tail
+  // ourselves. The ref resets on session switch so each tab gets one
+  // landing scroll instead of fighting the user mid-conversation.
+  const didInitialScroll = useRef(false);
+  useEffect(() => {
+    didInitialScroll.current = false;
+  }, [session.id]);
+  useEffect(() => {
+    if (didInitialScroll.current) return;
+    if (renderItems.length === 0) return;
+    didInitialScroll.current = true;
+    // Defer to after the list has measured its rows; otherwise Virtuoso
+    // scrolls to an estimated position and stops short of the real bottom.
+    requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: renderItems.length - 1,
+        align: 'end',
+      });
+    });
+  }, [renderItems.length]);
+
   // Textarea auto-grow.
   // When the input is empty we DON'T compute height from scrollHeight, because
   // a wrapping placeholder inflates scrollHeight and leaves the textarea stuck
