@@ -1,18 +1,8 @@
 # Reddit launch post — draft
 
 > **Pre-launch checklist (do not skip):**
-> - [ ] Re-shoot `docs/screenshots/02-settings-modal.png` — Settings
->       has new "Wiki sync (GitHub)" + "Database file" sections since
->       the original capture. Run `e2e/walkthrough.spec.ts` or
->       manually re-screenshot.
-> - [ ] Consider adding a screenshot of the GitHub Backup section and
->       the Wiki inline editor, both of which post-date the original
->       walkthrough capture.
-> - [ ] Re-record `docs/walkthrough.webm` if you want the demo video
->       to include backup + wiki edit. Existing video still works for
->       the core flow.
-> - [ ] Upload the final walkthrough to YouTube as Unlisted and paste
->       the URL into the post body where indicated.
+> - [ ] Upload `docs/walkthrough.webm` to YouTube as Unlisted and
+>       paste the URL into the post body where indicated.
 > - [ ] Replace inline `./screenshots/...` markdown with direct uploads
 >       to Reddit's image gallery — Reddit posts do not render
 >       relative-path markdown images.
@@ -157,13 +147,14 @@ Reddit lets you attach up to 20 images per gallery post. Recommended set,
 in this order:
 
 1. `docs/screenshots/05-project-workspace.png` — opening "what it looks like" shot
-2. `docs/screenshots/06-wiki-populated.png` — Wiki dashboard with real pages
-3. `docs/screenshots/07-wiki-page-detail.png` — a Wiki page rendered with frontmatter (re-shoot to show the new inline editor toggle)
-4. `docs/screenshots/08-wiki-analyze-picker.png` — Analyze picker
-5. `docs/screenshots/09-teams-empty.png` — Teams creation
-6. `docs/screenshots/03-env-var-add-form.png` — env var feature
-7. `docs/screenshots/04-env-var-saved.png` — env var saved state
-8. `docs/screenshots/02-settings-modal.png` — Settings layout (re-shoot needed; now includes Wiki sync + Database file sections)
+2. `docs/screenshots/02-settings-modal.png` — Settings layout (Agent CLIs, Env vars, Wiki sync + GitHub PAT input, Database file download/upload)
+3. `docs/screenshots/06-wiki-populated.png` — Wiki dashboard with real pages
+4. `docs/screenshots/07-wiki-page-detail.png` — a Wiki page rendered with frontmatter and the Edit button visible
+5. `docs/screenshots/07b-wiki-page-edit.png` — Wiki page inline editor: textarea + live preview + frontmatter inputs
+6. `docs/screenshots/08-wiki-analyze-picker.png` — Analyze picker
+7. `docs/screenshots/09-teams-empty.png` — Teams creation
+8. `docs/screenshots/03-env-var-add-form.png` — env var feature
+9. `docs/screenshots/04-env-var-saved.png` — env var saved state
 
 For the video: upload `e2e/artifacts/walkthrough.webm` to YouTube
 (unlisted), then paste the link in the body where it says "TODO".
