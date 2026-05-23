@@ -6,6 +6,7 @@ import { cacheKeys } from '../api/cacheKeys.js';
 import {
   SessionTabs,
   type InlineCanvasTab,
+  type TabRef,
 } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
@@ -35,6 +36,11 @@ export function ProjectPage({
   const [activeCanvasTeamId, setActiveCanvasTeamId] = useState<string | null>(
     null,
   );
+  // Unified ordering of session + canvas tabs as the user has arranged
+  // them. The two underlying arrays (sessions / canvasTabs) keep their
+  // own shapes for everything else (data fetching, persistence); this
+  // array only governs the strip order.
+  const [tabOrder, setTabOrder] = useState<TabRef[]>([]);
 
   function persistCanvasTabs(projectId: string, tabs: InlineCanvasTab[]) {
     try {
@@ -46,6 +52,57 @@ export function ProjectPage({
       // localStorage may be unavailable (private mode, quota); the
       // tabs still work for this session, just won't survive reload.
     }
+  }
+
+  function persistTabOrder(projectId: string, order: TabRef[]) {
+    try {
+      localStorage.setItem(
+        `pinloom:tabOrder:${projectId}`,
+        JSON.stringify(order),
+      );
+    } catch {
+      // see persistCanvasTabs
+    }
+  }
+
+  // Reconcile a persisted order against the current set of sessions +
+  // canvases: drop refs whose targets no longer exist, append any
+  // newcomers at the tail in source-array order. Returns a fresh array
+  // so callers can persist it without having to dedupe again.
+  function reconcileOrder(
+    persisted: TabRef[] | null,
+    sessionIds: string[],
+    canvasIds: string[],
+  ): TabRef[] {
+    const sessionSet = new Set(sessionIds);
+    const canvasSet = new Set(canvasIds);
+    const seen = new Set<string>();
+    const out: TabRef[] = [];
+    for (const ref of persisted ?? []) {
+      if (!ref || typeof ref !== 'object') continue;
+      const key = `${ref.kind}:${ref.id}`;
+      if (seen.has(key)) continue;
+      if (ref.kind === 'session' && sessionSet.has(ref.id)) {
+        out.push(ref);
+        seen.add(key);
+      } else if (ref.kind === 'canvas' && canvasSet.has(ref.id)) {
+        out.push(ref);
+        seen.add(key);
+      }
+    }
+    for (const id of sessionIds) {
+      if (!seen.has(`session:${id}`)) {
+        out.push({ kind: 'session', id });
+        seen.add(`session:${id}`);
+      }
+    }
+    for (const id of canvasIds) {
+      if (!seen.has(`canvas:${id}`)) {
+        out.push({ kind: 'canvas', id });
+        seen.add(`canvas:${id}`);
+      }
+    }
+    return out;
   }
 
   // Persist which view (session vs. canvas) was active for this project,
@@ -104,17 +161,53 @@ export function ProjectPage({
     const lastKey = `pinloom:lastSession:${project.id}`;
     const lastId = localStorage.getItem(lastKey);
 
+    // Read the persisted unified tab order once we know what sessions
+    // + canvases actually exist; reconcile against both to drop dead
+    // refs and append newcomers in source-array order.
+    let persistedOrder: TabRef[] | null = null;
+    try {
+      const raw = localStorage.getItem(`pinloom:tabOrder:${project.id}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          persistedOrder = parsed.filter(
+            (t): t is TabRef =>
+              t &&
+              typeof t === 'object' &&
+              (t.kind === 'session' || t.kind === 'canvas') &&
+              typeof t.id === 'string',
+          );
+        }
+      }
+    } catch {
+      persistedOrder = null;
+    }
+
     api.listSessions(project.id).then(async (list) => {
       if (cancelled) return;
       if (list.length > 0) {
         setSessions(list);
         const remembered = lastId ? list.find((s) => s.id === lastId) : null;
         setActiveSession(remembered ?? list[0]);
+        const order = reconcileOrder(
+          persistedOrder,
+          list.map((s) => s.id),
+          restored.map((c) => c.teamId),
+        );
+        setTabOrder(order);
+        persistTabOrder(project.id, order);
       } else {
         const created = await api.createSession(project.id, { title: null });
         if (cancelled) return;
         setSessions([created]);
         setActiveSession(created);
+        const order = reconcileOrder(
+          persistedOrder,
+          [created.id],
+          restored.map((c) => c.teamId),
+        );
+        setTabOrder(order);
+        persistTabOrder(project.id, order);
       }
     });
 
@@ -244,6 +337,14 @@ export function ProjectPage({
         }}
         onCreate={(s) => {
           setSessions((prev) => [...prev, s]);
+          setTabOrder((prev) => {
+            if (prev.some((r) => r.kind === 'session' && r.id === s.id)) {
+              return prev;
+            }
+            const next: TabRef[] = [...prev, { kind: 'session', id: s.id }];
+            persistTabOrder(project.id, next);
+            return next;
+          });
           setActiveCanvasTeamId(null);
           persistActiveCanvas(project.id, null);
           setActiveSession(s);
@@ -252,6 +353,13 @@ export function ProjectPage({
           setSessions((prev) => {
             const next = prev.filter((s) => s.id !== id);
             if (activeSession?.id === id) setActiveSession(next[0] ?? null);
+            return next;
+          });
+          setTabOrder((prev) => {
+            const next = prev.filter(
+              (r) => !(r.kind === 'session' && r.id === id),
+            );
+            persistTabOrder(project.id, next);
             return next;
           });
         }}
@@ -272,6 +380,13 @@ export function ProjectPage({
             persistCanvasTabs(project.id, next);
             return next;
           });
+          setTabOrder((prev) => {
+            const next = prev.filter(
+              (r) => !(r.kind === 'canvas' && r.id === teamId),
+            );
+            persistTabOrder(project.id, next);
+            return next;
+          });
           if (activeCanvasTeamId === teamId) {
             setActiveCanvasTeamId(null);
             persistActiveCanvas(project.id, null);
@@ -285,8 +400,24 @@ export function ProjectPage({
             persistCanvasTabs(project.id, next);
             return next;
           });
+          setTabOrder((prev) => {
+            if (prev.some((r) => r.kind === 'canvas' && r.id === tab.teamId)) {
+              return prev;
+            }
+            const next: TabRef[] = [
+              ...prev,
+              { kind: 'canvas', id: tab.teamId },
+            ];
+            persistTabOrder(project.id, next);
+            return next;
+          });
           setActiveCanvasTeamId(tab.teamId);
           persistActiveCanvas(project.id, tab.teamId);
+        }}
+        tabOrder={tabOrder}
+        onReorderTabs={(nextOrder) => {
+          setTabOrder(nextOrder);
+          persistTabOrder(project.id, nextOrder);
         }}
       />
 

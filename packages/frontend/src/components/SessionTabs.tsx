@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
@@ -73,6 +74,14 @@ export interface InlineCanvasTab {
   teamName: string;
 }
 
+// Unified ordering of the strip: sessions and canvas pseudo-tabs in
+// whichever sequence the user has drag-arranged them. Owned by the
+// parent (ProjectPage) so the order survives project / page navigation
+// via localStorage; this component only consumes + mutates via callback.
+export type TabRef =
+  | { kind: 'session'; id: string }
+  | { kind: 'canvas'; id: string };
+
 interface Props {
   projectId: string;
   sessions: Session[];
@@ -88,6 +97,13 @@ interface Props {
   onSelectCanvas?: (teamId: string) => void;
   onCloseCanvas?: (teamId: string) => void;
   onOpenCanvasTab?: (tab: InlineCanvasTab) => void;
+  /**
+   * Unified strip order — sessions + canvases mixed. Falls back to
+   * sessions-then-canvases display if omitted (for callers that haven't
+   * adopted the unified-ordering model yet).
+   */
+  tabOrder?: TabRef[];
+  onReorderTabs?: (next: TabRef[]) => void;
 }
 
 export function SessionTabs({
@@ -104,19 +120,80 @@ export function SessionTabs({
   onSelectCanvas,
   onCloseCanvas,
   onOpenCanvasTab,
+  tabOrder,
+  onReorderTabs,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
+  // Drag state — keyed on the unified `kind:id` form so a dragged
+  // session vs. canvas with overlapping ids (theoretically possible if
+  // a session id collided with a teamId) doesn't get confused.
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<
-    { id: string; position: 'before' | 'after' } | null
+    { key: string; position: 'before' | 'after' } | null
   >(null);
+
+  // The strip we actually render. When the parent supplies a unified
+  // tabOrder we use that; otherwise we fall back to sessions-first,
+  // canvases-after — same shape as the pre-unified layout, so callers
+  // that haven't opted in keep working.
+  const strip: TabRef[] = useMemo(() => {
+    if (tabOrder && tabOrder.length > 0) {
+      const sessionSet = new Set(sessions.map((s) => s.id));
+      const canvasSet = new Set(canvasTabs.map((c) => c.teamId));
+      const seen = new Set<string>();
+      const out: TabRef[] = [];
+      for (const ref of tabOrder) {
+        const key = `${ref.kind}:${ref.id}`;
+        if (seen.has(key)) continue;
+        if (ref.kind === 'session' && !sessionSet.has(ref.id)) continue;
+        if (ref.kind === 'canvas' && !canvasSet.has(ref.id)) continue;
+        out.push(ref);
+        seen.add(key);
+      }
+      for (const s of sessions) {
+        if (!seen.has(`session:${s.id}`)) {
+          out.push({ kind: 'session', id: s.id });
+          seen.add(`session:${s.id}`);
+        }
+      }
+      for (const c of canvasTabs) {
+        if (!seen.has(`canvas:${c.teamId}`)) {
+          out.push({ kind: 'canvas', id: c.teamId });
+          seen.add(`canvas:${c.teamId}`);
+        }
+      }
+      return out;
+    }
+    return [
+      ...sessions.map((s): TabRef => ({ kind: 'session', id: s.id })),
+      ...canvasTabs.map((c): TabRef => ({ kind: 'canvas', id: c.teamId })),
+    ];
+  }, [tabOrder, sessions, canvasTabs]);
+
+  const sessionsById = useMemo(
+    () => new Map(sessions.map((s) => [s.id, s])),
+    [sessions],
+  );
+  const canvasesById = useMemo(
+    () => new Map(canvasTabs.map((c) => [c.teamId, c])),
+    [canvasTabs],
+  );
+
+  function refKey(ref: TabRef): string {
+    return `${ref.kind}:${ref.id}`;
+  }
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerCoords, setPickerCoords] = useState<{ top: number; right: number } | null>(null);
   const [codexAvailable, setCodexAvailable] = useState<boolean | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const pickerButtonRef = useRef<HTMLButtonElement>(null);
+  // Separate ref for the portaled dropdown panel — pickerRef anchors
+  // the button (kept inside SessionTabs's tree), but the panel itself
+  // is rendered into document.body so it isn't a DOM descendant. The
+  // click-outside dismiss handler has to check both.
+  const pickerPanelRef = useRef<HTMLDivElement>(null);
   // Per-tab actions dropdown ("open chat" / "open canvas" / future
   // session-config). Only one tab can have its menu open at a time.
   const [tabMenu, setTabMenu] = useState<{
@@ -193,13 +270,18 @@ export function SessionTabs({
     };
   }, []);
 
-  // Click-outside dismiss for the picker dropdown.
+  // Click-outside dismiss for the picker dropdown. Because the panel
+  // is portaled into document.body, pickerRef.contains() won't see
+  // clicks landing on Claude/Codex buttons — they're DOM-detached
+  // from the button. Check both the anchor button's container and
+  // the portaled panel.
   useEffect(() => {
     if (!pickerOpen) return;
     function onClick(e: MouseEvent) {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setPickerOpen(false);
-      }
+      const t = e.target as Node;
+      if (pickerRef.current && pickerRef.current.contains(t)) return;
+      if (pickerPanelRef.current && pickerPanelRef.current.contains(t)) return;
+      setPickerOpen(false);
     }
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
@@ -263,47 +345,64 @@ export function SessionTabs({
     }
   }
 
-  async function reorderTabs(sourceId: string, targetId: string, position: 'before' | 'after') {
-    if (sourceId === targetId) return;
-    const without = sessions.filter((s) => s.id !== sourceId);
-    const targetNewIdx = without.findIndex((s) => s.id === targetId);
+  async function reorderTabs(
+    sourceKey: string,
+    targetKey: string,
+    position: 'before' | 'after',
+  ) {
+    if (sourceKey === targetKey) return;
+    const without = strip.filter((r) => refKey(r) !== sourceKey);
+    const targetNewIdx = without.findIndex((r) => refKey(r) === targetKey);
     if (targetNewIdx === -1) return;
     const insertAt = position === 'before' ? targetNewIdx : targetNewIdx + 1;
-    const source = sessions.find((s) => s.id === sourceId);
+    const source = strip.find((r) => refKey(r) === sourceKey);
     if (!source) return;
 
     const reordered = [...without];
     reordered.splice(insertAt, 0, source);
-    onReorder(reordered);
+    onReorderTabs?.(reordered);
 
-    try {
-      await api.reorderSessions(projectId, reordered.map((s) => s.id));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    // Mirror the session-only relative order back to the parent's
+    // `sessions` array + the backend, so calls that depend on
+    // backend session order (eg. listSessions on first load) stay in
+    // sync with the visible strip.
+    const sessionOrder = reordered
+      .filter((r): r is { kind: 'session'; id: string } => r.kind === 'session')
+      .map((r) => r.id);
+    const orderedSessions = sessionOrder
+      .map((id) => sessionsById.get(id))
+      .filter((s): s is Session => s != null);
+    if (orderedSessions.length === sessions.length) {
+      onReorder(orderedSessions);
+      try {
+        await api.reorderSessions(projectId, sessionOrder);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   }
 
   return (
     <div
-      className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2 overflow-x-auto"
+      className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] pl-2 overflow-x-auto"
       onDragOver={(e) => {
-        if (!draggingId) return;
+        if (!draggingKey) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
       }}
       onDrop={(e) => {
         e.preventDefault();
-        const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
+        const sourceKey = e.dataTransfer.getData('text/plain') || draggingKey;
         const target = dropTarget;
         setDropTarget(null);
-        setDraggingId(null);
-        if (!sourceId) return;
+        setDraggingKey(null);
+        if (!sourceKey) return;
         if (target) {
-          void reorderTabs(sourceId, target.id, target.position);
+          void reorderTabs(sourceKey, target.key, target.position);
         } else {
-          const last = sessions[sessions.length - 1];
-          if (last && last.id !== sourceId) {
-            void reorderTabs(sourceId, last.id, 'after');
+          const last = strip[strip.length - 1];
+          if (last && refKey(last) !== sourceKey) {
+            void reorderTabs(sourceKey, refKey(last), 'after');
           }
         }
       }}
@@ -312,174 +411,199 @@ export function SessionTabs({
         setDropTarget(null);
       }}
     >
-      {sessions.map((s, i) => {
-        const active = s.id === activeSessionId;
-        const label = s.title ?? `Chat ${s.id.slice(0, 6)}`;
-        const editing = editingId === s.id;
-        const isDragging = draggingId === s.id;
+      {strip.map((ref, i) => {
+        const key = refKey(ref);
+        const nextRef = strip[i + 1];
+        const nextKey = nextRef ? refKey(nextRef) : null;
         const showBefore =
-          dropTarget?.id === s.id && dropTarget.position === 'before' && draggingId !== s.id;
+          dropTarget?.key === key &&
+          dropTarget.position === 'before' &&
+          draggingKey !== key;
+        const isDragging = draggingKey === key;
 
+        // Shared drag handlers — the visual ghost + target tracking is
+        // identical for sessions and canvases; only the inner content
+        // differs.
+        const dragHandlers = (innerEditing: boolean) => ({
+          draggable: !innerEditing,
+          onDragStart: (e: React.DragEvent) => {
+            if (innerEditing) return;
+            setDraggingKey(key);
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', key);
+            const original = e.currentTarget as HTMLElement;
+            const ghost = original.cloneNode(true) as HTMLElement;
+            ghost.style.position = 'absolute';
+            ghost.style.top = '-9999px';
+            ghost.style.left = '-9999px';
+            ghost.style.opacity = '0.25';
+            ghost.style.transform = 'scale(0.8)';
+            ghost.style.pointerEvents = 'none';
+            document.body.appendChild(ghost);
+            e.dataTransfer.setDragImage(ghost, 20, 10);
+            setTimeout(() => ghost.remove(), 0);
+          },
+          onDragOver: (e: React.DragEvent) => {
+            if (!draggingKey || draggingKey === key) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            const isLeftHalf = e.clientX < rect.left + rect.width / 2;
+            let next: { key: string; position: 'before' | 'after' };
+            if (isLeftHalf) {
+              next = { key, position: 'before' };
+            } else if (nextKey && nextKey !== draggingKey) {
+              next = { key: nextKey, position: 'before' };
+            } else {
+              next = { key, position: 'after' };
+            }
+            if (dropTarget?.key !== next.key || dropTarget.position !== next.position) {
+              setDropTarget(next);
+            }
+          },
+          onDrop: (e: React.DragEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const sourceKey = e.dataTransfer.getData('text/plain') || draggingKey;
+            const targetKey = dropTarget?.key ?? key;
+            const position = dropTarget?.position ?? 'before';
+            setDropTarget(null);
+            setDraggingKey(null);
+            if (sourceKey) void reorderTabs(sourceKey, targetKey, position);
+          },
+          onDragEnd: () => {
+            setDraggingKey(null);
+            setDropTarget(null);
+          },
+        });
+
+        // Drop-indicator strip rendered between tabs (the highlighted
+        // accent bar that appears as you drag).
+        const indicator = (
+          <div
+            className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
+              showBefore ? 'bg-[var(--color-accent)]' : 'bg-transparent'
+            }`}
+          />
+        );
+
+        if (ref.kind === 'session') {
+          const s = sessionsById.get(ref.id);
+          if (!s) return null;
+          const active = s.id === activeSessionId;
+          const label = s.title ?? `Chat ${s.id.slice(0, 6)}`;
+          const editing = editingId === s.id;
+          return (
+            <div key={key} className="flex items-stretch">
+              {indicator}
+              <div
+                {...dragHandlers(editing)}
+                className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm ${
+                  editing ? 'cursor-text' : 'cursor-pointer'
+                } border-b-2 ${
+                  active
+                    ? 'border-[var(--color-accent)] text-[var(--color-ink)] bg-[var(--color-surface-2)]'
+                    : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+                } ${isDragging ? 'opacity-40' : ''}`}
+                onClick={() => !editing && onSelect(s)}
+                onDoubleClick={() => {
+                  setEditingId(s.id);
+                  setEditValue(s.title ?? '');
+                }}
+              >
+                <AgentBadge agent={s.agent} size="xs" />
+                <TeamRoleBadge role={rolesBySessionId.get(s.id) ?? null} />
+                {editing ? (
+                  <input
+                    autoFocus
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onBlur={() => saveRename(s)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') saveRename(s);
+                      if (e.key === 'Escape') setEditingId(null);
+                    }}
+                    className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-1 text-sm w-32"
+                  />
+                ) : (
+                  <span className="truncate max-w-[180px]">{label}</span>
+                )}
+                <button
+                  type="button"
+                  data-tab-menu-trigger
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (tabMenu?.sessionId === s.id) {
+                      setTabMenu(null);
+                      return;
+                    }
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setTabMenu({
+                      sessionId: s.id,
+                      top: r.bottom + 4,
+                      left: r.left,
+                    });
+                  }}
+                  title="Tab actions"
+                  className={`p-0.5 rounded transition-opacity ${
+                    active
+                      ? 'text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
+                      : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
+                  }`}
+                >
+                  <MoreVertical size={12} />
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        // ref.kind === 'canvas'
+        const c = canvasesById.get(ref.id);
+        if (!c) return null;
+        const active = c.teamId === activeCanvasTeamId;
         return (
-          <div key={s.id} className="flex items-stretch">
+          <div key={key} className="flex items-stretch">
+            {indicator}
             <div
-              className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
-                showBefore ? 'bg-[var(--color-accent)]' : 'bg-transparent'
-              }`}
-            />
-            <div
-              draggable={!editing}
-              onDragStart={(e) => {
-                if (editing) return;
-                setDraggingId(s.id);
-                e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/plain', s.id);
-                const original = e.currentTarget;
-                const ghost = original.cloneNode(true) as HTMLElement;
-                ghost.style.position = 'absolute';
-                ghost.style.top = '-9999px';
-                ghost.style.left = '-9999px';
-                ghost.style.opacity = '0.25';
-                ghost.style.transform = 'scale(0.8)';
-                ghost.style.pointerEvents = 'none';
-                document.body.appendChild(ghost);
-                e.dataTransfer.setDragImage(ghost, 20, 10);
-                setTimeout(() => ghost.remove(), 0);
-              }}
-              onDragOver={(e) => {
-                if (!draggingId || draggingId === s.id) return;
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                const rect = e.currentTarget.getBoundingClientRect();
-                const isLeftHalf = e.clientX < rect.left + rect.width / 2;
-                let next: { id: string; position: 'before' | 'after' };
-                if (isLeftHalf) {
-                  next = { id: s.id, position: 'before' };
-                } else {
-                  const nextTab = sessions[i + 1];
-                  if (nextTab && nextTab.id !== draggingId) {
-                    next = { id: nextTab.id, position: 'before' };
-                  } else {
-                    next = { id: s.id, position: 'after' };
-                  }
-                }
-                if (dropTarget?.id !== next.id || dropTarget.position !== next.position) {
-                  setDropTarget(next);
-                }
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const sourceId = e.dataTransfer.getData('text/plain') || draggingId;
-                const targetId = dropTarget?.id ?? s.id;
-                const position = dropTarget?.position ?? 'before';
-                setDropTarget(null);
-                setDraggingId(null);
-                if (sourceId) void reorderTabs(sourceId, targetId, position);
-              }}
-              onDragEnd={() => {
-                setDraggingId(null);
-                setDropTarget(null);
-              }}
-              className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm ${
-                editing ? 'cursor-text' : 'cursor-pointer'
-              } border-b-2 ${
+              {...dragHandlers(false)}
+              className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm cursor-pointer border-b-2 ${
                 active
                   ? 'border-[var(--color-accent)] text-[var(--color-ink)] bg-[var(--color-surface-2)]'
                   : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
               } ${isDragging ? 'opacity-40' : ''}`}
-              onClick={() => !editing && onSelect(s)}
-              onDoubleClick={() => {
-                setEditingId(s.id);
-                setEditValue(s.title ?? '');
-              }}
+              onClick={() => onSelectCanvas?.(c.teamId)}
+              title={`Canvas — ${c.teamName}`}
             >
-              <AgentBadge agent={s.agent} size="xs" />
-              <TeamRoleBadge role={rolesBySessionId.get(s.id) ?? null} />
-              {editing ? (
-                <input
-                  autoFocus
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onBlur={() => saveRename(s)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') saveRename(s);
-                    if (e.key === 'Escape') setEditingId(null);
-                  }}
-                  className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-1 text-sm w-32"
-                />
-              ) : (
-                <span className="truncate max-w-[180px]">{label}</span>
-              )}
+              <Network size={12} className="text-[var(--color-accent)] shrink-0" />
+              <span className="truncate max-w-[160px]">{c.teamName}</span>
               <button
                 type="button"
-                data-tab-menu-trigger
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (tabMenu?.sessionId === s.id) {
-                    setTabMenu(null);
-                    return;
-                  }
-                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  setTabMenu({
-                    sessionId: s.id,
-                    top: r.bottom + 4,
-                    left: r.left,
-                  });
+                  onCloseCanvas?.(c.teamId);
                 }}
-                title="Tab actions"
                 className={`p-0.5 rounded transition-opacity ${
                   active
-                    ? 'text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
-                    : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]'
+                    ? 'text-[var(--color-ink-muted)] hover:text-red-400'
+                    : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400'
                 }`}
+                title="Close canvas tab"
               >
-                <MoreVertical size={12} />
+                <X size={12} />
               </button>
             </div>
           </div>
         );
       })}
-      {canvasTabs.map((c) => {
-        const active = c.teamId === activeCanvasTeamId;
-        return (
-          <div
-            key={`canvas-${c.teamId}`}
-            className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm cursor-pointer border-b-2 ${
-              active
-                ? 'border-[var(--color-accent)] text-[var(--color-ink)] bg-[var(--color-surface-2)]'
-                : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
-            }`}
-            onClick={() => onSelectCanvas?.(c.teamId)}
-            title={`Canvas — ${c.teamName}`}
-          >
-            <Network size={12} className="text-[var(--color-accent)] shrink-0" />
-            <span className="truncate max-w-[160px]">{c.teamName}</span>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCloseCanvas?.(c.teamId);
-              }}
-              className={`p-0.5 rounded transition-opacity ${
-                active
-                  ? 'text-[var(--color-ink-muted)] hover:text-red-400'
-                  : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400'
-              }`}
-              title="Close canvas tab"
-            >
-              <X size={12} />
-            </button>
-          </div>
-        );
-      })}
       {(() => {
-        const lastId = sessions[sessions.length - 1]?.id;
+        const lastRef = strip[strip.length - 1];
+        const lastKey = lastRef ? refKey(lastRef) : null;
         const showTail =
-          !!lastId &&
-          dropTarget?.id === lastId &&
+          !!lastKey &&
+          dropTarget?.key === lastKey &&
           dropTarget?.position === 'after' &&
-          draggingId !== lastId;
+          draggingKey !== lastKey;
         return (
           <div
             className={`w-0.5 self-stretch my-1.5 rounded-full transition-colors ${
@@ -488,7 +612,19 @@ export function SessionTabs({
           />
         );
       })()}
-      <div ref={pickerRef} className="relative ml-1 shrink-0">
+      {/*
+        '+' new-tab picker. position:sticky with right:0 keeps it
+        floating next to the last tab when the strip fits, but pins it
+        to the right edge once the strip starts overflowing — so the
+        button never scrolls out of reach. The opaque background +
+        own padding cover tabs that slide behind during overflow scroll
+        (the strip itself only has left padding, otherwise tabs would
+        peek out of an 8px gap on the right edge).
+      */}
+      <div
+        ref={pickerRef}
+        className="relative shrink-0 sticky right-0 z-10 self-stretch ml-1 pl-2 pr-2 flex items-center bg-[var(--color-surface)]"
+      >
         <button
           ref={pickerButtonRef}
           type="button"
@@ -511,43 +647,51 @@ export function SessionTabs({
           <Plus size={14} />
           <ChevronDown size={10} />
         </button>
-        {pickerOpen && pickerCoords && (
-          <div
-            style={{
-              position: 'fixed',
-              top: pickerCoords.top,
-              right: pickerCoords.right,
-              zIndex: 50,
-            }}
-            className="min-w-[140px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs"
-          >
-            <button
-              type="button"
-              onClick={() => createTab('claude')}
-              className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left"
+        {pickerOpen &&
+          pickerCoords &&
+          // Portal to document.body — the sticky picker container creates
+          // a stacking context that traps the fixed-positioned dropdown
+          // (it ends up under ChatView). Rendering at the document root
+          // sidesteps the trapped-z-index issue entirely.
+          createPortal(
+            <div
+              ref={pickerPanelRef}
+              style={{
+                position: 'fixed',
+                top: pickerCoords.top,
+                right: pickerCoords.right,
+                zIndex: 50,
+              }}
+              className="min-w-[140px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs"
             >
-              <AgentBadge agent="claude" />
-              <span className="flex-1">Claude</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => createTab('codex')}
-              disabled={codexAvailable === false}
-              className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left disabled:opacity-40 disabled:cursor-not-allowed"
-              title={
-                codexAvailable === false
-                  ? 'Codex CLI not detected on PATH — install or run `codex login`'
-                  : 'New Codex session'
-              }
-            >
-              <AgentBadge agent="codex" />
-              <span className="flex-1">Codex</span>
-              {codexAvailable === false && (
-                <span className="text-[9px] text-[var(--color-ink-muted)]">N/A</span>
-              )}
-            </button>
-          </div>
-        )}
+              <button
+                type="button"
+                onClick={() => createTab('claude')}
+                className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left"
+              >
+                <AgentBadge agent="claude" />
+                <span className="flex-1">Claude</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => createTab('codex')}
+                disabled={codexAvailable === false}
+                className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                title={
+                  codexAvailable === false
+                    ? 'Codex CLI not detected on PATH — install or run `codex login`'
+                    : 'New Codex session'
+                }
+              >
+                <AgentBadge agent="codex" />
+                <span className="flex-1">Codex</span>
+                {codexAvailable === false && (
+                  <span className="text-[9px] text-[var(--color-ink-muted)]">N/A</span>
+                )}
+              </button>
+            </div>,
+            document.body,
+          )}
       </div>
       {error && (
         <span className="ml-2 text-xs text-red-400 truncate max-w-[200px]" title={error}>
@@ -558,7 +702,10 @@ export function SessionTabs({
         (() => {
           const role = rolesBySessionId.get(tabMenu.sessionId) ?? null;
           const session = sessions.find((s) => s.id === tabMenu.sessionId);
-          return (
+          // Same portal treatment as the picker dropdown — keeps the
+          // menu from being painted under sibling panes (ChatView etc.)
+          // if a future ancestor introduces a stacking context.
+          return createPortal(
             <div
               ref={tabMenuRef}
               style={{
@@ -734,7 +881,8 @@ export function SessionTabs({
                   </button>
                 </>
               )}
-            </div>
+            </div>,
+            document.body,
           );
         })()}
       {editWorkerModal && (
