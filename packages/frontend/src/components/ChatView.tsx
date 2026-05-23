@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import useSWR from 'swr';
 import {
   ArrowDown,
@@ -342,7 +343,6 @@ export function ChatView({ session, onPinChange }: Props) {
       el.setSelectionRange(pos, pos);
     });
   }
-  const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queueScrollRef = useRef<HTMLUListElement>(null);
@@ -518,51 +518,21 @@ export function ChatView({ session, onPinChange }: Props) {
     },
   );
 
-  // Track bottom-ness
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const next = distance < BOTTOM_STICKY_PX;
+  // Virtuoso owns scroll mechanics now. We track atBottom via its
+  // atBottomStateChange callback instead of an onScroll handler, and
+  // call scrollToIndex through the imperative handle for the jump-to-
+  // latest button. ResizeObserver / auto-scroll-on-message effects are
+  // dropped — Virtuoso's `followOutput` keeps the latest item anchored
+  // when at bottom, including across textarea growth and queue mounts.
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const handleAtBottomChange = useCallback((next: boolean) => {
     setAtBottom(next);
     if (next) setUnseenCount(0);
   }, []);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    // initial position
-    handleScroll();
-  }, [handleScroll, session.id]);
-
-  // Keep the latest content anchored when the chat area shrinks — e.g. while
-  // the user types and the textarea grows, pushing the bottom up.
-  const atBottomRef = useRef(true);
-  useEffect(() => {
-    atBottomRef.current = atBottom;
-  }, [atBottom]);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver(() => {
-      if (atBottomRef.current) {
-        el.scrollTo({ top: el.scrollHeight });
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // Auto-scroll only when user is already near bottom.
-  // Depends on full `messages` array so streaming content growth (same
-  // length, content changes) also triggers the scroll.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    if (atBottom) {
-      el.scrollTo({ top: el.scrollHeight });
-    }
-  }, [messages, running, atBottom, queue.length, attachments.length]);
+  const followOutput = useCallback(
+    (isAtBottom: boolean) => (isAtBottom ? ('smooth' as const) : false),
+    [],
+  );
 
   // Textarea auto-grow.
   // When the input is empty we DON'T compute height from scrollHeight, because
@@ -842,9 +812,10 @@ export function ChatView({ session, onPinChange }: Props) {
   );
 
   function scrollToBottom() {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    virtuosoRef.current?.scrollToIndex({
+      index: 'LAST',
+      behavior: 'smooth',
+    });
     setUnseenCount(0);
     setAtBottom(true);
   }
@@ -872,102 +843,109 @@ export function ChatView({ session, onPinChange }: Props) {
         </div>
       </header>
       <div className="flex-1 min-h-0 relative flex flex-col">
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto overflow-x-hidden px-4 text-sm"
-      >
-        <div className="h-4" aria-hidden />
-        <div className="space-y-3">
-        {messages.length === 0 && (
-          <p className="text-[var(--color-ink-muted)]">
-            Start the conversation. AI answers can be pinned so they stay visible.
-          </p>
-        )}
-        {renderItems.map((item) => {
-          if (item.kind === 'tool-group') {
-            return <ToolGroup key={item.key} messages={item.messages} />;
+        <Virtuoso
+          ref={virtuosoRef}
+          className="flex-1 text-sm"
+          data={renderItems}
+          computeItemKey={(_, item) =>
+            item.kind === 'tool-group' ? item.key : item.message.id
           }
-          const m = item.message;
-          return (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              sessionAgent={session.agent}
-              onTogglePin={togglePin}
-              streaming={streamingIds.has(m.id)}
-            />
-          );
-        })}
-        {aiRunning && streamingIds.size === 0 && (
-          <div className="text-xs text-[var(--color-ink-muted)] space-y-0.5">
-            <div className="flex items-center gap-2">
-              <span className="italic">
-                {verb}…
-                {elapsedSec > 0 && (
-                  <span className="not-italic opacity-70"> ({formatElapsed(elapsedSec)})</span>
-                )}
-              </span>
-              <button
-                type="button"
-                onClick={cancelRun}
-                title="Cancel (Esc)"
-                className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
-              >
-                <Square size={10} fill="currentColor" />
-                <span>Stop</span>
-                <span className="opacity-60 text-[10px]">Esc</span>
-              </button>
-            </div>
-            {thinkingText.trim().length > 0 && (
-              <div className="relative pl-4 border-l-2 border-[var(--color-border)] opacity-70 max-h-24 overflow-hidden flex items-end">
-                {/* Subtle fade so the top edge looks intentional rather than abruptly clipped */}
-                <div
-                  aria-hidden
-                  className="pointer-events-none absolute top-0 left-0 right-0 h-3 bg-gradient-to-b from-[var(--color-surface)] to-transparent"
+          itemContent={(_, item) => (
+            <div className="px-4 pb-3">
+              {item.kind === 'tool-group' ? (
+                <ToolGroup messages={item.messages} />
+              ) : (
+                <MessageBubble
+                  message={item.message}
+                  sessionAgent={session.agent}
+                  onTogglePin={togglePin}
+                  streaming={streamingIds.has(item.message.id)}
                 />
-                <div className="whitespace-pre-wrap w-full">
-                  {thinkingText.slice(-1500)}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-        {shellRunning && (
-          <div className="flex items-center gap-2 text-xs text-[var(--color-tool-ink)] font-mono">
-            <span>$ running…</span>
-            <button
-              type="button"
-              onClick={cancelRun}
-              title="Cancel"
-              className="inline-flex items-center gap-1 rounded border border-[var(--color-tool-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
-            >
-              <Square size={10} fill="currentColor" />
-              <span>Stop</span>
-            </button>
-          </div>
-        )}
-        {error && <p className="text-red-400 text-xs">{error}</p>}
-        </div>
-        <div className="h-4" aria-hidden />
-      </div>
-
-      {!atBottom && (
-        <button
-          type="button"
-          onClick={scrollToBottom}
-          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 rounded-full bg-[var(--color-surface-3)] border border-[var(--color-border)] shadow-lg px-3 py-1.5 text-xs flex items-center gap-1.5 hover:border-[var(--color-accent)]"
-        >
-          <ArrowDown size={12} />
-          {unseenCount > 0 ? (
-            <span>
-              {unseenCount} new
-            </span>
-          ) : (
-            <span>Jump to latest</span>
+              )}
+            </div>
           )}
-        </button>
-      )}
+          components={{
+            Header: () => <div className="h-4" aria-hidden />,
+            Footer: () => (
+              <div className="px-4 pb-4 space-y-3">
+                {aiRunning && streamingIds.size === 0 && (
+                  <div className="text-xs text-[var(--color-ink-muted)] space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="italic">
+                        {verb}…
+                        {elapsedSec > 0 && (
+                          <span className="not-italic opacity-70">
+                            {' '}({formatElapsed(elapsedSec)})
+                          </span>
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={cancelRun}
+                        title="Cancel (Esc)"
+                        className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
+                      >
+                        <Square size={10} fill="currentColor" />
+                        <span>Stop</span>
+                        <span className="opacity-60 text-[10px]">Esc</span>
+                      </button>
+                    </div>
+                    {thinkingText.trim().length > 0 && (
+                      <div className="relative pl-4 border-l-2 border-[var(--color-border)] opacity-70 max-h-24 overflow-hidden flex items-end">
+                        <div
+                          aria-hidden
+                          className="pointer-events-none absolute top-0 left-0 right-0 h-3 bg-gradient-to-b from-[var(--color-surface)] to-transparent"
+                        />
+                        <div className="whitespace-pre-wrap w-full">
+                          {thinkingText.slice(-1500)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {shellRunning && (
+                  <div className="flex items-center gap-2 text-xs text-[var(--color-tool-ink)] font-mono">
+                    <span>$ running…</span>
+                    <button
+                      type="button"
+                      onClick={cancelRun}
+                      title="Cancel"
+                      className="inline-flex items-center gap-1 rounded border border-[var(--color-tool-border)] px-2 py-0.5 hover:border-red-400 hover:text-red-400 text-[11px]"
+                    >
+                      <Square size={10} fill="currentColor" />
+                      <span>Stop</span>
+                    </button>
+                  </div>
+                )}
+                {error && <p className="text-red-400 text-xs">{error}</p>}
+              </div>
+            ),
+            EmptyPlaceholder: () => (
+              <div className="px-4 pt-4 text-[var(--color-ink-muted)]">
+                Start the conversation. AI answers can be pinned so they stay visible.
+              </div>
+            ),
+          }}
+          followOutput={followOutput}
+          atBottomStateChange={handleAtBottomChange}
+          increaseViewportBy={{ top: 600, bottom: 600 }}
+          initialTopMostItemIndex={Math.max(0, renderItems.length - 1)}
+        />
+
+        {!atBottom && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 rounded-full bg-[var(--color-surface-3)] border border-[var(--color-border)] shadow-lg px-3 py-1.5 text-xs flex items-center gap-1.5 hover:border-[var(--color-accent)]"
+          >
+            <ArrowDown size={12} />
+            {unseenCount > 0 ? (
+              <span>{unseenCount} new</span>
+            ) : (
+              <span>Jump to latest</span>
+            )}
+          </button>
+        )}
       </div>
 
       {queue.length > 0 && (
