@@ -1,6 +1,7 @@
-// Backup feature endpoints. Phase A scope: token + repo configuration.
-// Sync/restore endpoints are added in later phases — wiring them as
-// stubs here would invite half-broken UI flows.
+// Backup feature endpoints. Wiki half rides the GitHub repo; DB half
+// is a download/upload file path so the operator picks where the heavy
+// JSON ends up (git history of the DB blob wasn't useful enough to
+// justify the per-commit churn).
 
 import type { FastifyInstance } from 'fastify';
 import {
@@ -15,6 +16,13 @@ import {
   GithubApiError,
   listUserRepos,
 } from '../services/github-api.js';
+import {
+  BackupError,
+  runRestore,
+  runSync,
+} from '../services/backup-orchestrator.js';
+import { buildDbExport } from '../services/db-export.js';
+import { DbImportError, importDbFile } from '../services/db-import.js';
 
 interface BackupConfigResponse {
   connected: boolean;
@@ -164,4 +172,78 @@ export async function backupRoutes(app: FastifyInstance) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
   });
+
+  // Run a sync now. Single-flight inside the orchestrator so concurrent
+  // POSTs collapse to one underlying export+push.
+  app.post('/api/backup/sync', async (_, reply) => {
+    try {
+      const result = await runSync();
+      return result;
+    } catch (err) {
+      if (err instanceof BackupError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // Pull the backup repo and merge the wiki tree into the local one.
+  // Wiki files are added skip-if-exists so re-running restore is a
+  // no-op and doesn't clobber in-progress local work.
+  app.post('/api/backup/restore', async (_, reply) => {
+    try {
+      const result = await runRestore();
+      return result;
+    } catch (err) {
+      if (err instanceof BackupError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // Database download — returns the full export as an attachment so the
+  // browser drops it straight into the user's filesystem. Stable filename
+  // includes the timestamp so multiple snapshots don't overwrite each
+  // other in the Downloads folder.
+  app.get('/api/backup/db/export', async (_, reply) => {
+    const dump = buildDbExport();
+    const stamp = dump.exportedAt.replace(/[:.]/g, '-');
+    const filename = `pinloom-db-${stamp}.json`;
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename="${filename}"`,
+    );
+    reply.type('application/json');
+    return dump;
+  });
+
+  // Database upload — accepts a previously downloaded export and merges
+  // it into the local DB. Existing project/session ids are skipped so
+  // running an import twice is safe.
+  app.post<{ Body: { file?: unknown } }>(
+    '/api/backup/db/import',
+    async (req, reply) => {
+      const raw = req.body?.file;
+      if (typeof raw !== 'string' || raw.length === 0) {
+        reply.code(400);
+        return { error: 'expected JSON body { file: "<export-contents>" }' };
+      }
+      try {
+        const summary = importDbFile(raw);
+        return summary;
+      } catch (err) {
+        if (err instanceof DbImportError) {
+          reply.code(400);
+          return { error: err.message };
+        }
+        reply.code(500);
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
 }

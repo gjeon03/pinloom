@@ -369,6 +369,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  // Wiki sync — pushes the local wiki tree to the connected GitHub repo.
+  runBackupSync: () =>
+    request<{
+      exported: { wikiBytes: number; exportedAt: string };
+      committed: boolean;
+      pushed: boolean;
+      message: string;
+    }>('/api/backup/sync', { method: 'POST' }),
+  runBackupRestore: () =>
+    request<{
+      imported: { wikiFilesImported: number; wikiFilesSkipped: number };
+      fromCommit: string | null;
+    }>('/api/backup/restore', { method: 'POST' }),
+
+  // Database file export/import — decoupled from the GitHub repo.
+  // exportDb triggers a file download via window.location; the response
+  // doesn't need typing because it's not consumed via fetch.
+  exportDbUrl: () => '/api/backup/db/export',
+  importDb: (file: string) =>
+    request<{
+      projectsImported: number;
+      projectsSkipped: number;
+      sessionsImported: number;
+      sessionsSkipped: number;
+      messagesImported: number;
+    }>('/api/backup/db/import', {
+      method: 'POST',
+      body: JSON.stringify({ file }),
+    }),
 
   // Cross-project session list — used by Teams UI to populate pickers
   // without an N+1 fetch per project.

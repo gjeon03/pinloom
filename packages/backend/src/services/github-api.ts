@@ -123,7 +123,7 @@ export async function createRepo(
   const repo = await call<RawRepo>('POST', '/user/repos', token, {
     name: args.name,
     private: args.private ?? true,
-    description: args.description ?? 'pinloom backup',
+    description: args.description ?? 'pinloom wiki backup',
     auto_init: true,
   });
   return {
