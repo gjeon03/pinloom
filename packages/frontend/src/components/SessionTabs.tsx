@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
@@ -188,6 +189,11 @@ export function SessionTabs({
   const [codexAvailable, setCodexAvailable] = useState<boolean | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const pickerButtonRef = useRef<HTMLButtonElement>(null);
+  // Separate ref for the portaled dropdown panel — pickerRef anchors
+  // the button (kept inside SessionTabs's tree), but the panel itself
+  // is rendered into document.body so it isn't a DOM descendant. The
+  // click-outside dismiss handler has to check both.
+  const pickerPanelRef = useRef<HTMLDivElement>(null);
   // Per-tab actions dropdown ("open chat" / "open canvas" / future
   // session-config). Only one tab can have its menu open at a time.
   const [tabMenu, setTabMenu] = useState<{
@@ -264,13 +270,18 @@ export function SessionTabs({
     };
   }, []);
 
-  // Click-outside dismiss for the picker dropdown.
+  // Click-outside dismiss for the picker dropdown. Because the panel
+  // is portaled into document.body, pickerRef.contains() won't see
+  // clicks landing on Claude/Codex buttons — they're DOM-detached
+  // from the button. Check both the anchor button's container and
+  // the portaled panel.
   useEffect(() => {
     if (!pickerOpen) return;
     function onClick(e: MouseEvent) {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setPickerOpen(false);
-      }
+      const t = e.target as Node;
+      if (pickerRef.current && pickerRef.current.contains(t)) return;
+      if (pickerPanelRef.current && pickerPanelRef.current.contains(t)) return;
+      setPickerOpen(false);
     }
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
@@ -373,7 +384,7 @@ export function SessionTabs({
 
   return (
     <div
-      className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2 overflow-x-auto"
+      className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface)] pl-2 overflow-x-auto"
       onDragOver={(e) => {
         if (!draggingKey) return;
         e.preventDefault();
@@ -601,7 +612,19 @@ export function SessionTabs({
           />
         );
       })()}
-      <div ref={pickerRef} className="relative ml-1 shrink-0">
+      {/*
+        '+' new-tab picker. position:sticky with right:0 keeps it
+        floating next to the last tab when the strip fits, but pins it
+        to the right edge once the strip starts overflowing — so the
+        button never scrolls out of reach. The opaque background +
+        own padding cover tabs that slide behind during overflow scroll
+        (the strip itself only has left padding, otherwise tabs would
+        peek out of an 8px gap on the right edge).
+      */}
+      <div
+        ref={pickerRef}
+        className="relative shrink-0 sticky right-0 z-10 self-stretch ml-1 pl-2 pr-2 flex items-center bg-[var(--color-surface)]"
+      >
         <button
           ref={pickerButtonRef}
           type="button"
@@ -624,43 +647,51 @@ export function SessionTabs({
           <Plus size={14} />
           <ChevronDown size={10} />
         </button>
-        {pickerOpen && pickerCoords && (
-          <div
-            style={{
-              position: 'fixed',
-              top: pickerCoords.top,
-              right: pickerCoords.right,
-              zIndex: 50,
-            }}
-            className="min-w-[140px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs"
-          >
-            <button
-              type="button"
-              onClick={() => createTab('claude')}
-              className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left"
+        {pickerOpen &&
+          pickerCoords &&
+          // Portal to document.body — the sticky picker container creates
+          // a stacking context that traps the fixed-positioned dropdown
+          // (it ends up under ChatView). Rendering at the document root
+          // sidesteps the trapped-z-index issue entirely.
+          createPortal(
+            <div
+              ref={pickerPanelRef}
+              style={{
+                position: 'fixed',
+                top: pickerCoords.top,
+                right: pickerCoords.right,
+                zIndex: 50,
+              }}
+              className="min-w-[140px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg py-1 text-xs"
             >
-              <AgentBadge agent="claude" />
-              <span className="flex-1">Claude</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => createTab('codex')}
-              disabled={codexAvailable === false}
-              className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left disabled:opacity-40 disabled:cursor-not-allowed"
-              title={
-                codexAvailable === false
-                  ? 'Codex CLI not detected on PATH — install or run `codex login`'
-                  : 'New Codex session'
-              }
-            >
-              <AgentBadge agent="codex" />
-              <span className="flex-1">Codex</span>
-              {codexAvailable === false && (
-                <span className="text-[9px] text-[var(--color-ink-muted)]">N/A</span>
-              )}
-            </button>
-          </div>
-        )}
+              <button
+                type="button"
+                onClick={() => createTab('claude')}
+                className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left"
+              >
+                <AgentBadge agent="claude" />
+                <span className="flex-1">Claude</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => createTab('codex')}
+                disabled={codexAvailable === false}
+                className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                title={
+                  codexAvailable === false
+                    ? 'Codex CLI not detected on PATH — install or run `codex login`'
+                    : 'New Codex session'
+                }
+              >
+                <AgentBadge agent="codex" />
+                <span className="flex-1">Codex</span>
+                {codexAvailable === false && (
+                  <span className="text-[9px] text-[var(--color-ink-muted)]">N/A</span>
+                )}
+              </button>
+            </div>,
+            document.body,
+          )}
       </div>
       {error && (
         <span className="ml-2 text-xs text-red-400 truncate max-w-[200px]" title={error}>
@@ -671,7 +702,10 @@ export function SessionTabs({
         (() => {
           const role = rolesBySessionId.get(tabMenu.sessionId) ?? null;
           const session = sessions.find((s) => s.id === tabMenu.sessionId);
-          return (
+          // Same portal treatment as the picker dropdown — keeps the
+          // menu from being painted under sibling panes (ChatView etc.)
+          // if a future ancestor introduces a stacking context.
+          return createPortal(
             <div
               ref={tabMenuRef}
               style={{
@@ -847,7 +881,8 @@ export function SessionTabs({
                   </button>
                 </>
               )}
-            </div>
+            </div>,
+            document.body,
           );
         })()}
       {editWorkerModal && (
