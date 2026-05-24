@@ -25,3 +25,8 @@ e2e/artifacts/
 
 # oh-my-claudecode local project state
 .omc/
+
+# Personal task tracker — kept out of the public repo. Per-developer
+# convention is to store notes under `tasks/done/<YYYY-MM-DD>/`; the
+# folder lives in working trees but never reaches GitHub.
+tasks/
