@@ -1767,7 +1767,7 @@ function TeamRoleBadge({ role }: { role: TeamRole | null }) {
   }
   return (
     <Tooltip label={segments.join(' · ')} side="top">
-      <span className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-[1px] text-[10px] font-mono text-[var(--color-ink-muted)]">
+      <span className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-[1px] text-[10px] font-mono text-[var(--color-ink-muted)] whitespace-nowrap">
         @{role.alias}
       </span>
     </Tooltip>
