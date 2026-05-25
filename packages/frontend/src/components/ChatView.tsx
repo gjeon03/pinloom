@@ -1333,7 +1333,7 @@ function MessageBubbleInner({
           )}
           <span>{new Date(message.createdAt).toLocaleTimeString()}</span>
           {showActions && (
-            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <div className="flex items-center gap-0.5">
               <RawViewToggle rawView={rawView} onChange={setRawView} />
               <CopyMarkdownButton content={message.content} />
               <DownloadMarkdownButton
@@ -1346,7 +1346,6 @@ function MessageBubbleInner({
             <PinToggleButton
               pinned={message.pinned}
               onClick={() => onTogglePin(message)}
-              hoverOnly
             />
           )}
         </div>
