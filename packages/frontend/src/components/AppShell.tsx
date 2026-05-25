@@ -1039,21 +1039,20 @@ function ProjectsList({
 
 function ThemeToggle() {
   const { preference, effective, setPreference } = useTheme();
+  // Fixed three-state cycle: system → light → dark → system. The
+  // previous "system → opposite of effective" rule unintentionally
+  // skipped the explicit dark state on a system that already runs in
+  // dark mode (system→light→system→light…). A static cycle is also
+  // easier to predict for the user clicking through.
   const next: typeof preference =
-    preference === 'system'
-      ? effective === 'dark'
-        ? 'light'
-        : 'dark'
-      : preference === 'dark'
-        ? 'light'
-        : 'system';
+    preference === 'system' ? 'light' : preference === 'light' ? 'dark' : 'system';
   const label =
     preference === 'system'
-      ? `Theme: System (${effective}) — click for ${next}`
-      : preference === 'dark'
-        ? 'Theme: Dark — click for Light'
-        : 'Theme: Light — click for System';
-  const Icon = preference === 'system' ? Monitor : effective === 'dark' ? Moon : Sun;
+      ? `Theme: System (${effective}) — click for Light`
+      : preference === 'light'
+        ? 'Theme: Light — click for Dark'
+        : 'Theme: Dark — click for System';
+  const Icon = preference === 'system' ? Monitor : preference === 'dark' ? Moon : Sun;
   return (
     <Tooltip label={label} side="top">
       <button

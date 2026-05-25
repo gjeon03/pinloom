@@ -184,9 +184,10 @@ export function injectPinIntoSession(
     | undefined;
   if (!pin) throw new Error(`pin ${pinMessageId} not found`);
   if (pin.pinned !== 1) throw new Error('message is not pinned');
-  if (pin.src_project !== target.project_id) {
-    throw new Error('pin and target session are in different projects');
-  }
+  // Cross-project injection is intentionally allowed — the picker UI
+  // exposes sessions across every project so the user can bridge
+  // context between related projects (frontend ↔ backend etc). The
+  // copy still records source via source_message_id on the new row.
 
   const now = new Date().toISOString();
   const copied = copyPinToSession(

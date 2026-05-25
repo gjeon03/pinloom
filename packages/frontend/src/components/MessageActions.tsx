@@ -107,18 +107,31 @@ export function PinToggleButton({
   onClick,
   size = 'sm',
   hoverOnly = false,
+  tone = 'default',
 }: {
   pinned: boolean;
   onClick: () => void;
   size?: Size;
   hoverOnly?: boolean;
+  /**
+   * 'injected' colors the icon with the cross-session accent so a pin
+   * copied here from another session reads as distinct without the
+   * heavy-handed card-level highlight.
+   */
+  tone?: 'default' | 'injected';
 }) {
   const { icon, pad } = sizeProps(size);
   const visibility =
     hoverOnly && !pinned ? 'opacity-0 group-hover:opacity-100 transition-opacity' : '';
-  const color = pinned
-    ? 'text-[var(--color-accent)] hover:text-red-400'
-    : 'text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]';
+  let color: string;
+  if (tone === 'injected') {
+    color =
+      'text-[var(--color-injected-ink)] hover:text-[var(--color-injected-ink-hover)]';
+  } else if (pinned) {
+    color = 'text-[var(--color-accent)] hover:text-red-400';
+  } else {
+    color = 'text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]';
+  }
   return (
     <button
       onClick={onClick}

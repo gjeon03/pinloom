@@ -239,6 +239,16 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+  // Where did this message originally live? Used by injected-pin
+  // cards to render a 'jump to original session' link.
+  getMessageSource: (messageId: string) =>
+    request<{
+      messageId: string;
+      sessionId: string;
+      sessionTitle: string | null;
+      projectId: string;
+      projectName: string;
+    }>(`/api/messages/${messageId}/source`),
 
   // Wiki dashboard.
   wikiOverview: () => request<WikiOverview>('/api/wiki/overview'),

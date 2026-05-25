@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   ChevronDown,
@@ -193,6 +194,49 @@ function PinCard({
   const [title, setTitle] = useState(pin.pinTitle ?? '');
   const [collapsed, setCollapsed] = useState(false);
   const [rawView, setRawView] = useState(false);
+  const [jumpBusy, setJumpBusy] = useState(false);
+  const navigate = useNavigate();
+
+  async function jumpToSource() {
+    if (!pin.sourceMessageId || jumpBusy) return;
+    setJumpBusy(true);
+    try {
+      const src = await api.getMessageSource(pin.sourceMessageId);
+      // Seed the last-session marker so ProjectPage opens the right
+      // session immediately on mount — same channel SessionTabs uses.
+      try {
+        localStorage.setItem(
+          `pinloom:lastSession:${src.projectId}`,
+          src.sessionId,
+        );
+        // Clear any active canvas / plan so the chat view wins.
+        localStorage.removeItem(`pinloom:lastCanvas:${src.projectId}`);
+        localStorage.removeItem(`pinloom:planActive:${src.projectId}`);
+      } catch {
+        // localStorage may be unavailable — fall back to same-project
+        // event below if we end up in the same project anyway.
+      }
+      // If we're already in the source project, dispatch the same
+      // event ProjectPage listens to so it switches tabs in-place
+      // instead of forcing a full route change.
+      window.dispatchEvent(
+        new CustomEvent('pinloom:goto-session', {
+          detail: { projectId: src.projectId, sessionId: src.sessionId },
+        }),
+      );
+      navigate(`/projects/${src.projectId}`);
+    } catch (err) {
+      // Surface the error via window alert — it's a rare path (source
+      // deleted) and adding a toast just for this is overkill.
+      window.alert(
+        `Couldn't find the source session: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    } finally {
+      setJumpBusy(false);
+    }
+  }
 
   async function saveTitle() {
     const next = title.trim() || null;
@@ -208,6 +252,13 @@ function PinCard({
 
   const markdown = buildPinMarkdown(pin);
   const filenameHint = pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`;
+  // A pin with sourceMessageId was copied here via the "Send pin to…"
+  // flow — visually distinguish from native pins so the operator knows
+  // the content originated elsewhere and shouldn't be edited as if it
+  // were freshly typed in this session.
+  const isInjected = pin.sourceMessageId !== null;
+  const injectedTooltip =
+    'Click to jump to the source session. This pin is a snapshot — edits here don\'t sync back to the original.';
 
   return (
     <article className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] overflow-auto max-h-96">
@@ -218,6 +269,17 @@ function PinCard({
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         </button>
+        {isInjected && (
+          <button
+            type="button"
+            onClick={jumpToSource}
+            disabled={jumpBusy}
+            title={injectedTooltip}
+            className="shrink-0 text-[10px] text-[var(--color-injected-ink)] hover:text-[var(--color-injected-ink-hover)] hover:underline disabled:opacity-50 cursor-pointer transition-colors"
+          >
+            ↪ {jumpBusy ? 'opening…' : 'from another session'}
+          </button>
+        )}
         {editing ? (
           <input
             autoFocus
@@ -256,7 +318,11 @@ function PinCard({
             <Send size={14} />
           </ActionIconButton>
         )}
-        <PinToggleButton pinned onClick={unpin} />
+        <PinToggleButton
+          pinned
+          onClick={unpin}
+          tone={isInjected ? 'injected' : 'default'}
+        />
       </header>
       {!collapsed && (
         <div className="px-3 py-2 text-[var(--color-ink)]/90">

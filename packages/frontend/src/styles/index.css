@@ -17,6 +17,13 @@
   --color-error-bg: oklch(0.30 0.10 25);
   --color-error-border: oklch(0.55 0.15 25);
   --color-error-ink: oklch(0.90 0.08 25);
+  /* Cross-session 'injected' pin accent — orange family, distinct from
+     the accent color so a pin that was sent in from another session is
+     visually distinguishable at a glance. */
+  --color-injected-bg: oklch(0.30 0.08 50);
+  --color-injected-border: oklch(0.60 0.15 50);
+  --color-injected-ink: oklch(0.82 0.12 50);
+  --color-injected-ink-hover: oklch(0.92 0.10 50);
 }
 
 /* Light theme — applied via `data-theme="light"` on <html>. */
@@ -35,6 +42,10 @@
   --color-error-bg: oklch(0.95 0.04 25);
   --color-error-border: oklch(0.72 0.15 25);
   --color-error-ink: oklch(0.40 0.16 25);
+  --color-injected-bg: oklch(0.96 0.04 50);
+  --color-injected-border: oklch(0.72 0.16 50);
+  --color-injected-ink: oklch(0.45 0.18 50);
+  --color-injected-ink-hover: oklch(0.36 0.20 50);
 }
 
 html,
