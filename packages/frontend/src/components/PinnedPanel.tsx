@@ -208,16 +208,43 @@ function PinCard({
 
   const markdown = buildPinMarkdown(pin);
   const filenameHint = pin.pinTitle ?? `pin-${pin.id.slice(0, 8)}`;
+  // A pin with sourceMessageId was copied here via the "Send pin to…"
+  // flow — visually distinguish from native pins so the operator knows
+  // the content originated elsewhere and shouldn't be edited as if it
+  // were freshly typed in this session.
+  const isInjected = pin.sourceMessageId !== null;
+  const injectedTooltip =
+    'This pin was sent into this session from another session. Original lives in its source session — edits here only affect this copy.';
 
   return (
-    <article className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] overflow-auto max-h-96">
-      <header className="flex items-center gap-2 px-3 py-2 sticky top-0 z-10 bg-[var(--color-surface)]/95 backdrop-blur-sm border-b border-[var(--color-border)]/60">
+    <article
+      className={`rounded border overflow-auto max-h-96 ${
+        isInjected
+          ? 'border-orange-400/50 bg-orange-500/5'
+          : 'border-[var(--color-border)] bg-[var(--color-surface)]'
+      }`}
+    >
+      <header
+        className={`flex items-center gap-2 px-3 py-2 sticky top-0 z-10 backdrop-blur-sm border-b ${
+          isInjected
+            ? 'bg-orange-500/10 border-orange-400/40'
+            : 'bg-[var(--color-surface)]/95 border-[var(--color-border)]/60'
+        }`}
+      >
         <button
           onClick={() => setCollapsed((v) => !v)}
           className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-0.5"
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         </button>
+        {isInjected && (
+          <span
+            title={injectedTooltip}
+            className="shrink-0 text-[10px] uppercase tracking-wide font-medium text-orange-300 border border-orange-400/40 rounded px-1.5 py-0 cursor-help"
+          >
+            ↪ from another session
+          </span>
+        )}
         {editing ? (
           <input
             autoFocus
