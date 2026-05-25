@@ -87,4 +87,44 @@ export async function messageRoutes(app: FastifyInstance) {
     broadcastUpdate(message);
     return message;
   });
+
+  // Resolve the source-of-truth coordinates for a message that was
+  // copied here via "Send pin to…". The frontend uses this to render
+  // a clickable "jump to original" badge on the injected pin. Returns
+  // null shape (404) when the source row no longer exists (deleted
+  // session or message).
+  app.get<{ Params: { id: string } }>(
+    '/api/messages/:id/source',
+    async (req, reply) => {
+      const row = db
+        .prepare(
+          `SELECT m.id, m.session_id, s.project_id, s.title AS session_title,
+                  p.name AS project_name
+             FROM messages m
+             JOIN sessions s ON s.id = m.session_id
+             JOIN projects p ON p.id = s.project_id
+            WHERE m.id = ?`,
+        )
+        .get(req.params.id) as
+        | {
+            id: string;
+            session_id: string;
+            project_id: string;
+            session_title: string | null;
+            project_name: string;
+          }
+        | undefined;
+      if (!row) {
+        reply.code(404);
+        return { error: 'source message not found' };
+      }
+      return {
+        messageId: row.id,
+        sessionId: row.session_id,
+        sessionTitle: row.session_title,
+        projectId: row.project_id,
+        projectName: row.project_name,
+      };
+    },
+  );
 }

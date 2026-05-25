@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   ChevronDown,
@@ -193,6 +194,49 @@ function PinCard({
   const [title, setTitle] = useState(pin.pinTitle ?? '');
   const [collapsed, setCollapsed] = useState(false);
   const [rawView, setRawView] = useState(false);
+  const [jumpBusy, setJumpBusy] = useState(false);
+  const navigate = useNavigate();
+
+  async function jumpToSource() {
+    if (!pin.sourceMessageId || jumpBusy) return;
+    setJumpBusy(true);
+    try {
+      const src = await api.getMessageSource(pin.sourceMessageId);
+      // Seed the last-session marker so ProjectPage opens the right
+      // session immediately on mount — same channel SessionTabs uses.
+      try {
+        localStorage.setItem(
+          `pinloom:lastSession:${src.projectId}`,
+          src.sessionId,
+        );
+        // Clear any active canvas / plan so the chat view wins.
+        localStorage.removeItem(`pinloom:lastCanvas:${src.projectId}`);
+        localStorage.removeItem(`pinloom:planActive:${src.projectId}`);
+      } catch {
+        // localStorage may be unavailable — fall back to same-project
+        // event below if we end up in the same project anyway.
+      }
+      // If we're already in the source project, dispatch the same
+      // event ProjectPage listens to so it switches tabs in-place
+      // instead of forcing a full route change.
+      window.dispatchEvent(
+        new CustomEvent('pinloom:goto-session', {
+          detail: { projectId: src.projectId, sessionId: src.sessionId },
+        }),
+      );
+      navigate(`/projects/${src.projectId}`);
+    } catch (err) {
+      // Surface the error via window alert — it's a rare path (source
+      // deleted) and adding a toast just for this is overkill.
+      window.alert(
+        `Couldn't find the source session: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    } finally {
+      setJumpBusy(false);
+    }
+  }
 
   async function saveTitle() {
     const next = title.trim() || null;
@@ -214,23 +258,11 @@ function PinCard({
   // were freshly typed in this session.
   const isInjected = pin.sourceMessageId !== null;
   const injectedTooltip =
-    'This pin was sent into this session from another session. Original lives in its source session — edits here only affect this copy.';
+    'Click to jump to the source session. This pin is a snapshot — edits here don\'t sync back to the original.';
 
   return (
-    <article
-      className={`rounded border overflow-auto max-h-96 ${
-        isInjected
-          ? 'border-orange-400/50 bg-orange-500/5'
-          : 'border-[var(--color-border)] bg-[var(--color-surface)]'
-      }`}
-    >
-      <header
-        className={`flex items-center gap-2 px-3 py-2 sticky top-0 z-10 backdrop-blur-sm border-b ${
-          isInjected
-            ? 'bg-orange-500/10 border-orange-400/40'
-            : 'bg-[var(--color-surface)]/95 border-[var(--color-border)]/60'
-        }`}
-      >
+    <article className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] overflow-auto max-h-96">
+      <header className="flex items-center gap-2 px-3 py-2 sticky top-0 z-10 bg-[var(--color-surface)]/95 backdrop-blur-sm border-b border-[var(--color-border)]/60">
         <button
           onClick={() => setCollapsed((v) => !v)}
           className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-0.5"
@@ -238,12 +270,15 @@ function PinCard({
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         </button>
         {isInjected && (
-          <span
+          <button
+            type="button"
+            onClick={jumpToSource}
+            disabled={jumpBusy}
             title={injectedTooltip}
-            className="shrink-0 text-[10px] uppercase tracking-wide font-medium text-orange-300 border border-orange-400/40 rounded px-1.5 py-0 cursor-help"
+            className="shrink-0 text-[10px] text-[var(--color-injected-ink)] hover:text-[var(--color-injected-ink-hover)] hover:underline disabled:opacity-50 cursor-pointer transition-colors"
           >
-            ↪ from another session
-          </span>
+            ↪ {jumpBusy ? 'opening…' : 'from another session'}
+          </button>
         )}
         {editing ? (
           <input
@@ -283,7 +318,11 @@ function PinCard({
             <Send size={14} />
           </ActionIconButton>
         )}
-        <PinToggleButton pinned onClick={unpin} />
+        <PinToggleButton
+          pinned
+          onClick={unpin}
+          tone={isInjected ? 'injected' : 'default'}
+        />
       </header>
       {!collapsed && (
         <div className="px-3 py-2 text-[var(--color-ink)]/90">
