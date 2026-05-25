@@ -572,6 +572,28 @@ export function ChatView({ session, onPinChange }: Props) {
     });
   }, [renderItems.length]);
 
+  // Re-align to bottom on any list height change (markdown commit,
+  // image load, footer reflow) when the user was already at bottom.
+  // followOutput alone aligns to *estimated* heights and falls short.
+  const atBottomRef = useRef(atBottom);
+  useEffect(() => {
+    atBottomRef.current = atBottom;
+  }, [atBottom]);
+  const renderItemsCountRef = useRef(renderItems.length);
+  useEffect(() => {
+    renderItemsCountRef.current = renderItems.length;
+  }, [renderItems.length]);
+  const handleTotalListHeightChanged = useCallback(() => {
+    if (!atBottomRef.current) return;
+    const count = renderItemsCountRef.current;
+    if (count === 0) return;
+    virtuosoRef.current?.scrollToIndex({
+      index: count - 1,
+      align: 'end',
+      behavior: 'auto',
+    });
+  }, []);
+
   // Textarea auto-grow.
   // When the input is empty we DON'T compute height from scrollHeight, because
   // a wrapping placeholder inflates scrollHeight and leaves the textarea stuck
@@ -966,6 +988,10 @@ export function ChatView({ session, onPinChange }: Props) {
           }}
           followOutput={followOutput}
           atBottomStateChange={handleAtBottomChange}
+          // Default 0 is too strict — 1-2px jitter from Footer reflow
+          // flips atBottom to false and breaks followOutput's tracking.
+          atBottomThreshold={60}
+          totalListHeightChanged={handleTotalListHeightChanged}
           increaseViewportBy={{ top: 600, bottom: 600 }}
           initialTopMostItemIndex={Math.max(0, renderItems.length - 1)}
         />
