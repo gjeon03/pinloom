@@ -2,6 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import { SWRConfig } from 'swr';
 import { AppShell } from './components/AppShell.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
+import { GithubLink } from './components/GithubLink.js';
 import { ProjectPage } from './pages/ProjectPage.js';
 import { PinsPage } from './pages/PinsPage.js';
 import { SessionPage } from './pages/SessionPage.js';
@@ -22,6 +23,7 @@ const swrConfig = {
 export function App() {
   return (
     <SWRConfig value={swrConfig}>
+      <GithubLink />
       <NotificationCenter />
       <Routes>
         <Route path="/pins/:sessionId" element={<PinsPage />} />
