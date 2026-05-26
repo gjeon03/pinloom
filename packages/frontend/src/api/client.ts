@@ -202,6 +202,14 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ title }),
     }),
+  updateSession: (
+    sessionId: string,
+    body: { model?: string | null; reasoningEffort?: string | null },
+  ) =>
+    request<Session>(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   reorderSessions: (projectId: string, ids: string[]) =>
     request<Session[]>(`/api/projects/${projectId}/sessions/reorder`, {
       method: 'POST',
