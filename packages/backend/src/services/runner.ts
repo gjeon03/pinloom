@@ -79,6 +79,8 @@ interface SessionContext {
   // Same column under the hood (agent_session_id), just a different label.
   claudeSessionId: string | null;
   cwd: string;
+  model: string | null;
+  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
 }
 
 interface PlanItemLite {
@@ -204,12 +206,21 @@ function persistMessage(args: PersistArgs): Message {
   return message;
 }
 
+const VALID_EFFORTS_RUNNER: ReadonlySet<string> = new Set([
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
+
 function loadSession(sessionId: string): SessionContext | null {
   const db = getDb();
   const row = db
     .prepare(
       `SELECT s.id, s.project_id, s.plan_id, s.agent,
-              s.agent_session_id, s.claude_session_id, p.cwd
+              s.agent_session_id, s.claude_session_id, s.model,
+              s.reasoning_effort, p.cwd
        FROM sessions s
        JOIN projects p ON p.id = s.project_id
        WHERE s.id = ?`,
@@ -222,10 +233,16 @@ function loadSession(sessionId: string): SessionContext | null {
         agent: string;
         agent_session_id: string | null;
         claude_session_id: string | null;
+        model: string | null;
+        reasoning_effort: string | null;
         cwd: string;
       }
     | undefined;
   if (!row) return null;
+  const effort =
+    row.reasoning_effort && VALID_EFFORTS_RUNNER.has(row.reasoning_effort)
+      ? (row.reasoning_effort as SessionContext['reasoningEffort'])
+      : null;
   return {
     id: row.id,
     projectId: row.project_id,
@@ -233,6 +250,8 @@ function loadSession(sessionId: string): SessionContext | null {
     agent: row.agent === 'codex' ? 'codex' : 'claude',
     claudeSessionId: row.agent_session_id ?? row.claude_session_id,
     cwd: row.cwd,
+    model: row.model,
+    reasoningEffort: effort,
   };
 }
 
@@ -1020,6 +1039,7 @@ async function runAttempt(
   useResume: boolean,
   model?: string,
   mcpServers?: Record<string, McpStdioServerConfig>,
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max',
 ): Promise<AttemptResult> {
   const adapter = getAgentAdapter(ctx.agent);
   const abortController = new AbortController();
@@ -1028,6 +1048,7 @@ async function runAttempt(
     systemPrompt,
     systemPromptDynamic,
     model,
+    reasoningEffort,
     resume: useResume ? ctx.claudeSessionId : null,
     abortController,
     initialPrompt: { text: prompt, images },
@@ -1325,8 +1346,9 @@ async function runAssistant(
           systemPrompt,
           systemPromptDynamic,
           true,
-          model,
+          model ?? ctx.model ?? undefined,
           mcpServers,
+          ctx.reasoningEffort ?? undefined,
         );
       } catch (err) {
         // Hard error after the attempt produced output — surface as runner
@@ -1375,8 +1397,9 @@ async function runAssistant(
         systemPrompt,
         systemPromptDynamic,
         false,
-        model,
+        model ?? ctx.model ?? undefined,
         mcpServers,
+        ctx.reasoningEffort ?? undefined,
       );
     }
 

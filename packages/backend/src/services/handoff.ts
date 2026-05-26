@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import type { Message, Session } from '@pinloom/shared';
+import type { Message, ReasoningEffort, Session } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 
@@ -13,9 +13,19 @@ interface SessionRow {
   title: string | null;
   next_image_number: number;
   last_synced_message_id: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
   created_at: string;
   updated_at: string;
 }
+
+const VALID_EFFORTS: ReadonlySet<string> = new Set([
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
 
 interface MessageRow {
   id: string;
@@ -35,6 +45,10 @@ interface MessageRow {
 function toSession(row: SessionRow): Session {
   const agent = row.agent === 'codex' ? 'codex' : 'claude';
   const agentSessionId = row.agent_session_id ?? row.claude_session_id;
+  const effort: ReasoningEffort | null =
+    row.reasoning_effort && VALID_EFFORTS.has(row.reasoning_effort)
+      ? (row.reasoning_effort as ReasoningEffort)
+      : null;
   return {
     id: row.id,
     projectId: row.project_id,
@@ -45,6 +59,8 @@ function toSession(row: SessionRow): Session {
     title: row.title,
     nextImageNumber: row.next_image_number,
     lastSyncedMessageId: row.last_synced_message_id,
+    model: row.model,
+    reasoningEffort: effort,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

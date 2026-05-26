@@ -252,6 +252,12 @@ class CodexAdapterImpl implements AgentAdapter {
         base.splice(1, 0, 'resume', threadId);
       }
       if (args.model) base.push('--model', args.model);
+      // Reasoning effort — codex CLI's /effort slash uses these literal
+      // tokens (low/medium/high/xhigh/max). We expose 4 in the picker
+      // for Codex sessions; "max" is reserved for Claude-only.
+      if (args.reasoningEffort && args.reasoningEffort !== 'max') {
+        base.push('-c', `model_reasoning_effort=${args.reasoningEffort}`);
+      }
       return base;
     }
 

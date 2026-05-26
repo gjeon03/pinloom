@@ -142,6 +142,30 @@ class ClaudeAdapterImpl implements AgentAdapter {
         ? [args.systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, args.systemPromptDynamic]
         : args.systemPrompt;
 
+    // Map our cross-agent effort level onto the SDK's `thinking` option.
+    // 'adaptive' is the SDK default (let the model decide); explicit
+    // budget_tokens for higher tiers picks a fixed ceiling that scales
+    // roughly with the perceived 'extra effort' the user is asking for.
+    let thinkingOption: { type: string; budget_tokens?: number };
+    switch (args.reasoningEffort) {
+      case 'low':
+        thinkingOption = { type: 'disabled' };
+        break;
+      case 'high':
+        thinkingOption = { type: 'enabled', budget_tokens: 8000 };
+        break;
+      case 'xhigh':
+        thinkingOption = { type: 'enabled', budget_tokens: 16000 };
+        break;
+      case 'max':
+        thinkingOption = { type: 'enabled', budget_tokens: 32000 };
+        break;
+      case 'medium':
+      default:
+        thinkingOption = { type: 'adaptive' };
+        break;
+    }
+
     const options: Record<string, unknown> = {
       cwd: args.cwd,
       systemPrompt: systemPromptOption,
@@ -157,7 +181,7 @@ class ClaudeAdapterImpl implements AgentAdapter {
       settingSources: ['user', 'project'],
       abortController: args.abortController,
       includePartialMessages: true,
-      thinking: { type: 'adaptive' },
+      thinking: thinkingOption,
     };
     if (args.resume) options.resume = args.resume;
     if (args.model) options.model = args.model;

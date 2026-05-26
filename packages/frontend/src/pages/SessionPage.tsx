@@ -112,7 +112,13 @@ export function SessionPage() {
               />
             ) : null
           }
-          right={<ChatView session={session} onPinChange={handlePinsChange} />}
+          right={
+            <ChatView
+              session={session}
+              onPinChange={handlePinsChange}
+              onSessionUpdate={setSession}
+            />
+          }
         />
       </div>
 

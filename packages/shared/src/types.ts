@@ -42,6 +42,12 @@ export interface PlanItem {
 
 export type AgentKind = 'claude' | 'codex';
 
+// Reasoning effort levels per agent. Claude's underlying SDK supports an
+// extra "max" tier that Codex doesn't expose; the picker UI filters the
+// list based on session.agent so callers don't pick something the
+// adapter can't honor.
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface Session {
   id: string;
   projectId: string;
@@ -53,6 +59,8 @@ export interface Session {
   title: string | null;
   nextImageNumber: number;
   lastSyncedMessageId: string | null;
+  model: string | null;
+  reasoningEffort: ReasoningEffort | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -326,6 +326,17 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 24,
+    // Per-session model + reasoning effort, both nullable so a session
+    // can defer to the agent's default. Stored on the session row so
+    // the choice survives the GitHub backup → other-machine import flow
+    // (localStorage was per-browser).
+    sql: `
+      ALTER TABLE sessions ADD COLUMN model TEXT;
+      ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

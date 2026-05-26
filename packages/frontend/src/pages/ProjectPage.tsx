@@ -457,6 +457,14 @@ export function ProjectPage({
                 key={activeSession.id}
                 session={activeSession}
                 onPinChange={handlePinsChange}
+                onSessionUpdate={(updated) => {
+                  setSessions((prev) =>
+                    prev.map((s) => (s.id === updated.id ? updated : s)),
+                  );
+                  if (activeSession?.id === updated.id) {
+                    setActiveSession(updated);
+                  }
+                }}
               />
             ) : (
               <div className="p-6 text-sm text-[var(--color-ink-muted)]">
