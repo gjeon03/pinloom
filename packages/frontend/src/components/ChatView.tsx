@@ -1354,10 +1354,11 @@ function MessageBubbleInner({
   // markdown re-parses on every chunk, and tool/system rows render via
   // ToolMessage / plain text where the actions don't carry the same meaning.
   const showActions = canPin;
-  // Default to rendered markdown once the turn settles; force raw while
-  // streaming since re-parsing on every chunk drops frames. The toggle is
-  // a user override that persists for the bubble's lifetime.
-  const [rawView, setRawView] = useState(false);
+  // Assistant turns default to rendered markdown once they settle; user
+  // messages default to raw so what you typed is shown verbatim (no stray
+  // markdown reflow). Streaming always forces raw since re-parsing on every
+  // chunk drops frames. The toggle is a per-bubble override either way.
+  const [rawView, setRawView] = useState(message.role === 'user');
   const renderAsMarkdown = !streaming && !rawView;
 
   return (
