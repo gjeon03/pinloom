@@ -68,6 +68,8 @@ interface SessionRow {
   title: string | null;
   next_image_number: number;
   last_synced_message_id: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -87,6 +89,21 @@ interface MessageRow {
   created_at: string;
 }
 
+const VALID_EFFORTS: ReadonlySet<string> = new Set([
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
+
+function normalizeEffort(value: string | null): Session['reasoningEffort'] {
+  if (value && VALID_EFFORTS.has(value)) {
+    return value as Session['reasoningEffort'];
+  }
+  return null;
+}
+
 export function toSession(row: SessionRow): Session {
   const agent = row.agent === 'codex' ? 'codex' : 'claude';
   // agent_session_id is the canonical resume token going forward; fall back
@@ -102,6 +119,8 @@ export function toSession(row: SessionRow): Session {
     title: row.title,
     nextImageNumber: row.next_image_number,
     lastSyncedMessageId: row.last_synced_message_id,
+    model: row.model,
+    reasoningEffort: normalizeEffort(row.reasoning_effort),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -525,15 +544,42 @@ export async function sessionRoutes(app: FastifyInstance) {
 
   app.patch<{
     Params: { sessionId: string };
-    Body: { title?: string | null };
-  }>('/api/sessions/:sessionId', async (req) => {
-    const { title } = req.body;
+    Body: {
+      title?: string | null;
+      model?: string | null;
+      reasoningEffort?: string | null;
+    };
+  }>('/api/sessions/:sessionId', async (req, reply) => {
+    const existing = db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(req.params.sessionId) as SessionRow | undefined;
+    if (!existing) {
+      reply.code(404);
+      return { error: 'session not found' };
+    }
+    const nextTitle =
+      req.body.title === undefined ? existing.title : req.body.title;
+    const nextModel =
+      req.body.model === undefined
+        ? existing.model
+        : req.body.model && req.body.model.length > 0
+          ? req.body.model
+          : null;
+    let nextEffort = existing.reasoning_effort;
+    if (req.body.reasoningEffort !== undefined) {
+      if (req.body.reasoningEffort === null || req.body.reasoningEffort === '') {
+        nextEffort = null;
+      } else if (VALID_EFFORTS.has(req.body.reasoningEffort)) {
+        nextEffort = req.body.reasoningEffort;
+      } else {
+        reply.code(400);
+        return { error: `invalid reasoningEffort: ${req.body.reasoningEffort}` };
+      }
+    }
     const now = new Date().toISOString();
-    db.prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?').run(
-      title ?? null,
-      now,
-      req.params.sessionId,
-    );
+    db.prepare(
+      'UPDATE sessions SET title = ?, model = ?, reasoning_effort = ?, updated_at = ? WHERE id = ?',
+    ).run(nextTitle, nextModel, nextEffort, now, req.params.sessionId);
     const row = db
       .prepare('SELECT * FROM sessions WHERE id = ?')
       .get(req.params.sessionId) as SessionRow;

@@ -71,6 +71,13 @@ export interface AgentRunArgs {
    */
   systemPromptDynamic?: string;
   model?: string;
+  /**
+   * Reasoning effort level for the agent. Claude SDK supports 5 tiers
+   * (low/medium/high/xhigh/max), Codex CLI exposes 4 (low/medium/high/xhigh).
+   * Adapter maps to its native control (thinking config / -c reasoning.effort).
+   * Undefined = adapter default.
+   */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Prior session/thread id; null = start fresh. */
   resume?: string | null;
   abortController: AbortController;
