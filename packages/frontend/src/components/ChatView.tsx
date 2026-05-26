@@ -26,6 +26,7 @@ import { ToolMessage } from './ToolMessage.js';
 import { ToolGroup } from './ToolGroup.js';
 import { Tooltip } from './Tooltip.js';
 import { ModelPicker, findModelLabel } from './ModelPicker.js';
+import { EffortPicker } from './EffortPicker.js';
 import { AgentBadge } from './AgentBadge.js';
 import { MentionPopup, type MentionWorker } from './MentionPopup.js';
 import { useNotifications } from '../stores/notifications.js';
@@ -129,6 +130,7 @@ function groupConsecutiveTools(messages: Message[]): RenderItem[] {
 interface Props {
   session: Session;
   onPinChange: (message: Message) => void;
+  onSessionUpdate?: (session: Session) => void;
 }
 
 const BOTTOM_STICKY_PX = 60; // within this distance from bottom → auto-scroll
@@ -147,7 +149,7 @@ function loadPersistedInput(sessionId: string): string {
   }
 }
 
-export function ChatView({ session, onPinChange }: Props) {
+export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   // groupConsecutiveTools is O(N) over the whole message list. Without
   // memoization every `stream_chunk` event (~10/sec while a turn is
@@ -169,14 +171,13 @@ export function ChatView({ session, onPinChange }: Props) {
   const [verb, setVerb] = useState<string>(() => pickVerb());
   const [thinkingText, setThinkingText] = useState<string>('');
   const [wikiSyncing, setWikiSyncing] = useState(false);
-  const [model, setModel] = useState<string | null>(() => {
-    try {
-      const raw = localStorage.getItem(`pinloom:model:${session.id}`);
-      return raw === '' || raw === null ? null : raw;
-    } catch {
-      return null;
-    }
-  });
+  // Model + Effort live on the session row in the DB, so they survive
+  // the GitHub backup → other-machine import path. Local state mirrors
+  // the session prop and writes back through PATCH /api/sessions/:id.
+  const [model, setModel] = useState<string | null>(session.model);
+  const [effort, setEffort] = useState<Session['reasoningEffort']>(
+    session.reasoningEffort,
+  );
   const [showModelRow, setShowModelRow] = useState<boolean>(() => {
     try {
       // Default is expanded — first-time users discover the picker, then can collapse.
@@ -372,6 +373,10 @@ export function ChatView({ session, onPinChange }: Props) {
   // serial HTTP round trips. We still clear the local mirrors here so a
   // cold-cache switch doesn't briefly show the previous session's data
   // before SWR's fetcher resolves.
+  // Full reset on session switch. Locally-edited fields like model /
+  // effort only re-pull from the session prop here, never on incidental
+  // prop changes (a nextImageNumber bump from sending an image used to
+  // clobber a just-saved pick).
   useEffect(() => {
     setMessages([]);
     setQueue([]);
@@ -388,15 +393,17 @@ export function ChatView({ session, onPinChange }: Props) {
     setRunStartAt(null);
     setElapsedSec(0);
     setThinkingText('');
-    nextAttachmentNumberRef.current = 1;
     nextAttachmentNumberRef.current = session.nextImageNumber;
-    try {
-      const raw = localStorage.getItem(`pinloom:model:${session.id}`);
-      setModel(raw === '' || raw === null ? null : raw);
-    } catch {
-      setModel(null);
-    }
-  }, [session.id, session.nextImageNumber]);
+    setModel(session.model);
+    setEffort(session.reasoningEffort);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id]);
+
+  // Keep the attachment-counter ref in sync without re-running the
+  // session reset above.
+  useEffect(() => {
+    nextAttachmentNumberRef.current = session.nextImageNumber;
+  }, [session.nextImageNumber]);
 
   // SWR caches per-session payloads so tab switches render from cache
   // instantly. WS handlers keep `messages`/`queue` live during a streaming
@@ -811,13 +818,24 @@ export function ChatView({ session, onPinChange }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [running, session.id]);
 
-  function changeModel(next: string | null) {
+  async function changeModel(next: string | null) {
     setModel(next);
     try {
-      if (next === null) localStorage.removeItem(`pinloom:model:${session.id}`);
-      else localStorage.setItem(`pinloom:model:${session.id}`, next);
-    } catch {
-      // ignore
+      const updated = await api.updateSession(session.id, { model: next });
+      onSessionUpdate?.(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+  async function changeEffort(next: Session['reasoningEffort']) {
+    setEffort(next);
+    try {
+      const updated = await api.updateSession(session.id, {
+        reasoningEffort: next,
+      });
+      onSessionUpdate?.(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -1258,17 +1276,28 @@ export function ChatView({ session, onPinChange }: Props) {
           <div className="border-t border-[var(--color-border)]/60 -mx-3 -mb-3 px-3">
             {showModelRow && (
               <div className="py-2 flex items-center justify-between gap-2 text-[11px] text-[var(--color-ink-muted)]">
-                <div className="flex items-center gap-2">
-                  <span>Model</span>
-                  <ModelPicker
-                    value={model}
-                    onChange={changeModel}
-                    agent={session.agent}
-                    side="top"
-                    disabled={aiRunning}
-                  />
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="flex items-center gap-2">
+                    <span>Model</span>
+                    <ModelPicker
+                      value={model}
+                      onChange={changeModel}
+                      agent={session.agent}
+                      side="top"
+                      disabled={aiRunning}
+                    />
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span>Effort</span>
+                    <EffortPicker
+                      value={effort}
+                      onChange={changeEffort}
+                      agent={session.agent}
+                      side="top"
+                      disabled={aiRunning}
+                    />
+                  </span>
                 </div>
-                {/* Reserved space for future composer-level controls. */}
               </div>
             )}
             <button
