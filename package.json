@@ -1,6 +1,6 @@
 {
   "name": "pinloom",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Local Claude Code workspace. Persistent history, pinned answers, project Wiki, Teams orchestration, GitHub-backed backup.",
