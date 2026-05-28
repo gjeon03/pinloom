@@ -104,6 +104,54 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+// Anthropic rejects images over 2000px on the long edge once a request
+// carries many images, and downscales anything past ~1568px server-side
+// regardless. Cap on the long edge before sending so a single high-res
+// screenshot can't make a whole multi-image session unsendable. Images
+// already under the cap pass through untouched (preserves quality and GIF
+// animation); only oversized ones are re-encoded.
+const MAX_IMAGE_DIMENSION = 1568;
+
+async function imageToPayload(
+  file: Blob,
+  mimeType: SupportedImageMime,
+): Promise<{ mimeType: SupportedImageMime; base64: string }> {
+  const passthrough = async () => ({ mimeType, base64: await blobToBase64(file) });
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return passthrough();
+  }
+  try {
+    const longEdge = Math.max(bitmap.width, bitmap.height);
+    if (longEdge <= MAX_IMAGE_DIMENSION) return passthrough();
+
+    const scale = MAX_IMAGE_DIMENSION / longEdge;
+    const w = Math.round(bitmap.width * scale);
+    const h = Math.round(bitmap.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const cctx = canvas.getContext('2d');
+    if (!cctx) return passthrough();
+    cctx.drawImage(bitmap, 0, 0, w, h);
+
+    // Canvas can't re-encode GIF and an oversized GIF loses animation when
+    // resized anyway, so emit lossless PNG (also a backend-accepted mime).
+    const outMime: SupportedImageMime = mimeType === 'image/gif' ? 'image/png' : mimeType;
+    const quality =
+      outMime === 'image/jpeg' || outMime === 'image/webp' ? 0.9 : undefined;
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), outMime, quality),
+    );
+    if (!blob) return passthrough();
+    return { mimeType: outMime, base64: await blobToBase64(blob) };
+  } finally {
+    bitmap.close();
+  }
+}
+
 type RenderItem =
   | { kind: 'message'; message: Message }
   | { kind: 'tool-group'; key: string; messages: Message[] };
@@ -705,10 +753,7 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
         imagesPayload = await Promise.all(
           [...atts]
             .sort((a, b) => a.number - b.number)
-            .map(async (a) => ({
-              mimeType: a.mimeType,
-              base64: await blobToBase64(a.file),
-            })),
+            .map((a) => imageToPayload(a.file, a.mimeType)),
         );
         atts.forEach((a) => URL.revokeObjectURL(a.previewUrl));
       } catch (err) {
