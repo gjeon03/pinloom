@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { NotepadText, X } from 'lucide-react';
+import { Info, NotepadText, X } from 'lucide-react';
 import { api } from '../api/client.js';
+import { Tooltip } from './Tooltip.js';
 
 // The notepad is split into a toggle button (lives in the top-right control
 // cluster) and a docked panel (a real right-hand column in the app layout).
@@ -101,6 +102,15 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <NotepadText size={14} />
           Notepad
+          <Tooltip
+            label="Stored in the local SQLite DB — backs up to GitHub"
+            side="bottom"
+          >
+            <Info
+              size={13}
+              className="cursor-help text-[var(--color-ink-muted)]"
+            />
+          </Tooltip>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-[var(--color-ink-muted)]">
