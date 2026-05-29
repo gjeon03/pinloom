@@ -406,15 +406,6 @@ export function AppShell({ children }: Props) {
         <div className="px-3 py-3 flex items-center justify-between gap-1">
           <div className="text-sm font-semibold tracking-wide truncate">pinloom</div>
           <div className="flex items-center gap-0.5">
-            <Tooltip label="Hide sidebar" side="bottom">
-              <button
-                aria-label="Hide sidebar"
-                onClick={() => setSidebarHidden(true)}
-                className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
-              >
-                <PanelLeftClose size={14} />
-              </button>
-            </Tooltip>
             <Tooltip label="New group" side="bottom">
               <button
                 aria-label="New group"
@@ -438,6 +429,15 @@ export function AppShell({ children }: Props) {
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
               >
                 <Plus size={16} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Hide sidebar" side="bottom">
+              <button
+                aria-label="Hide sidebar"
+                onClick={() => setSidebarHidden(true)}
+                className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
+              >
+                <PanelLeftClose size={14} />
               </button>
             </Tooltip>
           </div>
