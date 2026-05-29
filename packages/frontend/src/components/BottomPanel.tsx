@@ -128,7 +128,7 @@ export function BottomPanel({ projectId, session }: Props) {
   }, [open, lines.length]);
 
   return (
-    <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
+    <div className="relative border-t border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
       {open && (
         <div
           onMouseDown={(e) => {
@@ -137,7 +137,10 @@ export function BottomPanel({ projectId, session }: Props) {
             setDragging(true);
           }}
           title="Drag to resize"
-          className={`h-1.5 shrink-0 cursor-ns-resize hover:bg-[var(--color-accent)]/40 ${
+          // Overlay the top border instead of taking layout height, so the
+          // tab strip keeps symmetric top/bottom padding (the in-flow handle
+          // used to add ~6px only above the tabs).
+          className={`absolute inset-x-0 -top-[3px] z-10 h-1.5 cursor-ns-resize hover:bg-[var(--color-accent)]/40 ${
             dragging ? 'bg-[var(--color-accent)]/40' : ''
           }`}
         />
