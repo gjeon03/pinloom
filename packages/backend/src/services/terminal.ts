@@ -170,3 +170,47 @@ export function killTerminal(projectId: string, localId: string): void {
   }
   sessions.delete(key);
 }
+
+/**
+ * Tear down every live terminal on backend shutdown. Without this, the shells
+ * (and any dev server running inside them) are merely reparented when the node
+ * process exits — the kernel's hangup-on-master-close only reaches each pty's
+ * foreground process group, so a backgrounded `server &` would leak.
+ *
+ * We SIGHUP the shell first: an interactive shell hangs up *all* of its jobs
+ * (foreground and background) on HUP. After a short grace period anything still
+ * alive gets a process-group SIGKILL. A process that deliberately ignores
+ * SIGHUP / daemonizes itself can still survive — that's inherent.
+ */
+export async function killAllTerminals(): Promise<void> {
+  const ptys = [...sessions.values()].map((s) => {
+    if (s.idleTimer) clearTimeout(s.idleTimer);
+    return s.pty;
+  });
+  sessions.clear();
+  if (ptys.length === 0) return;
+
+  for (const p of ptys) {
+    try {
+      p.kill('SIGHUP');
+    } catch {
+      // already exited
+    }
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 400));
+
+  for (const p of ptys) {
+    try {
+      // Negative pid → the whole process group (node-pty setsid's the shell,
+      // so its pid is its group leader).
+      process.kill(-p.pid, 'SIGKILL');
+    } catch {
+      try {
+        p.kill('SIGKILL');
+      } catch {
+        // gone
+      }
+    }
+  }
+}

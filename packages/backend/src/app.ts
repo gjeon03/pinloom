@@ -16,7 +16,7 @@ import { projectNotepadRoutes } from './routes/project-notepads.js';
 import { teamRoutes } from './routes/teams.js';
 import { teamDispatchRoutes } from './routes/team-dispatch.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
-import { attachTerminal } from './services/terminal.js';
+import { attachTerminal, killAllTerminals } from './services/terminal.js';
 import { checkAgentClis } from './services/cli-check.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
@@ -27,6 +27,13 @@ export async function createApp() {
   const app = Fastify({ logger: true, bodyLimit: 100 * 1024 * 1024 });
 
   getDb();
+
+  // On shutdown, deterministically tear down terminal shells + anything they
+  // spawned. app.close() awaits this, and server.ts's shutdown awaits
+  // app.close() (within its 3s force-exit budget).
+  app.addHook('onClose', async () => {
+    await killAllTerminals();
+  });
 
   // Mirror user-managed env vars into process.env so the very first agent
   // spawn inherits them; subsequent upserts/deletes keep this in sync.
