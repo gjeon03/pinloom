@@ -477,7 +477,7 @@ export function ProjectPage({
 
       {activeSession && (
         <BottomPanel
-          key={activeSession.id}
+          key={project.id}
           projectId={project.id}
           session={activeSession}
         />

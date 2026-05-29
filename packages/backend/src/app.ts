@@ -14,6 +14,7 @@ import { backupRoutes } from './routes/backup.js';
 import { teamRoutes } from './routes/teams.js';
 import { teamDispatchRoutes } from './routes/team-dispatch.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
+import { attachTerminal } from './services/terminal.js';
 import { checkAgentClis } from './services/cli-check.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
@@ -66,6 +67,58 @@ export async function createApp() {
       }
       subscribe(channel, socket);
       socket.on('close', () => unsubscribe(channel, socket));
+    });
+
+    // Bidirectional terminal socket — unlike /ws (broadcast-only) this reads
+    // client keystrokes and pipes them into a node-pty shell. Protocol:
+    //   client→server: {t:'i',d} input · {t:'r',c,r} resize
+    //   server→client: {t:'o',d} output · {t:'x',code} shell exited
+    fastify.get('/ws/terminal', { websocket: true }, (socket, request) => {
+      const q = request.query as { project?: string; t?: string };
+      const projectId = q.project;
+      const localId = q.t;
+      if (!projectId || !localId) {
+        socket.close(4000, 'project and t query parameters required');
+        return;
+      }
+      const send = (msg: unknown) => {
+        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
+      };
+      const handle = attachTerminal(
+        projectId,
+        localId,
+        80,
+        24,
+        (data) => send({ t: 'o', d: data }),
+        (code) => send({ t: 'x', code }),
+      );
+      if (!handle) {
+        socket.close(4001, 'project not found');
+        return;
+      }
+      // Mark the scrollback replay so the client can suppress echoing
+      // xterm's responses to any terminal queries embedded in it (e.g. a
+      // prior TUI's Device Attributes request) back into the shell — that
+      // leak is what produced stray "1;2c" at the prompt on reconnect.
+      if (handle.buffer) send({ t: 'o', d: handle.buffer, replay: true });
+      socket.on('message', (raw: Buffer) => {
+        let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown };
+        try {
+          msg = JSON.parse(raw.toString());
+        } catch {
+          return;
+        }
+        if (msg.t === 'i' && typeof msg.d === 'string') {
+          handle.write(msg.d);
+        } else if (
+          msg.t === 'r' &&
+          typeof msg.c === 'number' &&
+          typeof msg.r === 'number'
+        ) {
+          handle.resize(msg.c, msg.r);
+        }
+      });
+      socket.on('close', () => handle.detach());
     });
   });
 
