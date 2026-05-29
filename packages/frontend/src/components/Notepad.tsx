@@ -338,7 +338,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       {showTabs && doc && (
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-[var(--color-border)] px-2 py-1">
+        <div className="flex items-center overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface)] pl-2">
           {doc.tabs.map((t) => (
             <TabChip
               key={t.id}
@@ -451,7 +451,7 @@ function TabChip({
             setEditing(false);
           }
         }}
-        className="w-24 shrink-0 rounded bg-[var(--color-surface)] px-2 py-0.5 text-xs outline-none ring-1 ring-[var(--color-accent)]"
+        className="my-1 w-24 shrink-0 rounded bg-[var(--color-surface)] px-2 py-0.5 text-xs outline-none ring-1 ring-[var(--color-accent)]"
       />
     );
   }
@@ -461,10 +461,10 @@ function TabChip({
       onClick={onSelect}
       onDoubleClick={() => setEditing(true)}
       title="Double-click to rename"
-      className={`group flex shrink-0 cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-xs ${
+      className={`group flex shrink-0 cursor-pointer items-center gap-1 rounded-t border-b-2 px-3 py-1.5 text-xs ${
         active
-          ? 'bg-[var(--color-surface)] text-[var(--color-ink)]'
-          : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface)]/50'
+          ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-ink)]'
+          : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
       }`}
     >
       <span className="max-w-[120px] truncate">{name}</span>
