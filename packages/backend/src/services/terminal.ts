@@ -21,9 +21,14 @@ interface TerminalSession {
   idleTimer: NodeJS.Timeout | null;
   onData: ((data: string) => void) | null;
   onExit: ((code: number) => void) | null;
+  // Bumped on every attach so a superseded consumer's detach() becomes a
+  // no-op — otherwise a second socket attaching to the same terminal would
+  // get reaped when the first socket later closes.
+  attachId: number;
 }
 
 const sessions = new Map<string, TerminalSession>();
+let attachSeq = 0;
 
 function terminalKey(projectId: string, localId: string): string {
   return `${projectId}::${localId}`;
@@ -97,6 +102,7 @@ export function attachTerminal(
       idleTimer: null,
       onData: null,
       onExit: null,
+      attachId: 0,
     };
     child.onData((d) => {
       created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
@@ -125,6 +131,7 @@ export function attachTerminal(
   const snapshot = bound.buffer;
   bound.onData = onData;
   bound.onExit = onExit;
+  const myAttachId = (bound.attachId = ++attachSeq);
 
   return {
     buffer: snapshot,
@@ -143,6 +150,8 @@ export function attachTerminal(
       }
     },
     detach() {
+      // A newer consumer has taken over this terminal — let it keep the pty.
+      if (bound.attachId !== myAttachId) return;
       bound.onData = null;
       bound.onExit = null;
       if (bound.idleTimer) clearTimeout(bound.idleTimer);
