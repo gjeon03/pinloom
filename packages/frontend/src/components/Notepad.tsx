@@ -8,6 +8,10 @@ import { Tooltip } from './Tooltip.js';
 // Docking — rather than an overlay — keeps the main content interactive
 // (scroll/click) while the note is open.
 
+const WIDTH_KEY = 'pinloom:notepad:width';
+const MIN_WIDTH = 260;
+const DEFAULT_WIDTH = 340;
+
 export function NotepadToggle({
   open,
   onToggle,
@@ -38,6 +42,43 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
   const dirtyRef = useRef(false);
   const contentRef = useRef('');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Draggable panel width (left-edge handle), persisted globally.
+  const [width, setWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(WIDTH_KEY));
+    return saved >= MIN_WIDTH ? saved : DEFAULT_WIDTH;
+  });
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef<{ x: number; w: number } | null>(null);
+
+  useEffect(() => {
+    if (!dragging) return;
+    function onMove(e: MouseEvent) {
+      if (!dragStart.current) return;
+      const delta = dragStart.current.x - e.clientX; // drag left → wider
+      const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - 320);
+      setWidth(
+        Math.max(MIN_WIDTH, Math.min(maxWidth, dragStart.current.w + delta)),
+      );
+    }
+    function onUp() {
+      setDragging(false);
+    }
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging]);
+
+  useEffect(() => {
+    localStorage.setItem(WIDTH_KEY, String(width));
+  }, [width]);
 
   useEffect(() => {
     contentRef.current = content;
@@ -97,7 +138,23 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   return (
-    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-2)]">
+    <div
+      className="relative flex h-full shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-2)]"
+      style={{ width }}
+    >
+      {/* Left-edge resize handle — overlays the border so it adds no layout
+          width. Drag left to widen, right to narrow. */}
+      <div
+        onMouseDown={(e) => {
+          e.preventDefault();
+          dragStart.current = { x: e.clientX, w: width };
+          setDragging(true);
+        }}
+        title="Drag to resize"
+        className={`absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-ew-resize hover:bg-[var(--color-accent)]/40 ${
+          dragging ? 'bg-[var(--color-accent)]/40' : ''
+        }`}
+      />
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <NotepadText size={14} />
