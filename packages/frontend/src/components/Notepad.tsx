@@ -102,10 +102,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <NotepadText size={14} />
           Notepad
-          <Tooltip
-            label="Stored in the local SQLite DB — backs up to GitHub"
-            side="bottom"
-          >
+          <Tooltip label="Saved to the local SQLite DB" side="bottom">
             <Info
               size={13}
               className="cursor-help text-[var(--color-ink-muted)]"
