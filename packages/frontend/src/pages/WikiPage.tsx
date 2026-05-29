@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Download, FolderOpen, RefreshCw, Sparkles, Upload } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronUp,
+  Download,
+  FolderOpen,
+  RefreshCw,
+  Sparkles,
+  Upload,
+} from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import {
   api,
@@ -60,6 +68,18 @@ export function WikiPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [scope, setScope] = useState<ScopeFilter>(null);
   const [topic, setTopic] = useState<TopicFilter>(null);
+  // The filter rows collapse to a single horizontally-scrollable line by
+  // default (they can wrap to several lines when there are many projects /
+  // topics). Persisted so the choice sticks across reloads.
+  const [filtersCollapsed, setFiltersCollapsed] = useState(
+    () => localStorage.getItem('pinloom:wikiFiltersCollapsed') !== '0',
+  );
+  useEffect(() => {
+    localStorage.setItem(
+      'pinloom:wikiFiltersCollapsed',
+      filtersCollapsed ? '1' : '0',
+    );
+  }, [filtersCollapsed]);
   const [showSyncPicker, setShowSyncPicker] = useState(false);
   const [showAnalyzePicker, setShowAnalyzePicker] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -279,56 +299,84 @@ export function WikiPage() {
             </div>
           </div>
 
-          {/* Filter chips */}
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            <FilterPill
-              label="All"
-              active={scope === null}
-              onClick={() => setScope(null)}
-            />
-            <FilterPill
-              label="global"
-              active={scope === 'global'}
-              onClick={() => setScope(scope === 'global' ? null : 'global')}
-              tone="muted"
-            />
-            {projects.map((p) => {
-              const slug = wikiSlugForProject(p, projects);
-              return (
+          {/* Filter chips — collapse to single scrollable lines by default. */}
+          <div className="mt-3 flex items-start gap-2">
+            <button
+              type="button"
+              onClick={() => setFiltersCollapsed((v) => !v)}
+              title={filtersCollapsed ? 'Expand filters' : 'Collapse filters'}
+              className="mt-0.5 shrink-0 rounded p-1 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)]"
+            >
+              {filtersCollapsed ? (
+                <ChevronDown size={14} />
+              ) : (
+                <ChevronUp size={14} />
+              )}
+            </button>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <div
+                className={`flex gap-1.5 ${
+                  filtersCollapsed
+                    ? 'flex-nowrap overflow-x-auto [&>*]:shrink-0'
+                    : 'flex-wrap'
+                }`}
+              >
                 <FilterPill
-                  key={p.id}
-                  label={p.name}
-                  sub={slug}
-                  active={scope === slug}
-                  onClick={() => setScope(scope === slug ? null : slug)}
+                  label="All"
+                  active={scope === null}
+                  onClick={() => setScope(null)}
                 />
-              );
-            })}
-          </div>
+                <FilterPill
+                  label="global"
+                  active={scope === 'global'}
+                  onClick={() => setScope(scope === 'global' ? null : 'global')}
+                  tone="muted"
+                />
+                {projects.map((p) => {
+                  const slug = wikiSlugForProject(p, projects);
+                  return (
+                    <FilterPill
+                      key={p.id}
+                      label={p.name}
+                      sub={slug}
+                      active={scope === slug}
+                      onClick={() => setScope(scope === slug ? null : slug)}
+                    />
+                  );
+                })}
+              </div>
 
-          {allTopics.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mr-1">
-                Topics
-              </span>
-              <FilterPill
-                label="any"
-                active={topic === null}
-                onClick={() => setTopic(null)}
-                tone="muted"
-                small
-              />
-              {allTopics.map((t) => (
-                <FilterPill
-                  key={t}
-                  label={t}
-                  active={topic === t}
-                  onClick={() => setTopic(topic === t ? null : t)}
-                  small
-                />
-              ))}
+              {allTopics.length > 0 && (
+                <div
+                  className={`flex items-center gap-1.5 ${
+                    filtersCollapsed
+                      ? 'flex-nowrap overflow-x-auto [&>*]:shrink-0'
+                      : 'flex-wrap'
+                  }`}
+                >
+                  <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mr-1">
+                    Topics
+                  </span>
+                  <FilterPill
+                    label="any"
+                    active={topic === null}
+                    onClick={() => setTopic(null)}
+                    tone="muted"
+                    small
+                  />
+                  {allTopics.map((t) => (
+                    <FilterPill
+                      key={t}
+                      label={t}
+                      active={topic === t}
+                      onClick={() => setTopic(topic === t ? null : t)}
+                      small
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         {lastSyncSummary && (
