@@ -1,8 +1,16 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Columns2, Rows2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Columns2, Maximize2, Rows2, X } from 'lucide-react';
 import type { NotepadNode } from '@pinloom/shared';
 import { projectNotepadApi } from '../api/client.js';
 import { ConfirmButton } from './ConfirmButton.js';
+import { Markdown } from './Markdown.js';
+import {
+  ActionIconButton,
+  CopyMarkdownButton,
+  DownloadMarkdownButton,
+  RawViewToggle,
+} from './MessageActions.js';
 
 // Editor for a single project notepad. The body is a split tree of text
 // panes: `dir: 'row'` lays children side-by-side, `dir: 'column'` stacks
@@ -119,6 +127,7 @@ function removePane(node: NotepadNode, paneId: string): NotepadNode | null {
 
 export function ProjectNotepadView({ notepadId }: { notepadId: string }) {
   const [root, setRoot] = useState<NotepadNode | null>(null);
+  const [name, setName] = useState('Notepad');
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const dirtyRef = useRef(false);
@@ -138,6 +147,7 @@ export function ProjectNotepadView({ notepadId }: { notepadId: string }) {
       .then((n) => {
         if (!cancelled) {
           setRoot(n.root);
+          setName(n.name);
           setLoaded(true);
         }
       })
@@ -205,6 +215,7 @@ export function ProjectNotepadView({ notepadId }: { notepadId: string }) {
         <NotepadNodeView
           node={root}
           canRemove={canRemove}
+          notepadName={name}
           onContentChange={(id, content) =>
             mutate((r) => setPaneContent(r, id, content))
           }
@@ -222,6 +233,7 @@ export function ProjectNotepadView({ notepadId }: { notepadId: string }) {
 function NotepadNodeView({
   node,
   canRemove,
+  notepadName,
   onContentChange,
   onSplit,
   onRemove,
@@ -229,6 +241,7 @@ function NotepadNodeView({
 }: {
   node: NotepadNode;
   canRemove: boolean;
+  notepadName: string;
   onContentChange: (paneId: string, content: string) => void;
   onSplit: (paneId: string, dir: 'row' | 'column') => void;
   onRemove: (paneId: string) => void;
@@ -236,43 +249,14 @@ function NotepadNodeView({
 }) {
   if (node.kind === 'pane') {
     return (
-      <div className="group relative h-full w-full">
-        <div className="absolute right-1 top-1 z-10 flex gap-0.5 opacity-0 group-hover:opacity-100">
-          <button
-            type="button"
-            onClick={() => onSplit(node.id, 'column')}
-            title="Split top / bottom"
-            className="rounded bg-[var(--color-surface-2)] p-0.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-          >
-            <Rows2 size={12} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onSplit(node.id, 'row')}
-            title="Split left / right"
-            className="rounded bg-[var(--color-surface-2)] p-0.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-          >
-            <Columns2 size={12} />
-          </button>
-          {canRemove && (
-            <ConfirmButton
-              needsConfirm={node.content.trim() !== ''}
-              message="Remove this pane?"
-              onConfirm={() => onRemove(node.id)}
-              title="Remove pane"
-              className="rounded bg-[var(--color-surface-2)] p-0.5 text-[var(--color-ink-muted)] hover:text-red-400"
-            >
-              <X size={12} />
-            </ConfirmButton>
-          )}
-        </div>
-        <textarea
-          value={node.content}
-          onChange={(e) => onContentChange(node.id, e.target.value)}
-          placeholder="Notes…"
-          className="h-full w-full resize-none bg-[var(--color-surface)] px-3 py-2 text-sm font-mono leading-relaxed outline-none"
-        />
-      </div>
+      <NotepadPaneView
+        node={node}
+        canRemove={canRemove}
+        notepadName={notepadName}
+        onContentChange={onContentChange}
+        onSplit={onSplit}
+        onRemove={onRemove}
+      />
     );
   }
 
@@ -291,6 +275,7 @@ function NotepadNodeView({
             <NotepadNodeView
               node={child}
               canRemove={canRemove}
+              notepadName={notepadName}
               onContentChange={onContentChange}
               onSplit={onSplit}
               onRemove={onRemove}
@@ -307,6 +292,137 @@ function NotepadNodeView({
           )}
         </Fragment>
       ))}
+    </div>
+  );
+}
+
+function NotepadPaneView({
+  node,
+  canRemove,
+  notepadName,
+  onContentChange,
+  onSplit,
+  onRemove,
+}: {
+  node: Extract<NotepadNode, { kind: 'pane' }>;
+  canRemove: boolean;
+  notepadName: string;
+  onContentChange: (paneId: string, content: string) => void;
+  onSplit: (paneId: string, dir: 'row' | 'column') => void;
+  onRemove: (paneId: string) => void;
+}) {
+  // rawView true = editable text; false = rendered markdown (read-only — you
+  // can't edit the formatted view, so toggling off returns to the textarea).
+  const [rawView, setRawView] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!expanded) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setExpanded(false);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded]);
+
+  return (
+    <div className="group relative h-full w-full">
+      <div className="absolute right-1 top-1 z-10 flex items-center gap-0.5 rounded bg-[var(--color-surface-2)]/95 px-1 py-0.5 opacity-0 shadow-sm group-hover:opacity-100">
+        <ActionIconButton onClick={() => setExpanded(true)} title="Expand">
+          <Maximize2 size={14} />
+        </ActionIconButton>
+        <RawViewToggle rawView={rawView} onChange={setRawView} />
+        <CopyMarkdownButton content={node.content} />
+        <DownloadMarkdownButton content={node.content} filenameHint={notepadName} />
+        <span className="mx-0.5 h-3.5 w-px bg-[var(--color-border)]" />
+        <ActionIconButton
+          onClick={() => onSplit(node.id, 'column')}
+          title="Split top / bottom"
+        >
+          <Rows2 size={14} />
+        </ActionIconButton>
+        <ActionIconButton
+          onClick={() => onSplit(node.id, 'row')}
+          title="Split left / right"
+        >
+          <Columns2 size={14} />
+        </ActionIconButton>
+        {canRemove && (
+          <ConfirmButton
+            needsConfirm={node.content.trim() !== ''}
+            message="Remove this pane?"
+            onConfirm={() => onRemove(node.id)}
+            title="Remove pane"
+            className="p-0.5 text-[var(--color-ink-muted)] hover:text-red-400"
+          >
+            <X size={14} />
+          </ConfirmButton>
+        )}
+      </div>
+
+      {rawView ? (
+        <textarea
+          value={node.content}
+          onChange={(e) => onContentChange(node.id, e.target.value)}
+          placeholder="Notes…"
+          className="h-full w-full resize-none bg-[var(--color-surface)] px-3 py-2 text-sm font-mono leading-relaxed outline-none"
+        />
+      ) : (
+        <div className="h-full w-full overflow-auto bg-[var(--color-surface)] px-3 py-2 text-sm">
+          <Markdown content={node.content} />
+        </div>
+      )}
+
+      {expanded &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-8"
+            onMouseDown={() => setExpanded(false)}
+          >
+            <div
+              className="flex h-full max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
+                <span className="truncate text-sm font-semibold">
+                  {notepadName}
+                </span>
+                <div className="flex items-center gap-0.5">
+                  <RawViewToggle rawView={rawView} onChange={setRawView} size="md" />
+                  <CopyMarkdownButton content={node.content} size="md" />
+                  <DownloadMarkdownButton
+                    content={node.content}
+                    filenameHint={notepadName}
+                    size="md"
+                  />
+                  <ActionIconButton
+                    onClick={() => setExpanded(false)}
+                    title="Close"
+                    size="md"
+                  >
+                    <X size={14} />
+                  </ActionIconButton>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                {rawView ? (
+                  <textarea
+                    autoFocus
+                    value={node.content}
+                    onChange={(e) => onContentChange(node.id, e.target.value)}
+                    placeholder="Notes…"
+                    className="h-full w-full resize-none bg-[var(--color-surface)] px-4 py-3 text-sm font-mono leading-relaxed outline-none"
+                  />
+                ) : (
+                  <div className="px-4 py-3 text-sm">
+                    <Markdown content={node.content} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
