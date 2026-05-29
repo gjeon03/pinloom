@@ -291,22 +291,27 @@ export function BottomPanel({ projectId, session }: Props) {
                   setEditingId(t.id);
                 }}
                 title="Double-click to rename"
-                className="flex items-center gap-1 pl-2 pr-1 py-1"
+                className={`flex items-center gap-1 py-1 ${
+                  tabs.list.length > 1 ? 'pl-2 pr-1' : 'px-2'
+                }`}
               >
                 <SquareTerminal size={12} />
                 <span>{t.name}</span>
               </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTerminal(t.id);
-                }}
-                title="Close terminal"
-                className="pl-0.5 pr-1.5 py-1 opacity-50 hover:opacity-100"
-              >
-                <X size={10} />
-              </button>
+              {/* Keep at least one terminal — hide close on the last one. */}
+              {tabs.list.length > 1 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTerminal(t.id);
+                  }}
+                  title="Close terminal"
+                  className="pl-0.5 pr-1.5 py-1 opacity-50 hover:opacity-100"
+                >
+                  <X size={10} />
+                </button>
+              )}
             </div>
           ),
         )}
