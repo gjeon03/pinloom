@@ -251,5 +251,15 @@ export type WsEvent =
   // and drain (turn-boundary auto-drain).
   | { type: 'queue_updated'; sessionId: string; items: QueueItem[] }
   | { type: 'run_status'; sessionId: string; status: 'started' | 'finished' | 'error'; error?: string }
+  // Mirror of run_status on the global WS_RUNS_CHANNEL, enriched with the
+  // session's project/title/agent so a cross-session listener can notify.
+  | {
+      type: 'run_activity';
+      sessionId: string;
+      projectId: string;
+      title: string | null;
+      agent: AgentKind;
+      phase: 'started' | 'finished' | 'error';
+    }
   // Live dispatch event for the team canvas. Channel: `team:${teamId}`.
   | { type: 'team_dispatch_event'; event: TeamDispatchEvent };

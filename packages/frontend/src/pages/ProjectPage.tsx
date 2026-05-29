@@ -8,6 +8,7 @@ import type {
 } from '@pinloom/shared';
 import { api, projectNotepadApi } from '../api/client.js';
 import { cacheKeys } from '../api/cacheKeys.js';
+import { setActiveSessionId } from '../stores/activeSession.js';
 import {
   SessionTabs,
   type InlineCanvasTab,
@@ -279,6 +280,17 @@ export function ProjectPage({
       activeSession.id,
     );
   }, [project.id, activeSession?.id]);
+
+  // Publish which session is visible in the foreground so the chat-done
+  // notifier can suppress notifications for the chat you're looking at.
+  useEffect(() => {
+    const visible =
+      activeCanvasTeamId === null && activeNotepadId === null
+        ? activeSession?.id ?? null
+        : null;
+    setActiveSessionId(visible);
+    return () => setActiveSessionId(null);
+  }, [activeSession?.id, activeCanvasTeamId, activeNotepadId]);
 
   // Per-session pins via SWR — the cache survives session tab switches
   // so going back to a previously visited session renders pins from memory
