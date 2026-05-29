@@ -21,6 +21,29 @@ import { checkAgentClis } from './services/cli-check.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
 
+// Guard the WebSocket routes against cross-site hijacking. The terminal
+// socket is effectively local RCE, so a malicious page the user happens to
+// visit must not be able to open it. Only browsers send an Origin header and
+// it can't be forged from JS, so allow same-machine origins (and non-browser
+// clients that send none) and reject everything else. NOTE: the frontend's
+// Vite proxy must NOT use `rewriteWsOrigin`, or the real origin is masked.
+function isAllowedWsOrigin(origin: string | string[] | undefined): boolean {
+  if (!origin) return true;
+  const value = Array.isArray(origin) ? origin[0] : origin;
+  if (!value) return true;
+  try {
+    const host = new URL(value).hostname;
+    return (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host === '[::1]'
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function createApp() {
   // 100MB body limit — image-attached messages and wiki imports both ship
   // large base64 blobs through the JSON body. Default 1MB is too tight.
@@ -71,6 +94,10 @@ export async function createApp() {
 
   app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket, request) => {
+      if (!isAllowedWsOrigin(request.headers.origin)) {
+        socket.close(4403, 'forbidden origin');
+        return;
+      }
       const channel = (request.query as { channel?: string }).channel;
       if (!channel) {
         socket.close(4000, 'channel query parameter required');
@@ -85,6 +112,10 @@ export async function createApp() {
     //   client→server: {t:'i',d} input · {t:'r',c,r} resize
     //   server→client: {t:'o',d} output · {t:'x',code} shell exited
     fastify.get('/ws/terminal', { websocket: true }, (socket, request) => {
+      if (!isAllowedWsOrigin(request.headers.origin)) {
+        socket.close(4403, 'forbidden origin');
+        return;
+      }
       const q = request.query as { project?: string; t?: string };
       const projectId = q.project;
       const localId = q.t;
