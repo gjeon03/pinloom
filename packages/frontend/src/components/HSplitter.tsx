@@ -31,11 +31,6 @@ export function HSplitter({
   }, [storageKey]);
 
   useEffect(() => {
-    if (leftWidth == null || !storageKey) return;
-    localStorage.setItem(storageKey, String(leftWidth));
-  }, [leftWidth, storageKey]);
-
-  useEffect(() => {
     if (!dragging) return;
 
     function onMove(e: MouseEvent) {
@@ -47,6 +42,10 @@ export function HSplitter({
         Math.min(rect.width - minRight, e.clientX - rect.left),
       );
       setLeftWidth(next);
+      // Persist only while the user drags, to the CURRENT storageKey. This
+      // avoids the prior auto-save effect writing a stale width to a newly
+      // switched project's key (cross-project bleed) on storageKey change.
+      if (storageKey) localStorage.setItem(storageKey, String(next));
     }
 
     function onUp() {
@@ -64,7 +63,7 @@ export function HSplitter({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [dragging, minLeft, minRight]);
+  }, [dragging, minLeft, minRight, storageKey]);
 
   const showLeft = left != null && left !== false;
   // When collapsed, 0; when expanded, leftWidth or fallback
