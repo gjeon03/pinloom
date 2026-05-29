@@ -22,12 +22,15 @@ export function BottomPanel({ projectId, session }: Props) {
   // HSplitter (pinloom:splitter:<projectId>).
   const OPEN_KEY = `pinloom:bottompanel:open:${projectId}`;
   const HEIGHT_KEY = `pinloom:bottompanel:height:${projectId}`;
+  const TAB_KEY = `pinloom:bottompanel:tab:${projectId}`;
   const MIN_HEIGHT = 120;
 
   const [open, setOpen] = useState<boolean>(
     () => localStorage.getItem(OPEN_KEY) === '1',
   );
-  const [tab, setTab] = useState<'logs' | 'terminal'>('logs');
+  const [tab, setTab] = useState<'logs' | 'terminal'>(() =>
+    localStorage.getItem(TAB_KEY) === 'terminal' ? 'terminal' : 'logs',
+  );
   const [lines, setLines] = useState<LogLine[]>([]);
   const [unread, setUnread] = useState(0);
   const nextLineId = useRef(0);
@@ -74,6 +77,10 @@ export function BottomPanel({ projectId, session }: Props) {
   useEffect(() => {
     localStorage.setItem(OPEN_KEY, open ? '1' : '0');
   }, [open, OPEN_KEY]);
+
+  useEffect(() => {
+    localStorage.setItem(TAB_KEY, tab);
+  }, [tab, TAB_KEY]);
 
   useEffect(() => {
     setLines([]);
