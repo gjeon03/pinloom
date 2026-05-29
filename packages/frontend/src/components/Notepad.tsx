@@ -1,16 +1,36 @@
-import { useEffect, useRef, useState } from 'react';
-import { Info, NotepadText, X } from 'lucide-react';
-import { api } from '../api/client.js';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { Info, NotepadText, Plus, Rows2, X } from 'lucide-react';
+import { api, type NotepadDoc, type NotepadTab } from '../api/client.js';
 import { Tooltip } from './Tooltip.js';
 
 // The notepad is split into a toggle button (lives in the top-right control
 // cluster) and a docked panel (a real right-hand column in the app layout).
 // Docking — rather than an overlay — keeps the main content interactive
 // (scroll/click) while the note is open.
+//
+// The panel holds a structured doc: tabs (shown only once there are 2+), each
+// with a vertical stack of independent, resizable text panes.
 
 const WIDTH_KEY = 'pinloom:notepad:width';
 const MIN_WIDTH = 260;
 const DEFAULT_WIDTH = 340;
+const MIN_PANE_HEIGHT = 80;
+const DEFAULT_PANE_HEIGHT = 200;
+
+function makeId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+// Apply `fn` to the active tab only, returning a new doc.
+function mapActiveTab(
+  doc: NotepadDoc,
+  fn: (tab: NotepadTab) => NotepadTab,
+): NotepadDoc {
+  return {
+    ...doc,
+    tabs: doc.tabs.map((t) => (t.id === doc.activeTabId ? fn(t) : t)),
+  };
+}
 
 export function NotepadToggle({
   open,
@@ -36,11 +56,11 @@ export function NotepadToggle({
 }
 
 export function NotepadPanel({ onClose }: { onClose: () => void }) {
-  const [content, setContent] = useState('');
+  const [doc, setDoc] = useState<NotepadDoc | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const dirtyRef = useRef(false);
-  const contentRef = useRef('');
+  const docRef = useRef<NotepadDoc | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Draggable panel width (left-edge handle), persisted globally.
@@ -48,41 +68,22 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
     const saved = Number(localStorage.getItem(WIDTH_KEY));
     return saved >= MIN_WIDTH ? saved : DEFAULT_WIDTH;
   });
-  const [dragging, setDragging] = useState(false);
-  const dragStart = useRef<{ x: number; w: number } | null>(null);
+  const [widthDragging, setWidthDragging] = useState(false);
+  const widthDrag = useRef<{ x: number; w: number } | null>(null);
+
+  // Pane-divider drag (resizes the pane above the divider).
+  const [paneDragging, setPaneDragging] = useState(false);
+  const paneDrag = useRef<{ paneId: string; y: number; h: number } | null>(null);
 
   useEffect(() => {
-    if (!dragging) return;
-    function onMove(e: MouseEvent) {
-      if (!dragStart.current) return;
-      const delta = dragStart.current.x - e.clientX; // drag left → wider
-      const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - 320);
-      setWidth(
-        Math.max(MIN_WIDTH, Math.min(maxWidth, dragStart.current.w + delta)),
-      );
-    }
-    function onUp() {
-      setDragging(false);
-    }
-    document.body.style.cursor = 'ew-resize';
-    document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [dragging]);
+    docRef.current = doc;
+  }, [doc]);
 
-  useEffect(() => {
-    localStorage.setItem(WIDTH_KEY, String(width));
-  }, [width]);
-
-  useEffect(() => {
-    contentRef.current = content;
-  }, [content]);
+  // Mutate the doc and flag it for autosave.
+  function mutate(fn: (d: NotepadDoc) => NotepadDoc) {
+    dirtyRef.current = true;
+    setDoc((d) => (d ? fn(d) : d));
+  }
 
   // Load once on mount (the panel mounts when opened).
   useEffect(() => {
@@ -91,7 +92,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
       .getNotepad()
       .then((r) => {
         if (!cancelled) {
-          setContent(r.content);
+          setDoc(r.doc);
           setLoaded(true);
         }
       })
@@ -105,12 +106,12 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
 
   // Debounced autosave on genuine edits (dirtyRef gates out the load).
   useEffect(() => {
-    if (!loaded || !dirtyRef.current) return;
+    if (!loaded || !dirtyRef.current || !doc) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     setSaving(true);
     saveTimer.current = setTimeout(() => {
       api
-        .saveNotepad(content)
+        .saveNotepad(doc)
         .catch(() => {})
         .finally(() => {
           setSaving(false);
@@ -120,12 +121,14 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [content, loaded]);
+  }, [doc, loaded]);
 
   // Flush a pending edit if the panel is closed before the debounce fires.
   useEffect(() => {
     return () => {
-      if (dirtyRef.current) api.saveNotepad(contentRef.current).catch(() => {});
+      if (dirtyRef.current && docRef.current) {
+        api.saveNotepad(docRef.current).catch(() => {});
+      }
     };
   }, []);
 
@@ -137,6 +140,142 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Panel width drag.
+  useEffect(() => {
+    if (!widthDragging) return;
+    function onMove(e: MouseEvent) {
+      if (!widthDrag.current) return;
+      const delta = widthDrag.current.x - e.clientX; // drag left → wider
+      const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - 320);
+      setWidth(
+        Math.max(MIN_WIDTH, Math.min(maxWidth, widthDrag.current.w + delta)),
+      );
+    }
+    function onUp() {
+      setWidthDragging(false);
+    }
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [widthDragging]);
+
+  useEffect(() => {
+    localStorage.setItem(WIDTH_KEY, String(width));
+  }, [width]);
+
+  // Pane divider drag.
+  useEffect(() => {
+    if (!paneDragging) return;
+    function onMove(e: MouseEvent) {
+      const pd = paneDrag.current;
+      if (!pd) return;
+      const next = Math.max(MIN_PANE_HEIGHT, pd.h + (e.clientY - pd.y));
+      dirtyRef.current = true;
+      setDoc((d) =>
+        d
+          ? mapActiveTab(d, (t) => ({
+              ...t,
+              panes: t.panes.map((p) =>
+                p.id === pd.paneId ? { ...p, height: next } : p,
+              ),
+            }))
+          : d,
+      );
+    }
+    function onUp() {
+      setPaneDragging(false);
+    }
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [paneDragging]);
+
+  // Tab + pane operations.
+  function addTab() {
+    mutate((d) => {
+      const tab: NotepadTab = {
+        id: makeId(),
+        name: `Note ${d.tabs.length + 1}`,
+        panes: [{ id: makeId(), content: '', height: DEFAULT_PANE_HEIGHT }],
+      };
+      return { ...d, tabs: [...d.tabs, tab], activeTabId: tab.id };
+    });
+  }
+
+  function closeTab(id: string) {
+    mutate((d) => {
+      if (d.tabs.length <= 1) return d;
+      const idx = d.tabs.findIndex((t) => t.id === id);
+      const tabs = d.tabs.filter((t) => t.id !== id);
+      let activeTabId = d.activeTabId;
+      if (activeTabId === id) {
+        activeTabId = (tabs[idx] ?? tabs[idx - 1] ?? tabs[0]).id;
+      }
+      return { ...d, tabs, activeTabId };
+    });
+  }
+
+  function renameTab(id: string, name: string) {
+    mutate((d) => ({
+      ...d,
+      tabs: d.tabs.map((t) => (t.id === id ? { ...t, name } : t)),
+    }));
+  }
+
+  function setActiveTab(id: string) {
+    mutate((d) => ({ ...d, activeTabId: id }));
+  }
+
+  function addPane() {
+    mutate((d) =>
+      mapActiveTab(d, (t) => ({
+        ...t,
+        panes: [
+          ...t.panes,
+          { id: makeId(), content: '', height: DEFAULT_PANE_HEIGHT },
+        ],
+      })),
+    );
+  }
+
+  function removePane(paneId: string) {
+    mutate((d) =>
+      mapActiveTab(d, (t) =>
+        t.panes.length <= 1
+          ? t
+          : { ...t, panes: t.panes.filter((p) => p.id !== paneId) },
+      ),
+    );
+  }
+
+  function setPaneContent(paneId: string, content: string) {
+    mutate((d) =>
+      mapActiveTab(d, (t) => ({
+        ...t,
+        panes: t.panes.map((p) => (p.id === paneId ? { ...p, content } : p)),
+      })),
+    );
+  }
+
+  const activeTab = doc
+    ? doc.tabs.find((t) => t.id === doc.activeTabId) ?? doc.tabs[0]
+    : null;
+  const showTabs = !!doc && doc.tabs.length > 1;
+
   return (
     <div
       className="relative flex h-full shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-2)]"
@@ -147,14 +286,15 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
       <div
         onMouseDown={(e) => {
           e.preventDefault();
-          dragStart.current = { x: e.clientX, w: width };
-          setDragging(true);
+          widthDrag.current = { x: e.clientX, w: width };
+          setWidthDragging(true);
         }}
         title="Drag to resize"
         className={`absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-ew-resize hover:bg-[var(--color-accent)]/40 ${
-          dragging ? 'bg-[var(--color-accent)]/40' : ''
+          widthDragging ? 'bg-[var(--color-accent)]/40' : ''
         }`}
       />
+
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <NotepadText size={14} />
@@ -166,10 +306,26 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
             />
           </Tooltip>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-[var(--color-ink-muted)]">
+        <div className="flex items-center gap-1">
+          <span className="mr-1 text-[10px] text-[var(--color-ink-muted)]">
             {saving ? 'saving…' : loaded ? 'saved' : ''}
           </span>
+          <button
+            type="button"
+            onClick={addPane}
+            title="Split (add a pane below)"
+            className="rounded p-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          >
+            <Rows2 size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={addTab}
+            title="New tab"
+            className="rounded p-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          >
+            <Plus size={14} />
+          </button>
           <button
             type="button"
             onClick={onClose}
@@ -180,16 +336,149 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
-      <textarea
+
+      {showTabs && doc && (
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-[var(--color-border)] px-2 py-1">
+          {doc.tabs.map((t) => (
+            <TabChip
+              key={t.id}
+              name={t.name}
+              active={t.id === doc.activeTabId}
+              onSelect={() => setActiveTab(t.id)}
+              onClose={() => closeTab(t.id)}
+              onRename={(name) => renameTab(t.id, name)}
+            />
+          ))}
+        </div>
+      )}
+
+      {activeTab ? (
+        <div className="flex flex-1 flex-col overflow-y-auto">
+          {activeTab.panes.map((pane, i) => {
+            const isLast = i === activeTab.panes.length - 1;
+            return (
+              <Fragment key={pane.id}>
+                <div
+                  className={`group relative ${
+                    isLast ? 'min-h-[120px] flex-1' : 'shrink-0'
+                  }`}
+                  style={isLast ? undefined : { height: pane.height }}
+                >
+                  {activeTab.panes.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removePane(pane.id)}
+                      title="Remove pane"
+                      className="absolute right-1 top-1 z-10 rounded p-0.5 text-[var(--color-ink-muted)] opacity-0 hover:text-red-400 group-hover:opacity-100"
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
+                  <textarea
+                    autoFocus={i === 0}
+                    value={pane.content}
+                    onChange={(e) => setPaneContent(pane.id, e.target.value)}
+                    placeholder="Quick notes…"
+                    className="h-full w-full resize-none bg-[var(--color-surface)] px-4 py-3 text-sm font-mono leading-relaxed outline-none"
+                  />
+                </div>
+                {!isLast && (
+                  <div
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      paneDrag.current = {
+                        paneId: pane.id,
+                        y: e.clientY,
+                        h: pane.height,
+                      };
+                      setPaneDragging(true);
+                    }}
+                    title="Drag to resize"
+                    className={`h-1.5 shrink-0 cursor-ns-resize border-y border-[var(--color-border)] hover:bg-[var(--color-accent)]/40 ${
+                      paneDragging ? 'bg-[var(--color-accent)]/40' : ''
+                    }`}
+                  />
+                )}
+              </Fragment>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="grid flex-1 place-items-center text-xs text-[var(--color-ink-muted)]">
+          Loading…
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TabChip({
+  name,
+  active,
+  onSelect,
+  onClose,
+  onRename,
+}: {
+  name: string;
+  active: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+  onRename: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+
+  useEffect(() => {
+    setDraft(name);
+  }, [name]);
+
+  if (editing) {
+    return (
+      <input
         autoFocus
-        value={content}
-        onChange={(e) => {
-          dirtyRef.current = true;
-          setContent(e.target.value);
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          const next = draft.trim();
+          if (next && next !== name) onRename(next);
+          else setDraft(name);
         }}
-        placeholder="Quick notes…"
-        className="flex-1 resize-none bg-[var(--color-surface)] px-4 py-3 text-sm font-mono leading-relaxed outline-none"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') {
+            setDraft(name);
+            setEditing(false);
+          }
+        }}
+        className="w-24 shrink-0 rounded bg-[var(--color-surface)] px-2 py-0.5 text-xs outline-none ring-1 ring-[var(--color-accent)]"
       />
+    );
+  }
+
+  return (
+    <div
+      onClick={onSelect}
+      onDoubleClick={() => setEditing(true)}
+      title="Double-click to rename"
+      className={`group flex shrink-0 cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-xs ${
+        active
+          ? 'bg-[var(--color-surface)] text-[var(--color-ink)]'
+          : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface)]/50'
+      }`}
+    >
+      <span className="max-w-[120px] truncate">{name}</span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        title="Close tab"
+        className="opacity-0 hover:text-red-400 group-hover:opacity-100"
+      >
+        <X size={11} />
+      </button>
     </div>
   );
 }

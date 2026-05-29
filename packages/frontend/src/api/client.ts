@@ -506,14 +506,30 @@ export const api = {
       `/api/teams/${teamId}/dispatch/events?limit=${limit}`,
     ),
 
-  // Global scratchpad (single shared note, stored in app_settings).
-  getNotepad: () => request<{ content: string }>('/api/notepad'),
-  saveNotepad: (content: string) =>
+  // Global scratchpad (single shared note, stored in app_settings as a
+  // structured doc: tabs of vertically-split text panes).
+  getNotepad: () => request<{ doc: NotepadDoc }>('/api/notepad'),
+  saveNotepad: (doc: NotepadDoc) =>
     request<{ ok: true }>('/api/notepad', {
       method: 'PUT',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ doc }),
     }),
 };
+
+export interface NotepadPane {
+  id: string;
+  content: string;
+  height: number;
+}
+export interface NotepadTab {
+  id: string;
+  name: string;
+  panes: NotepadPane[];
+}
+export interface NotepadDoc {
+  tabs: NotepadTab[];
+  activeTabId: string;
+}
 
 export interface WikiImportSummary {
   mode: 'skip' | 'overwrite';
