@@ -23,6 +23,7 @@ export function BottomPanel({ projectId, session }: Props) {
   const OPEN_KEY = `pinloom:bottompanel:open:${projectId}`;
   const HEIGHT_KEY = `pinloom:bottompanel:height:${projectId}`;
   const TAB_KEY = `pinloom:bottompanel:tab:${projectId}`;
+  const TERMNAME_KEY = `pinloom:bottompanel:termname:${projectId}`;
   const MIN_HEIGHT = 120;
 
   const [open, setOpen] = useState<boolean>(
@@ -31,6 +32,13 @@ export function BottomPanel({ projectId, session }: Props) {
   const [tab, setTab] = useState<'logs' | 'terminal'>(() =>
     localStorage.getItem(TAB_KEY) === 'terminal' ? 'terminal' : 'logs',
   );
+  // Terminal tab label is renamable (double-click) and persisted per-project
+  // in localStorage — no DB column needed, it's purely a UI preference.
+  const [termName, setTermName] = useState<string>(
+    () => localStorage.getItem(TERMNAME_KEY) || 'Terminal',
+  );
+  const [editingName, setEditingName] = useState(false);
+  const nameBeforeEdit = useRef('');
   const [lines, setLines] = useState<LogLine[]>([]);
   const [unread, setUnread] = useState(0);
   const nextLineId = useRef(0);
@@ -81,6 +89,10 @@ export function BottomPanel({ projectId, session }: Props) {
   useEffect(() => {
     localStorage.setItem(TAB_KEY, tab);
   }, [tab, TAB_KEY]);
+
+  useEffect(() => {
+    localStorage.setItem(TERMNAME_KEY, termName);
+  }, [termName, TERMNAME_KEY]);
 
   useEffect(() => {
     setLines([]);
@@ -176,21 +188,52 @@ export function BottomPanel({ projectId, session }: Props) {
           )}
         </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setOpen(true);
-            setTab('terminal');
-          }}
-          className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] ${
-            open && tab === 'terminal'
-              ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-              : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
-          }`}
-        >
-          <SquareTerminal size={12} />
-          <span>Terminal</span>
-        </button>
+        {editingName ? (
+          <input
+            autoFocus
+            value={termName}
+            onChange={(e) => setTermName(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onBlur={() => {
+              setEditingName(false);
+              setTermName((n) => n.trim() || 'Terminal');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.currentTarget.blur();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setTermName(nameBeforeEdit.current);
+                setEditingName(false);
+              }
+            }}
+            className="w-24 px-2 py-1 rounded text-[11px] bg-[var(--color-surface-3)] text-[var(--color-ink)] border border-[var(--color-accent)] outline-none"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(true);
+              setTab('terminal');
+            }}
+            onDoubleClick={() => {
+              setOpen(true);
+              setTab('terminal');
+              nameBeforeEdit.current = termName;
+              setEditingName(true);
+            }}
+            title="Double-click to rename"
+            className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] ${
+              open && tab === 'terminal'
+                ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+            }`}
+          >
+            <SquareTerminal size={12} />
+            <span>{termName}</span>
+          </button>
+        )}
 
         <div className="flex-1" />
         {/*
