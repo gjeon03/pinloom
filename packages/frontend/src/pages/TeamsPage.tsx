@@ -50,9 +50,14 @@ interface SessionLabel {
 }
 
 function formatSessionLabel(
-  sessionId: string,
+  sessionId: string | null | undefined,
   lookup: SessionLookup,
 ): SessionLabel {
+  // A team can end up with a null/missing session id (e.g. its orchestrator
+  // session was deleted) — guard so one bad row doesn't crash the whole page.
+  if (!sessionId) {
+    return { title: '(no session)', subtitle: '—', agent: null };
+  }
   const session = lookup.sessionsById[sessionId];
   if (!session) {
     return {
@@ -614,7 +619,7 @@ function Section({
 }
 
 interface SessionRowProps {
-  sessionId: string;
+  sessionId: string | null;
   lookup: SessionLookup;
   alias: string;
 }
@@ -633,14 +638,16 @@ function SessionRow({ sessionId, lookup, alias }: SessionRowProps) {
           · {meta.subtitle}
         </span>
       </div>
-      <Link
-        to={`/s/${sessionId}`}
-        aria-label="Open session"
-        className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] shrink-0"
-        title="Open session"
-      >
-        <ExternalLink size={11} />
-      </Link>
+      {sessionId && (
+        <Link
+          to={`/s/${sessionId}`}
+          aria-label="Open session"
+          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] shrink-0"
+          title="Open session"
+        >
+          <ExternalLink size={11} />
+        </Link>
+      )}
     </div>
   );
 }
