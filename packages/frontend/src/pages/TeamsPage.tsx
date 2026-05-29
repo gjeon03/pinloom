@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus,
   Trash2,
@@ -618,6 +618,54 @@ function Section({
   );
 }
 
+// Open a session in its PROJECT view (sidebar + session tabs) rather than
+// the standalone /s/:id page. Mirrors the canvas / pin "go to tab" channel:
+// seed the project's last-session marker, fire goto-session for the
+// already-mounted case, then route to the project.
+function gotoSessionTab(
+  navigate: ReturnType<typeof useNavigate>,
+  projectId: string,
+  sessionId: string,
+) {
+  try {
+    localStorage.setItem(`pinloom:lastSession:${projectId}`, sessionId);
+    localStorage.removeItem(`pinloom:lastCanvas:${projectId}`);
+    localStorage.removeItem(`pinloom:planActive:${projectId}`);
+  } catch {
+    // localStorage unavailable — the goto-session event still covers the
+    // same-project case below.
+  }
+  window.dispatchEvent(
+    new CustomEvent('pinloom:goto-session', {
+      detail: { projectId, sessionId },
+    }),
+  );
+  navigate(`/projects/${projectId}`);
+}
+
+function OpenSessionButton({
+  sessionId,
+  lookup,
+}: {
+  sessionId: string | null;
+  lookup: SessionLookup;
+}) {
+  const navigate = useNavigate();
+  const session = sessionId ? lookup.sessionsById[sessionId] : null;
+  if (!session) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => gotoSessionTab(navigate, session.projectId, session.id)}
+      aria-label="Open session tab"
+      title="Open session tab"
+      className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] shrink-0"
+    >
+      <ExternalLink size={11} />
+    </button>
+  );
+}
+
 interface SessionRowProps {
   sessionId: string | null;
   lookup: SessionLookup;
@@ -638,16 +686,7 @@ function SessionRow({ sessionId, lookup, alias }: SessionRowProps) {
           · {meta.subtitle}
         </span>
       </div>
-      {sessionId && (
-        <Link
-          to={`/s/${sessionId}`}
-          aria-label="Open session"
-          className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] shrink-0"
-          title="Open session"
-        >
-          <ExternalLink size={11} />
-        </Link>
-      )}
+      <OpenSessionButton sessionId={sessionId} lookup={lookup} />
     </div>
   );
 }
@@ -780,14 +819,7 @@ function MemberRow({
           >
             <Pencil size={11} />
           </button>
-          <Link
-            to={`/s/${member.sessionId}`}
-            aria-label="Open session"
-            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-            title="Open session"
-          >
-            <ExternalLink size={11} />
-          </Link>
+          <OpenSessionButton sessionId={member.sessionId} lookup={lookup} />
           <button
             type="button"
             onClick={async () => {
