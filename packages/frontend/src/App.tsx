@@ -3,6 +3,7 @@ import { SWRConfig } from 'swr';
 import { AppShell } from './components/AppShell.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
 import { GithubLink } from './components/GithubLink.js';
+import { Notepad } from './components/Notepad.js';
 import { ProjectPage } from './pages/ProjectPage.js';
 import { PinsPage } from './pages/PinsPage.js';
 import { SessionPage } from './pages/SessionPage.js';
@@ -24,6 +25,7 @@ export function App() {
   return (
     <SWRConfig value={swrConfig}>
       <GithubLink />
+      <Notepad />
       <NotificationCenter />
       <Routes>
         <Route path="/pins/:sessionId" element={<PinsPage />} />

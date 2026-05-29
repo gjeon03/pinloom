@@ -505,6 +505,14 @@ export const api = {
     request<TeamDispatchEvent[]>(
       `/api/teams/${teamId}/dispatch/events?limit=${limit}`,
     ),
+
+  // Global scratchpad (single shared note, stored in app_settings).
+  getNotepad: () => request<{ content: string }>('/api/notepad'),
+  saveNotepad: (content: string) =>
+    request<{ ok: true }>('/api/notepad', {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
 };
 
 export interface WikiImportSummary {
