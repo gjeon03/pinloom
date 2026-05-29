@@ -74,23 +74,26 @@ export async function createApp() {
     //   client→server: {t:'i',d} input · {t:'r',c,r} resize
     //   server→client: {t:'o',d} output · {t:'x',code} shell exited
     fastify.get('/ws/terminal', { websocket: true }, (socket, request) => {
-      const sessionId = (request.query as { session?: string }).session;
-      if (!sessionId) {
-        socket.close(4000, 'session query parameter required');
+      const q = request.query as { project?: string; t?: string };
+      const projectId = q.project;
+      const localId = q.t;
+      if (!projectId || !localId) {
+        socket.close(4000, 'project and t query parameters required');
         return;
       }
       const send = (msg: unknown) => {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
       };
       const handle = attachTerminal(
-        sessionId,
+        projectId,
+        localId,
         80,
         24,
         (data) => send({ t: 'o', d: data }),
         (code) => send({ t: 'x', code }),
       );
       if (!handle) {
-        socket.close(4001, 'session not found');
+        socket.close(4001, 'project not found');
         return;
       }
       // Mark the scrollback replay so the client can suppress echoing

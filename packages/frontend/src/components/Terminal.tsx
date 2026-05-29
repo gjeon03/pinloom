@@ -10,7 +10,13 @@ import '@xterm/xterm/css/xterm.css';
 
 type Status = 'open' | 'exited' | 'disconnected';
 
-export function Terminal({ sessionId }: { sessionId: string }) {
+export function Terminal({
+  projectId,
+  termId,
+}: {
+  projectId: string;
+  termId: string;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>('open');
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -56,7 +62,7 @@ export function Terminal({ sessionId }: { sessionId: string }) {
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(
-      `${proto}://${location.host}/ws/terminal?session=${encodeURIComponent(sessionId)}`,
+      `${proto}://${location.host}/ws/terminal?project=${encodeURIComponent(projectId)}&t=${encodeURIComponent(termId)}`,
     );
     let exited = false;
     // True while writing the reconnect scrollback replay. xterm auto-replies
@@ -133,7 +139,7 @@ export function Terminal({ sessionId }: { sessionId: string }) {
       ws.close();
       term.dispose();
     };
-  }, [sessionId, connKey]);
+  }, [projectId, termId, connKey]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#1a1b26]">

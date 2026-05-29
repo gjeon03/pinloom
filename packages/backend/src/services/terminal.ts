@@ -1,10 +1,10 @@
-// Interactive terminal sessions backed by node-pty. One live shell per
-// pinloom session, spawned in the session's project cwd. The pty is kept
-// alive across websocket disconnects (page reloads, session-tab switches)
-// and only reaped after an idle window — on reconnect we replay a bounded
-// scrollback buffer so the terminal looks continuous. This is deliberately
-// separate from the broadcast ws/hub (which is one-way server→client); a
-// terminal needs to read client keystrokes too.
+// Interactive terminals backed by node-pty. Terminals are per-project (a
+// project can hold several — the bottom panel adds them with "+"), each
+// keyed by `${projectId}::${localId}` and spawned in the project cwd. The
+// pty is kept alive across websocket disconnects (reloads, tab switches)
+// and reaped after an idle window; on reconnect a bounded scrollback buffer
+// is replayed so it looks continuous. Separate from ws/hub (broadcast-only)
+// because a terminal also reads client keystrokes.
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -25,15 +25,14 @@ interface TerminalSession {
 
 const sessions = new Map<string, TerminalSession>();
 
-function loadCwd(sessionId: string): string | null {
+function terminalKey(projectId: string, localId: string): string {
+  return `${projectId}::${localId}`;
+}
+
+function loadProjectCwd(projectId: string): string | null {
   const row = getDb()
-    .prepare(
-      `SELECT p.cwd
-       FROM sessions s
-       JOIN projects p ON p.id = s.project_id
-       WHERE s.id = ?`,
-    )
-    .get(sessionId) as { cwd: string } | undefined;
+    .prepare('SELECT cwd FROM projects WHERE id = ? AND deleted_at IS NULL')
+    .get(projectId) as { cwd: string } | undefined;
   return row?.cwd ?? null;
 }
 
@@ -55,22 +54,24 @@ export interface TerminalHandle {
 }
 
 /**
- * Attach a websocket consumer to the session's terminal, spawning the
- * shell on first attach. The data/exit callbacks are wired synchronously
- * with the buffer snapshot so no output is lost between replay and live
- * streaming. Returns null if the session has no resolvable cwd.
+ * Attach a websocket consumer to a project terminal, spawning the shell on
+ * first attach. The data/exit callbacks are wired synchronously with the
+ * buffer snapshot so no output is lost between replay and live streaming.
+ * Returns null if the project has no resolvable cwd.
  */
 export function attachTerminal(
-  sessionId: string,
+  projectId: string,
+  localId: string,
   cols: number,
   rows: number,
   onData: (data: string) => void,
   onExit: (code: number) => void,
 ): TerminalHandle | null {
-  let session = sessions.get(sessionId);
+  const key = terminalKey(projectId, localId);
+  let session = sessions.get(key);
 
   if (!session) {
-    const projectCwd = loadCwd(sessionId);
+    const projectCwd = loadProjectCwd(projectId);
     if (projectCwd === null) return null;
     // A deleted/moved project dir would make pty.spawn produce a dead shell
     // with no output — fall back to home and tell the user why.
@@ -104,9 +105,9 @@ export function attachTerminal(
     child.onExit(({ exitCode }) => {
       created.onExit?.(exitCode);
       if (created.idleTimer) clearTimeout(created.idleTimer);
-      sessions.delete(sessionId);
+      sessions.delete(key);
     });
-    sessions.set(sessionId, created);
+    sessions.set(key, created);
     session = created;
   } else {
     if (session.idleTimer) {
@@ -151,14 +152,15 @@ export function attachTerminal(
         } catch {
           // best-effort
         }
-        sessions.delete(sessionId);
+        sessions.delete(key);
       }, IDLE_REAP_MS);
     },
   };
 }
 
-export function killTerminal(sessionId: string): void {
-  const session = sessions.get(sessionId);
+export function killTerminal(projectId: string, localId: string): void {
+  const key = terminalKey(projectId, localId);
+  const session = sessions.get(key);
   if (!session) return;
   if (session.idleTimer) clearTimeout(session.idleTimer);
   try {
@@ -166,5 +168,5 @@ export function killTerminal(sessionId: string): void {
   } catch {
     // best-effort
   }
-  sessions.delete(sessionId);
+  sessions.delete(key);
 }
