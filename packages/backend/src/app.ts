@@ -16,7 +16,11 @@ import { projectNotepadRoutes } from './routes/project-notepads.js';
 import { teamRoutes } from './routes/teams.js';
 import { teamDispatchRoutes } from './routes/team-dispatch.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
-import { attachTerminal, killAllTerminals } from './services/terminal.js';
+import {
+  attachTerminal,
+  killAllTerminals,
+  MAX_TERMINALS,
+} from './services/terminal.js';
 import { checkAgentClis } from './services/cli-check.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
@@ -126,7 +130,7 @@ export async function createApp() {
       const send = (msg: unknown) => {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
       };
-      const handle = attachTerminal(
+      const result = attachTerminal(
         projectId,
         localId,
         80,
@@ -134,10 +138,18 @@ export async function createApp() {
         (data) => send({ t: 'o', d: data }),
         (code) => send({ t: 'x', code }),
       );
-      if (!handle) {
-        socket.close(4001, 'project not found');
+      if (!result.ok) {
+        if (result.reason === 'capped') {
+          socket.close(
+            4002,
+            `terminal limit reached (max ${MAX_TERMINALS}) — close another terminal and retry`,
+          );
+        } else {
+          socket.close(4001, 'project not found');
+        }
         return;
       }
+      const handle = result.handle;
       // Mark the scrollback replay so the client can suppress echoing
       // xterm's responses to any terminal queries embedded in it (e.g. a
       // prior TUI's Device Attributes request) back into the shell — that

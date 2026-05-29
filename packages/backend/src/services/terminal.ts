@@ -14,6 +14,11 @@ import { getDb } from '../db/connection.js';
 
 const SCROLLBACK_BYTES = 200 * 1024;
 const IDLE_REAP_MS = 10 * 60 * 1000;
+// Ceiling on concurrent live terminals across all projects — each is a real
+// shell process plus scrollback, so this bounds host resources if something
+// (a bug, a runaway client) tries to spawn without limit. Far above any
+// realistic hand-opened count.
+export const MAX_TERMINALS = 50;
 
 interface TerminalSession {
   pty: IPty;
@@ -58,6 +63,10 @@ export interface TerminalHandle {
   detach(): void;
 }
 
+export type AttachResult =
+  | { ok: true; handle: TerminalHandle }
+  | { ok: false; reason: 'no-cwd' | 'capped' };
+
 /**
  * Attach a websocket consumer to a project terminal, spawning the shell on
  * first attach. The data/exit callbacks are wired synchronously with the
@@ -71,13 +80,16 @@ export function attachTerminal(
   rows: number,
   onData: (data: string) => void,
   onExit: (code: number) => void,
-): TerminalHandle | null {
+): AttachResult {
   const key = terminalKey(projectId, localId);
   let session = sessions.get(key);
 
   if (!session) {
+    // Reattaching to an existing terminal never counts against the cap; only
+    // spawning a brand-new one does.
+    if (sessions.size >= MAX_TERMINALS) return { ok: false, reason: 'capped' };
     const projectCwd = loadProjectCwd(projectId);
-    if (projectCwd === null) return null;
+    if (projectCwd === null) return { ok: false, reason: 'no-cwd' };
     // A deleted/moved project dir would make pty.spawn produce a dead shell
     // with no output — fall back to home and tell the user why.
     let cwd = projectCwd;
@@ -133,7 +145,7 @@ export function attachTerminal(
   bound.onExit = onExit;
   const myAttachId = (bound.attachId = ++attachSeq);
 
-  return {
+  const handle: TerminalHandle = {
     buffer: snapshot,
     write(data: string) {
       try {
@@ -165,6 +177,7 @@ export function attachTerminal(
       }, IDLE_REAP_MS);
     },
   };
+  return { ok: true, handle };
 }
 
 export function killTerminal(projectId: string, localId: string): void {
