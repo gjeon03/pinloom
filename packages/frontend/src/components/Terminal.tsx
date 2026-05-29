@@ -20,6 +20,9 @@ export function Terminal({
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>('open');
   const [exitCode, setExitCode] = useState<number | null>(null);
+  // Set when the backend refuses the connection (e.g. terminal limit) so the
+  // overlay can explain why instead of a generic "disconnected".
+  const [blockedMsg, setBlockedMsg] = useState<string | null>(null);
   // Bumping this remounts the socket+xterm (used by the restart button).
   const [connKey, setConnKey] = useState(0);
 
@@ -90,6 +93,7 @@ export function Terminal({
 
     ws.onopen = () => {
       setStatus('open');
+      setBlockedMsg(null);
       requestAnimationFrame(sendResize);
       term.focus();
     };
@@ -117,8 +121,13 @@ export function Terminal({
         setStatus('exited');
       }
     };
-    ws.onclose = () => {
-      if (!exited) setStatus('disconnected');
+    ws.onclose = (ev) => {
+      if (exited) return;
+      // 4002 = backend refused (terminal limit). Surface its reason.
+      if (ev.code === 4002) {
+        setBlockedMsg(ev.reason || 'terminal limit reached');
+      }
+      setStatus('disconnected');
     };
 
     const dataSub = term.onData((d) => {
@@ -145,19 +154,25 @@ export function Terminal({
     <div className="relative h-full w-full overflow-hidden bg-[#1a1b26]">
       <div ref={containerRef} className="h-full w-full" />
       {status !== 'open' && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 px-4 text-center">
+          {blockedMsg && (
+            <p className="text-xs text-[#c0caf5]">{blockedMsg}</p>
+          )}
           <button
             type="button"
             onClick={() => {
               setStatus('open');
               setExitCode(null);
+              setBlockedMsg(null);
               setConnKey((k) => k + 1);
             }}
             className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)]"
           >
             {status === 'exited'
               ? `shell exited${exitCode != null ? ` (code ${exitCode})` : ''} — restart`
-              : 'disconnected — reconnect'}
+              : blockedMsg
+                ? 'retry'
+                : 'disconnected — reconnect'}
           </button>
         </div>
       )}

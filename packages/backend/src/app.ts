@@ -11,13 +11,42 @@ import { fsRoutes } from './routes/fs.js';
 import { wikiRoutes } from './routes/wiki.js';
 import { settingsRoutes } from './routes/settings.js';
 import { backupRoutes } from './routes/backup.js';
+import { notepadRoutes } from './routes/notepad.js';
+import { projectNotepadRoutes } from './routes/project-notepads.js';
 import { teamRoutes } from './routes/teams.js';
 import { teamDispatchRoutes } from './routes/team-dispatch.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
-import { attachTerminal } from './services/terminal.js';
+import {
+  attachTerminal,
+  killAllTerminals,
+  MAX_TERMINALS,
+} from './services/terminal.js';
 import { checkAgentClis } from './services/cli-check.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
+
+// Guard the WebSocket routes against cross-site hijacking. The terminal
+// socket is effectively local RCE, so a malicious page the user happens to
+// visit must not be able to open it. Only browsers send an Origin header and
+// it can't be forged from JS, so allow same-machine origins (and non-browser
+// clients that send none) and reject everything else. NOTE: the frontend's
+// Vite proxy must NOT use `rewriteWsOrigin`, or the real origin is masked.
+function isAllowedWsOrigin(origin: string | string[] | undefined): boolean {
+  if (!origin) return true;
+  const value = Array.isArray(origin) ? origin[0] : origin;
+  if (!value) return true;
+  try {
+    const host = new URL(value).hostname;
+    return (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host === '[::1]'
+    );
+  } catch {
+    return false;
+  }
+}
 
 export async function createApp() {
   // 100MB body limit — image-attached messages and wiki imports both ship
@@ -25,6 +54,13 @@ export async function createApp() {
   const app = Fastify({ logger: true, bodyLimit: 100 * 1024 * 1024 });
 
   getDb();
+
+  // On shutdown, deterministically tear down terminal shells + anything they
+  // spawned. app.close() awaits this, and server.ts's shutdown awaits
+  // app.close() (within its 3s force-exit budget).
+  app.addHook('onClose', async () => {
+    await killAllTerminals();
+  });
 
   // Mirror user-managed env vars into process.env so the very first agent
   // spawn inherits them; subsequent upserts/deletes keep this in sync.
@@ -55,11 +91,17 @@ export async function createApp() {
   await app.register(wikiRoutes);
   await app.register(settingsRoutes);
   await app.register(backupRoutes);
+  await app.register(notepadRoutes);
+  await app.register(projectNotepadRoutes);
   await app.register(teamRoutes);
   await app.register(teamDispatchRoutes);
 
   app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket, request) => {
+      if (!isAllowedWsOrigin(request.headers.origin)) {
+        socket.close(4403, 'forbidden origin');
+        return;
+      }
       const channel = (request.query as { channel?: string }).channel;
       if (!channel) {
         socket.close(4000, 'channel query parameter required');
@@ -74,6 +116,10 @@ export async function createApp() {
     //   client→server: {t:'i',d} input · {t:'r',c,r} resize
     //   server→client: {t:'o',d} output · {t:'x',code} shell exited
     fastify.get('/ws/terminal', { websocket: true }, (socket, request) => {
+      if (!isAllowedWsOrigin(request.headers.origin)) {
+        socket.close(4403, 'forbidden origin');
+        return;
+      }
       const q = request.query as { project?: string; t?: string };
       const projectId = q.project;
       const localId = q.t;
@@ -84,7 +130,7 @@ export async function createApp() {
       const send = (msg: unknown) => {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
       };
-      const handle = attachTerminal(
+      const result = attachTerminal(
         projectId,
         localId,
         80,
@@ -92,10 +138,18 @@ export async function createApp() {
         (data) => send({ t: 'o', d: data }),
         (code) => send({ t: 'x', code }),
       );
-      if (!handle) {
-        socket.close(4001, 'project not found');
+      if (!result.ok) {
+        if (result.reason === 'capped') {
+          socket.close(
+            4002,
+            `terminal limit reached (max ${MAX_TERMINALS}) — close another terminal and retry`,
+          );
+        } else {
+          socket.close(4001, 'project not found');
+        }
         return;
       }
+      const handle = result.handle;
       // Mark the scrollback replay so the client can suppress echoing
       // xterm's responses to any terminal queries embedded in it (e.g. a
       // prior TUI's Device Attributes request) back into the shell — that

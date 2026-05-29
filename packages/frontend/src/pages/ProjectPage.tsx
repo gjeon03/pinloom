@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
-import type { Message, Project, Session } from '@pinloom/shared';
-import { api } from '../api/client.js';
+import type {
+  Message,
+  Project,
+  ProjectNotepadSummary,
+  Session,
+} from '@pinloom/shared';
+import { api, projectNotepadApi } from '../api/client.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import {
   SessionTabs,
@@ -9,6 +14,7 @@ import {
   type TabRef,
 } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
+import { ProjectNotepadView } from '../components/ProjectNotepadView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
@@ -36,6 +42,11 @@ export function ProjectPage({
   const [activeCanvasTeamId, setActiveCanvasTeamId] = useState<string | null>(
     null,
   );
+  // Per-project notepad tabs (loaded from the DB) + which one is open.
+  // A notepad being active means neither a session nor a canvas is the
+  // visible right-pane view.
+  const [notepads, setNotepads] = useState<ProjectNotepadSummary[]>([]);
+  const [activeNotepadId, setActiveNotepadId] = useState<string | null>(null);
   // Unified ordering of session + canvas tabs as the user has arranged
   // them. The two underlying arrays (sessions / canvasTabs) keep their
   // own shapes for everything else (data fetching, persistence); this
@@ -73,9 +84,11 @@ export function ProjectPage({
     persisted: TabRef[] | null,
     sessionIds: string[],
     canvasIds: string[],
+    notepadIds: string[],
   ): TabRef[] {
     const sessionSet = new Set(sessionIds);
     const canvasSet = new Set(canvasIds);
+    const notepadSet = new Set(notepadIds);
     const seen = new Set<string>();
     const out: TabRef[] = [];
     for (const ref of persisted ?? []) {
@@ -86,6 +99,9 @@ export function ProjectPage({
         out.push(ref);
         seen.add(key);
       } else if (ref.kind === 'canvas' && canvasSet.has(ref.id)) {
+        out.push(ref);
+        seen.add(key);
+      } else if (ref.kind === 'notepad' && notepadSet.has(ref.id)) {
         out.push(ref);
         seen.add(key);
       }
@@ -100,6 +116,12 @@ export function ProjectPage({
       if (!seen.has(`canvas:${id}`)) {
         out.push({ kind: 'canvas', id });
         seen.add(`canvas:${id}`);
+      }
+    }
+    for (const id of notepadIds) {
+      if (!seen.has(`notepad:${id}`)) {
+        out.push({ kind: 'notepad', id });
+        seen.add(`notepad:${id}`);
       }
     }
     return out;
@@ -119,11 +141,23 @@ export function ProjectPage({
     }
   }
 
+  function persistActiveNotepad(projectId: string, notepadId: string | null) {
+    try {
+      const key = `pinloom:lastNotepad:${projectId}`;
+      if (notepadId) localStorage.setItem(key, notepadId);
+      else localStorage.removeItem(key);
+    } catch {
+      // see persistCanvasTabs
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     setSessions([]);
     setActiveSession(null);
     setPins([]);
+    setNotepads([]);
+    setActiveNotepadId(null);
     // Restore inline canvas tabs for this project. We persist on every
     // mutation rather than via a useEffect — a setter-based approach
     // avoids the race where a project switch's first persist effect
@@ -174,7 +208,9 @@ export function ProjectPage({
             (t): t is TabRef =>
               t &&
               typeof t === 'object' &&
-              (t.kind === 'session' || t.kind === 'canvas') &&
+              (t.kind === 'session' ||
+                t.kind === 'canvas' ||
+                t.kind === 'notepad') &&
               typeof t.id === 'string',
           );
         }
@@ -183,8 +219,25 @@ export function ProjectPage({
       persistedOrder = null;
     }
 
-    api.listSessions(project.id).then(async (list) => {
+    const lastNotepadId = localStorage.getItem(
+      `pinloom:lastNotepad:${project.id}`,
+    );
+
+    Promise.all([
+      api.listSessions(project.id),
+      projectNotepadApi
+        .list(project.id)
+        .catch(() => [] as ProjectNotepadSummary[]),
+    ]).then(async ([list, npList]) => {
       if (cancelled) return;
+      setNotepads(npList);
+      // If a notepad was the last active view, restore it (and make sure
+      // no canvas stays highlighted underneath).
+      if (lastNotepadId && npList.some((n) => n.id === lastNotepadId)) {
+        setActiveNotepadId(lastNotepadId);
+        setActiveCanvasTeamId(null);
+      }
+      const notepadIds = npList.map((n) => n.id);
       if (list.length > 0) {
         setSessions(list);
         const remembered = lastId ? list.find((s) => s.id === lastId) : null;
@@ -193,6 +246,7 @@ export function ProjectPage({
           persistedOrder,
           list.map((s) => s.id),
           restored.map((c) => c.teamId),
+          notepadIds,
         );
         setTabOrder(order);
         persistTabOrder(project.id, order);
@@ -205,6 +259,7 @@ export function ProjectPage({
           persistedOrder,
           [created.id],
           restored.map((c) => c.teamId),
+          notepadIds,
         );
         setTabOrder(order);
         persistTabOrder(project.id, order);
@@ -265,6 +320,8 @@ export function ProjectPage({
       if (!target) return;
       setActiveCanvasTeamId(null);
       persistActiveCanvas(project.id, null);
+      setActiveNotepadId(null);
+      persistActiveNotepad(project.id, null);
       setActiveSession(target);
     }
     window.addEventListener('pinloom:goto-session', onGoto as EventListener);
@@ -328,11 +385,15 @@ export function ProjectPage({
         projectId={project.id}
         sessions={sessions}
         activeSessionId={
-          activeCanvasTeamId === null ? activeSession?.id ?? null : null
+          activeCanvasTeamId === null && activeNotepadId === null
+            ? activeSession?.id ?? null
+            : null
         }
         onSelect={(s) => {
           setActiveCanvasTeamId(null);
           persistActiveCanvas(project.id, null);
+          setActiveNotepadId(null);
+          persistActiveNotepad(project.id, null);
           setActiveSession(s);
         }}
         onCreate={(s) => {
@@ -347,6 +408,8 @@ export function ProjectPage({
           });
           setActiveCanvasTeamId(null);
           persistActiveCanvas(project.id, null);
+          setActiveNotepadId(null);
+          persistActiveNotepad(project.id, null);
           setActiveSession(s);
         }}
         onDelete={(id) => {
@@ -373,6 +436,8 @@ export function ProjectPage({
         onSelectCanvas={(teamId) => {
           setActiveCanvasTeamId(teamId);
           persistActiveCanvas(project.id, teamId);
+          setActiveNotepadId(null);
+          persistActiveNotepad(project.id, null);
         }}
         onCloseCanvas={(teamId) => {
           setCanvasTabs((prev) => {
@@ -413,6 +478,73 @@ export function ProjectPage({
           });
           setActiveCanvasTeamId(tab.teamId);
           persistActiveCanvas(project.id, tab.teamId);
+          setActiveNotepadId(null);
+          persistActiveNotepad(project.id, null);
+        }}
+        notepads={notepads}
+        activeNotepadId={activeNotepadId}
+        onSelectNotepad={(id) => {
+          setActiveCanvasTeamId(null);
+          persistActiveCanvas(project.id, null);
+          setActiveNotepadId(id);
+          persistActiveNotepad(project.id, id);
+        }}
+        onCreateNotepad={async () => {
+          try {
+            const created = await projectNotepadApi.create(project.id);
+            const summary: ProjectNotepadSummary = {
+              id: created.id,
+              projectId: created.projectId,
+              name: created.name,
+              position: created.position,
+              createdAt: created.createdAt,
+              updatedAt: created.updatedAt,
+            };
+            setNotepads((prev) => [...prev, summary]);
+            setTabOrder((prev) => {
+              const next: TabRef[] = [
+                ...prev,
+                { kind: 'notepad', id: created.id },
+              ];
+              persistTabOrder(project.id, next);
+              return next;
+            });
+            setActiveCanvasTeamId(null);
+            persistActiveCanvas(project.id, null);
+            setActiveNotepadId(created.id);
+            persistActiveNotepad(project.id, created.id);
+          } catch {
+            // surfaced server-side; leave the strip unchanged
+          }
+        }}
+        onCloseNotepad={async (id) => {
+          try {
+            await projectNotepadApi.remove(id);
+          } catch {
+            // ignore — fall through and drop it from the UI anyway
+          }
+          setNotepads((prev) => prev.filter((n) => n.id !== id));
+          setTabOrder((prev) => {
+            const next = prev.filter(
+              (r) => !(r.kind === 'notepad' && r.id === id),
+            );
+            persistTabOrder(project.id, next);
+            return next;
+          });
+          if (activeNotepadId === id) {
+            setActiveNotepadId(null);
+            persistActiveNotepad(project.id, null);
+          }
+        }}
+        onRenameNotepad={async (id, name) => {
+          setNotepads((prev) =>
+            prev.map((n) => (n.id === id ? { ...n, name } : n)),
+          );
+          try {
+            await projectNotepadApi.update(id, { name });
+          } catch {
+            // optimistic; a failed rename just reverts on next load
+          }
         }}
         tabOrder={tabOrder}
         onReorderTabs={(nextOrder) => {
@@ -427,7 +559,7 @@ export function ProjectPage({
           minLeft={320}
           minRight={420}
           left={
-            pins.length > 0 && activeSession ? (
+            activeNotepadId === null && pins.length > 0 && activeSession ? (
               <PinnedPanel
                 key={activeSession.id}
                 pins={pins}
@@ -443,7 +575,12 @@ export function ProjectPage({
             ) : null
           }
           right={
-            activeCanvasTeamId ? (
+            activeNotepadId ? (
+              <ProjectNotepadView
+                key={activeNotepadId}
+                notepadId={activeNotepadId}
+              />
+            ) : activeCanvasTeamId ? (
               // Inline canvas — wraps the dedicated route's component so
               // updates / fixes flow into both surfaces. The page reads
               // teamId from the URL via useParams, so we route inline by

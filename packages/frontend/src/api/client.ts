@@ -6,6 +6,9 @@ import type {
   PlanItem,
   Project,
   ProjectGroup,
+  ProjectNotepad,
+  ProjectNotepadSummary,
+  NotepadNode,
   QueueItem,
   Session,
   Team,
@@ -505,7 +508,51 @@ export const api = {
     request<TeamDispatchEvent[]>(
       `/api/teams/${teamId}/dispatch/events?limit=${limit}`,
     ),
+
+  // Global scratchpad (single shared note, stored in app_settings as a
+  // structured doc: tabs of vertically-split text panes).
+  getNotepad: () => request<{ doc: NotepadDoc }>('/api/notepad'),
+  saveNotepad: (doc: NotepadDoc) =>
+    request<{ ok: true }>('/api/notepad', {
+      method: 'PUT',
+      body: JSON.stringify({ doc }),
+    }),
 };
+
+// Per-project notepads (tabs alongside chat sessions). List returns
+// summaries (no body); open/patch carry the full split-tree `root`.
+export const projectNotepadApi = {
+  list: (projectId: string) =>
+    request<ProjectNotepadSummary[]>(`/api/projects/${projectId}/notepads`),
+  create: (projectId: string, name?: string) =>
+    request<ProjectNotepad>(`/api/projects/${projectId}/notepads`, {
+      method: 'POST',
+      body: JSON.stringify(name ? { name } : {}),
+    }),
+  get: (id: string) => request<ProjectNotepad>(`/api/notepads/${id}`),
+  update: (id: string, patch: { name?: string; root?: NotepadNode }) =>
+    request<ProjectNotepad>(`/api/notepads/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  remove: (id: string) =>
+    request<{ ok: true }>(`/api/notepads/${id}`, { method: 'DELETE' }),
+};
+
+export interface NotepadPane {
+  id: string;
+  content: string;
+  height: number;
+}
+export interface NotepadTab {
+  id: string;
+  name: string;
+  panes: NotepadPane[];
+}
+export interface NotepadDoc {
+  tabs: NotepadTab[];
+  activeTabId: string;
+}
 
 export interface WikiImportSummary {
   mode: 'skip' | 'overwrite';

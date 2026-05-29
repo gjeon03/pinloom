@@ -6,15 +6,16 @@ const API_PORT = process.env.PORT || '4748';
 
 const proxy = {
   '/api': `http://localhost:${API_PORT}`,
+  // Forward the browser's real Origin (no rewriteWsOrigin) so the backend's
+  // WS origin allowlist can distinguish the local frontend from a cross-site
+  // hijack attempt.
   '/ws/terminal': {
     target: `ws://localhost:${API_PORT}`,
     ws: true,
-    rewriteWsOrigin: true,
   },
   '/ws': {
     target: `ws://localhost:${API_PORT}`,
     ws: true,
-    rewriteWsOrigin: true,
   },
 };
 

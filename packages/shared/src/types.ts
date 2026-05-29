@@ -40,6 +40,45 @@ export interface PlanItem {
   updatedAt: string;
 }
 
+// A project notepad lives as a tab alongside chat sessions. Its body is a
+// split tree of text panes: a `split` node lays its children out in a row
+// (side-by-side) or column (stacked), each child sized by a percentage; a
+// `pane` leaf holds free-form text. Stored in the DB so it backs up with
+// the rest of the project state.
+export interface NotepadPaneNode {
+  id: string;
+  kind: 'pane';
+  content: string;
+}
+export interface NotepadSplitNode {
+  id: string;
+  kind: 'split';
+  dir: 'row' | 'column';
+  sizes: number[];
+  children: NotepadNode[];
+}
+export type NotepadNode = NotepadPaneNode | NotepadSplitNode;
+
+export interface ProjectNotepad {
+  id: string;
+  projectId: string;
+  name: string;
+  root: NotepadNode;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Body-less shape for the tab strip (the list endpoint omits `root`).
+export interface ProjectNotepadSummary {
+  id: string;
+  projectId: string;
+  name: string;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type AgentKind = 'claude' | 'codex';
 
 // Reasoning effort levels per agent. Claude's underlying SDK supports an

@@ -337,6 +337,25 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
     `,
   },
+  {
+    id: 25,
+    // Per-project notepads: free-form notes that appear as tabs next to
+    // chat sessions. `root` is a JSON split tree of text panes. Lives in
+    // the DB (not localStorage) so notes back up with the project state.
+    sql: `
+      CREATE TABLE IF NOT EXISTS project_notepads (
+        id          TEXT PRIMARY KEY,
+        project_id  TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        root        TEXT NOT NULL,
+        position    INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_project_notepads_project
+        ON project_notepads(project_id, position);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

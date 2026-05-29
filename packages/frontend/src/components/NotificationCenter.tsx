@@ -88,7 +88,7 @@ export function NotificationCenter() {
 
   return (
     <>
-      <div ref={wrapperRef} className="fixed top-3 right-4 z-40">
+      <div ref={wrapperRef} className="relative">
         <button
           type="button"
           onClick={toggleOpen}
