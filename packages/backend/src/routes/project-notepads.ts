@@ -32,7 +32,20 @@ function toFull(row: NotepadRow): ProjectNotepad {
   return { ...toSummary(row), root: JSON.parse(row.root) as NotepadNode };
 }
 
-function isValidNode(value: unknown): value is NotepadNode {
+// Notes are plain text, so cap the request body well below the global 100MB
+// limit, and bound the split tree's depth/size — an untrusted (or buggy)
+// client shouldn't be able to force unbounded recursion or a giant row.
+const NOTEPAD_BODY_LIMIT = 4 * 1024 * 1024;
+const MAX_NODE_DEPTH = 64;
+const MAX_NODES = 2000;
+
+function isValidNode(
+  value: unknown,
+  depth = 0,
+  counter = { n: 0 },
+): value is NotepadNode {
+  if (depth > MAX_NODE_DEPTH) return false;
+  if (++counter.n > MAX_NODES) return false;
   if (!value || typeof value !== 'object') return false;
   const node = value as Record<string, unknown>;
   if (typeof node.id !== 'string') return false;
@@ -47,7 +60,7 @@ function isValidNode(value: unknown): value is NotepadNode {
     ) {
       return false;
     }
-    return node.children.every(isValidNode);
+    return node.children.every((c) => isValidNode(c, depth + 1, counter));
   }
   return false;
 }
@@ -75,6 +88,7 @@ export async function projectNotepadRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { projectId: string }; Body: { name?: string } }>(
     '/api/projects/:projectId/notepads',
+    { bodyLimit: NOTEPAD_BODY_LIMIT },
     async (req, reply) => {
       const projectId = req.params.projectId;
       const project = db
@@ -120,7 +134,7 @@ export async function projectNotepadRoutes(app: FastifyInstance) {
   app.patch<{
     Params: { id: string };
     Body: { name?: unknown; root?: unknown };
-  }>('/api/notepads/:id', async (req, reply) => {
+  }>('/api/notepads/:id', { bodyLimit: NOTEPAD_BODY_LIMIT }, async (req, reply) => {
     const row = db
       .prepare('SELECT * FROM project_notepads WHERE id = ?')
       .get(req.params.id) as NotepadRow | undefined;
