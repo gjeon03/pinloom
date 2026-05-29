@@ -8,6 +8,8 @@ import {
   MoreHorizontal,
   Monitor,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Settings,
   Sun,
@@ -107,6 +109,12 @@ export function AppShell({ children }: Props) {
   const onWiki = location.pathname.startsWith('/wiki');
   const onTeams = location.pathname.startsWith('/teams');
 
+  const [sidebarHidden, setSidebarHidden] = useState(
+    () => localStorage.getItem('pinloom:sidebarHidden') === '1',
+  );
+  useEffect(() => {
+    localStorage.setItem('pinloom:sidebarHidden', sidebarHidden ? '1' : '0');
+  }, [sidebarHidden]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
@@ -381,10 +389,32 @@ export function AppShell({ children }: Props) {
 
   return (
     <div className="flex h-full">
-      <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
+      {sidebarHidden ? (
+        <div className="w-9 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col items-center py-3">
+          <button
+            type="button"
+            aria-label="Show sidebar"
+            title="Show sidebar"
+            onClick={() => setSidebarHidden(false)}
+            className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
+          >
+            <PanelLeftOpen size={16} />
+          </button>
+        </div>
+      ) : (
+        <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
         <div className="px-3 py-3 flex items-center justify-between gap-1">
           <div className="text-sm font-semibold tracking-wide truncate">pinloom</div>
           <div className="flex items-center gap-0.5">
+            <Tooltip label="Hide sidebar" side="bottom">
+              <button
+                aria-label="Hide sidebar"
+                onClick={() => setSidebarHidden(true)}
+                className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
+              >
+                <PanelLeftClose size={14} />
+              </button>
+            </Tooltip>
             <Tooltip label="New group" side="bottom">
               <button
                 aria-label="New group"
@@ -620,7 +650,8 @@ export function AppShell({ children }: Props) {
             <ThemeToggle />
           </div>
         </div>
-      </aside>
+        </aside>
+      )}
 
       <main className="flex-1 min-w-0 flex flex-col">
         {children(activeProject, {
