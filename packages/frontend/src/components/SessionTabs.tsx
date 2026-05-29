@@ -730,7 +730,7 @@ export function SessionTabs({
       */}
       <div
         ref={pickerRef}
-        className="relative shrink-0 sticky right-0 z-10 self-stretch ml-1 pl-2 pr-2 flex items-center bg-[var(--color-surface)]"
+        className="relative shrink-0 sticky right-0 z-10 self-stretch flex items-stretch bg-[var(--color-surface)]"
       >
         <button
           ref={pickerButtonRef}
@@ -748,7 +748,7 @@ export function SessionTabs({
             }
             setPickerOpen((v) => !v);
           }}
-          className="flex items-center gap-0.5 p-1.5 rounded text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+          className="flex items-center gap-0.5 px-2.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
           title="New tab — pick agent"
         >
           <Plus size={14} />
