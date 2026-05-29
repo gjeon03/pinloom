@@ -269,7 +269,11 @@ export function WikiPage() {
                   onClick={refresh}
                   className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
                 >
-                  <RefreshCw size={12} />
+                  {/* match the labelled buttons' text-xs line-box (16px) so the
+                      icon-only button isn't shorter than the rest */}
+                  <span className="flex h-4 items-center">
+                    <RefreshCw size={12} />
+                  </span>
                 </button>
               </Tooltip>
             </div>
