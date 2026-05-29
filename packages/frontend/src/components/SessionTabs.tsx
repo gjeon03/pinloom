@@ -8,6 +8,7 @@ import {
   FolderInput,
   MoreVertical,
   Network,
+  NotepadText,
   Pencil,
   Plus,
   Trash2,
@@ -16,9 +17,16 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import type { AgentKind, Project, Session, Team } from '@pinloom/shared';
+import type {
+  AgentKind,
+  Project,
+  ProjectNotepadSummary,
+  Session,
+  Team,
+} from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from './AgentBadge.js';
+import { ConfirmButton } from './ConfirmButton.js';
 import { Tooltip } from './Tooltip.js';
 
 type TeamRole =
@@ -80,7 +88,8 @@ export interface InlineCanvasTab {
 // via localStorage; this component only consumes + mutates via callback.
 export type TabRef =
   | { kind: 'session'; id: string }
-  | { kind: 'canvas'; id: string };
+  | { kind: 'canvas'; id: string }
+  | { kind: 'notepad'; id: string };
 
 interface Props {
   projectId: string;
@@ -97,6 +106,13 @@ interface Props {
   onSelectCanvas?: (teamId: string) => void;
   onCloseCanvas?: (teamId: string) => void;
   onOpenCanvasTab?: (tab: InlineCanvasTab) => void;
+  /** Per-project notepad tabs (free-form notes alongside the chats). */
+  notepads?: ProjectNotepadSummary[];
+  activeNotepadId?: string | null;
+  onSelectNotepad?: (id: string) => void;
+  onCreateNotepad?: () => void;
+  onCloseNotepad?: (id: string) => void;
+  onRenameNotepad?: (id: string, name: string) => void;
   /**
    * Unified strip order — sessions + canvases mixed. Falls back to
    * sessions-then-canvases display if omitted (for callers that haven't
@@ -120,6 +136,12 @@ export function SessionTabs({
   onSelectCanvas,
   onCloseCanvas,
   onOpenCanvasTab,
+  notepads = [],
+  activeNotepadId = null,
+  onSelectNotepad,
+  onCreateNotepad,
+  onCloseNotepad,
+  onRenameNotepad,
   tabOrder,
   onReorderTabs,
 }: Props) {
@@ -142,6 +164,7 @@ export function SessionTabs({
     if (tabOrder && tabOrder.length > 0) {
       const sessionSet = new Set(sessions.map((s) => s.id));
       const canvasSet = new Set(canvasTabs.map((c) => c.teamId));
+      const notepadSet = new Set(notepads.map((n) => n.id));
       const seen = new Set<string>();
       const out: TabRef[] = [];
       for (const ref of tabOrder) {
@@ -149,6 +172,7 @@ export function SessionTabs({
         if (seen.has(key)) continue;
         if (ref.kind === 'session' && !sessionSet.has(ref.id)) continue;
         if (ref.kind === 'canvas' && !canvasSet.has(ref.id)) continue;
+        if (ref.kind === 'notepad' && !notepadSet.has(ref.id)) continue;
         out.push(ref);
         seen.add(key);
       }
@@ -164,13 +188,20 @@ export function SessionTabs({
           seen.add(`canvas:${c.teamId}`);
         }
       }
+      for (const n of notepads) {
+        if (!seen.has(`notepad:${n.id}`)) {
+          out.push({ kind: 'notepad', id: n.id });
+          seen.add(`notepad:${n.id}`);
+        }
+      }
       return out;
     }
     return [
       ...sessions.map((s): TabRef => ({ kind: 'session', id: s.id })),
       ...canvasTabs.map((c): TabRef => ({ kind: 'canvas', id: c.teamId })),
+      ...notepads.map((n): TabRef => ({ kind: 'notepad', id: n.id })),
     ];
-  }, [tabOrder, sessions, canvasTabs]);
+  }, [tabOrder, sessions, canvasTabs, notepads]);
 
   const sessionsById = useMemo(
     () => new Map(sessions.map((s) => [s.id, s])),
@@ -179,6 +210,10 @@ export function SessionTabs({
   const canvasesById = useMemo(
     () => new Map(canvasTabs.map((c) => [c.teamId, c])),
     [canvasTabs],
+  );
+  const notepadsById = useMemo(
+    () => new Map(notepads.map((n) => [n.id, n])),
+    [notepads],
   );
 
   function refKey(ref: TabRef): string {
@@ -558,40 +593,109 @@ export function SessionTabs({
           );
         }
 
-        // ref.kind === 'canvas'
-        const c = canvasesById.get(ref.id);
-        if (!c) return null;
-        const active = c.teamId === activeCanvasTeamId;
+        if (ref.kind === 'canvas') {
+          const c = canvasesById.get(ref.id);
+          if (!c) return null;
+          const active = c.teamId === activeCanvasTeamId;
+          return (
+            <div key={key} className="flex items-stretch">
+              {indicator}
+              <div
+                {...dragHandlers(false)}
+                className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm cursor-pointer border-b-2 ${
+                  active
+                    ? 'border-[var(--color-accent)] text-[var(--color-ink)] bg-[var(--color-surface-2)]'
+                    : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+                } ${isDragging ? 'opacity-40' : ''}`}
+                onClick={() => onSelectCanvas?.(c.teamId)}
+                title={`Canvas — ${c.teamName}`}
+              >
+                <Network size={12} className="text-[var(--color-accent)] shrink-0" />
+                <span className="truncate max-w-[160px]">{c.teamName}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCloseCanvas?.(c.teamId);
+                  }}
+                  className={`p-0.5 rounded transition-opacity ${
+                    active
+                      ? 'text-[var(--color-ink-muted)] hover:text-red-400'
+                      : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400'
+                  }`}
+                  title="Close canvas tab"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        // ref.kind === 'notepad'
+        const n = notepadsById.get(ref.id);
+        if (!n) return null;
+        const active = n.id === activeNotepadId;
+        const editing = editingId === n.id;
         return (
           <div key={key} className="flex items-stretch">
             {indicator}
             <div
-              {...dragHandlers(false)}
-              className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm cursor-pointer border-b-2 ${
+              {...dragHandlers(editing)}
+              className={`group flex items-center gap-1 rounded-t px-3 py-1.5 text-sm ${
+                editing ? 'cursor-text' : 'cursor-pointer'
+              } border-b-2 ${
                 active
                   ? 'border-[var(--color-accent)] text-[var(--color-ink)] bg-[var(--color-surface-2)]'
                   : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
               } ${isDragging ? 'opacity-40' : ''}`}
-              onClick={() => onSelectCanvas?.(c.teamId)}
-              title={`Canvas — ${c.teamName}`}
+              onClick={() => !editing && onSelectNotepad?.(n.id)}
+              onDoubleClick={() => {
+                setEditingId(n.id);
+                setEditValue(n.name);
+              }}
+              title={`Notepad — ${n.name}`}
             >
-              <Network size={12} className="text-[var(--color-accent)] shrink-0" />
-              <span className="truncate max-w-[160px]">{c.teamName}</span>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCloseCanvas?.(c.teamId);
-                }}
+              <NotepadText
+                size={12}
+                className="shrink-0 text-[var(--color-accent)]"
+              />
+              {editing ? (
+                <input
+                  autoFocus
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onBlur={() => {
+                    const v = editValue.trim();
+                    if (v) onRenameNotepad?.(n.id, v);
+                    setEditingId(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const v = editValue.trim();
+                      if (v) onRenameNotepad?.(n.id, v);
+                      setEditingId(null);
+                    }
+                    if (e.key === 'Escape') setEditingId(null);
+                  }}
+                  className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-1 text-sm w-32"
+                />
+              ) : (
+                <span className="truncate max-w-[160px]">{n.name}</span>
+              )}
+              <ConfirmButton
+                needsConfirm
+                message="Delete this notepad?"
+                onConfirm={() => onCloseNotepad?.(n.id)}
+                title="Delete notepad"
                 className={`p-0.5 rounded transition-opacity ${
                   active
                     ? 'text-[var(--color-ink-muted)] hover:text-red-400'
                     : 'opacity-40 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400'
                 }`}
-                title="Close canvas tab"
               >
                 <X size={12} />
-              </button>
+              </ConfirmButton>
             </div>
           </div>
         );
@@ -688,6 +792,18 @@ export function SessionTabs({
                 {codexAvailable === false && (
                   <span className="text-[9px] text-[var(--color-ink-muted)]">N/A</span>
                 )}
+              </button>
+              <div className="my-1 border-t border-[var(--color-border)]" />
+              <button
+                type="button"
+                onClick={() => {
+                  setPickerOpen(false);
+                  onCreateNotepad?.();
+                }}
+                className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-surface-3)] text-left"
+              >
+                <NotepadText size={14} className="text-[var(--color-accent)]" />
+                <span className="flex-1">Notepad</span>
               </button>
             </div>,
             document.body,
