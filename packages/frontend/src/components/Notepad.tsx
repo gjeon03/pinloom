@@ -123,7 +123,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
           dirtyRef.current = true;
           setContent(e.target.value);
         }}
-        placeholder="Quick notes… (saved to the GitHub-backed DB)"
+        placeholder="Quick notes…"
         className="flex-1 resize-none bg-[var(--color-surface)] px-4 py-3 text-sm font-mono leading-relaxed outline-none"
       />
     </div>
