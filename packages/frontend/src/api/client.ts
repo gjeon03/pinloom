@@ -6,6 +6,9 @@ import type {
   PlanItem,
   Project,
   ProjectGroup,
+  ProjectNotepad,
+  ProjectNotepadSummary,
+  NotepadNode,
   QueueItem,
   Session,
   Team,
@@ -514,6 +517,26 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ doc }),
     }),
+};
+
+// Per-project notepads (tabs alongside chat sessions). List returns
+// summaries (no body); open/patch carry the full split-tree `root`.
+export const projectNotepadApi = {
+  list: (projectId: string) =>
+    request<ProjectNotepadSummary[]>(`/api/projects/${projectId}/notepads`),
+  create: (projectId: string, name?: string) =>
+    request<ProjectNotepad>(`/api/projects/${projectId}/notepads`, {
+      method: 'POST',
+      body: JSON.stringify(name ? { name } : {}),
+    }),
+  get: (id: string) => request<ProjectNotepad>(`/api/notepads/${id}`),
+  update: (id: string, patch: { name?: string; root?: NotepadNode }) =>
+    request<ProjectNotepad>(`/api/notepads/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  remove: (id: string) =>
+    request<{ ok: true }>(`/api/notepads/${id}`, { method: 'DELETE' }),
 };
 
 export interface NotepadPane {
