@@ -1,4 +1,12 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { Info, NotepadText, Plus, Rows2, X } from 'lucide-react';
 import { api, type NotepadDoc, type NotepadTab } from '../api/client.js';
 import { Tooltip } from './Tooltip.js';
@@ -30,6 +38,107 @@ function mapActiveTab(
     ...doc,
     tabs: doc.tabs.map((t) => (t.id === doc.activeTabId ? fn(t) : t)),
   };
+}
+
+// A destructive-action button. When `needsConfirm` is true it pops a small
+// Yes/No confirmation (rendered via portal so the tab strip's overflow can't
+// clip it); otherwise it fires immediately. Used to guard deleting tabs or
+// panes that still hold text.
+function ConfirmButton({
+  needsConfirm,
+  message,
+  onConfirm,
+  title,
+  className,
+  children,
+}: {
+  needsConfirm: boolean;
+  message: string;
+  onConfirm: () => void;
+  title?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    setCoords({ top: r.bottom + 4, left: r.right });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(e: MouseEvent) {
+      if (popRef.current?.contains(e.target as Node)) return;
+      if (btnRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        title={title}
+        className={className}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (needsConfirm) setOpen((v) => !v);
+          else onConfirm();
+        }}
+      >
+        {children}
+      </button>
+      {open &&
+        coords &&
+        createPortal(
+          <div
+            ref={popRef}
+            style={{
+              position: 'fixed',
+              top: coords.top,
+              left: coords.left,
+              transform: 'translateX(-100%)',
+            }}
+            className="z-[100] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="mb-1.5 whitespace-nowrap text-[11px] text-[var(--color-ink)]">
+              {message}
+            </p>
+            <div className="flex justify-end gap-1">
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="rounded px-2 py-0.5 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onConfirm();
+                }}
+                className="rounded bg-[var(--color-accent)] px-2 py-0.5 text-[11px] text-black hover:opacity-90"
+              >
+                Yes
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
 }
 
 export function NotepadToggle({
@@ -344,6 +453,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
               key={t.id}
               name={t.name}
               active={t.id === doc.activeTabId}
+              hasContent={t.panes.some((p) => p.content.trim() !== '')}
               onSelect={() => setActiveTab(t.id)}
               onClose={() => closeTab(t.id)}
               onRename={(name) => renameTab(t.id, name)}
@@ -365,14 +475,17 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
                   style={isLast ? undefined : { height: pane.height }}
                 >
                   {activeTab.panes.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removePane(pane.id)}
-                      title="Remove pane"
-                      className="absolute right-1 top-1 z-10 rounded p-0.5 text-[var(--color-ink-muted)] opacity-0 hover:text-red-400 group-hover:opacity-100"
-                    >
-                      <X size={11} />
-                    </button>
+                    <span className="absolute right-1 top-1 z-10">
+                      <ConfirmButton
+                        needsConfirm={pane.content.trim() !== ''}
+                        message="Remove this pane?"
+                        onConfirm={() => removePane(pane.id)}
+                        title="Remove pane"
+                        className="rounded p-0.5 text-[var(--color-ink-muted)] opacity-0 hover:text-red-400 group-hover:opacity-100"
+                      >
+                        <X size={11} />
+                      </ConfirmButton>
+                    </span>
                   )}
                   <textarea
                     autoFocus={i === 0}
@@ -415,12 +528,14 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
 function TabChip({
   name,
   active,
+  hasContent,
   onSelect,
   onClose,
   onRename,
 }: {
   name: string;
   active: boolean;
+  hasContent: boolean;
   onSelect: () => void;
   onClose: () => void;
   onRename: (name: string) => void;
@@ -468,17 +583,15 @@ function TabChip({
       }`}
     >
       <span className="max-w-[120px] truncate">{name}</span>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
+      <ConfirmButton
+        needsConfirm={hasContent}
+        message="Delete this tab?"
+        onConfirm={onClose}
         title="Close tab"
         className="opacity-0 hover:text-red-400 group-hover:opacity-100"
       >
         <X size={11} />
-      </button>
+      </ConfirmButton>
     </div>
   );
 }
