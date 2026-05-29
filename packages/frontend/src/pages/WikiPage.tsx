@@ -194,7 +194,8 @@ export function WikiPage() {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
-        <div className="pl-6 pr-16 py-4">
+        {/* pr clears the fixed top-right control cluster (github/notepad/bell). */}
+        <div className="pl-6 pr-[136px] py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-lg font-semibold">Wiki</h1>

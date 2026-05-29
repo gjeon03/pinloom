@@ -28,7 +28,7 @@ export function GithubLink() {
       target="_blank"
       rel="noopener noreferrer"
       title="Open pinloom on GitHub"
-      className="fixed top-3 right-[56px] z-40 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 backdrop-blur-sm p-2 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] shadow-md inline-flex items-center justify-center"
+      className="fixed top-3 right-[92px] z-40 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 backdrop-blur-sm p-2 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] shadow-md inline-flex items-center justify-center"
     >
       <GithubMark size={14} />
     </a>
