@@ -26,7 +26,6 @@ import type {
 } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { AgentBadge } from './AgentBadge.js';
-import { ConfirmButton } from './ConfirmButton.js';
 import { Tooltip } from './Tooltip.js';
 
 type TeamRole =
@@ -683,10 +682,14 @@ export function SessionTabs({
               ) : (
                 <span className="truncate max-w-[160px]">{n.name}</span>
               )}
-              <ConfirmButton
-                needsConfirm
-                message="Delete this notepad?"
-                onConfirm={() => onCloseNotepad?.(n.id)}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm(`Delete "${n.name}"? This cannot be undone.`)) {
+                    onCloseNotepad?.(n.id);
+                  }
+                }}
                 title="Delete notepad"
                 className={`p-0.5 rounded transition-opacity ${
                   active
@@ -695,7 +698,7 @@ export function SessionTabs({
                 }`}
               >
                 <X size={12} />
-              </ConfirmButton>
+              </button>
             </div>
           </div>
         );
