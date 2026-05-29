@@ -18,9 +18,8 @@ function GithubMark({ size = 14 }: { size?: number }) {
   );
 }
 
-// Small floating link to the public repo. Sits next to the
-// NotificationCenter bell (top-right corner) so it's always reachable
-// without taking permanent sidebar real estate.
+// Link to the public repo. Rendered inline in the top-right control cluster
+// (positioning is owned by the cluster container in App).
 export function GithubLink() {
   return (
     <a
@@ -28,7 +27,7 @@ export function GithubLink() {
       target="_blank"
       rel="noopener noreferrer"
       title="Open pinloom on GitHub"
-      className="fixed top-3 right-[92px] z-40 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 backdrop-blur-sm p-2 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] shadow-md inline-flex items-center justify-center"
+      className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-2 text-[var(--color-ink-muted)] shadow-md backdrop-blur-sm hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] inline-flex items-center justify-center"
     >
       <GithubMark size={14} />
     </a>
