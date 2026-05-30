@@ -95,11 +95,11 @@ export function NotificationCenter() {
   const selectedItem = selectedId ? items.find((it) => it.id === selectedId) ?? null : null;
 
   function toggleOpen() {
-    setOpen((v) => {
-      const next = !v;
-      if (next) markAllRead();
-      return next;
-    });
+    // Run the side-effect outside the updater so we don't update
+    // NotificationProvider's state from inside NotificationCenter's render.
+    const next = !open;
+    setOpen(next);
+    if (next) markAllRead();
   }
 
   return (
