@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { nanoid } from 'nanoid';
 import type { Message, MessageRole } from '@pinloom/shared';
+import { WS_RUNS_CHANNEL } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
@@ -29,6 +30,38 @@ import { redactSecrets } from './redact.js';
 import type { ImageInput, ImageMediaType } from './runner-types.js';
 
 export type { ImageInput, ImageMediaType } from './runner-types.js';
+
+// Broadcast a run lifecycle change on the per-session channel (detail for the
+// open tab) and mirror it onto the global channel enriched with project /
+// title / agent, so one app-wide listener can notify for sessions whose tab
+// isn't open.
+function emitRunStatus(
+  sessionId: string,
+  status: 'started' | 'finished' | 'error',
+  error?: string,
+): void {
+  broadcast(`session:${sessionId}`, {
+    type: 'run_status',
+    sessionId,
+    status,
+    ...(error !== undefined ? { error } : {}),
+  });
+  const row = getDb()
+    .prepare('SELECT project_id, agent, title FROM sessions WHERE id = ?')
+    .get(sessionId) as
+    | { project_id: string; agent: string | null; title: string | null }
+    | undefined;
+  if (row) {
+    broadcast(WS_RUNS_CHANNEL, {
+      type: 'run_activity',
+      sessionId,
+      projectId: row.project_id,
+      title: row.title,
+      agent: row.agent === 'codex' ? 'codex' : 'claude',
+      phase: status,
+    });
+  }
+}
 
 interface PersistArgs {
   sessionId: string;
@@ -767,12 +800,7 @@ export function tryDrainQueue(sessionId: string): void {
       }
       broadcastQueueState(sessionId);
       const msg = err instanceof Error ? err.message : String(err);
-      broadcast(`session:${sessionId}`, {
-        type: 'run_status',
-        sessionId,
-        status: 'error',
-        error: msg,
-      });
+      emitRunStatus(sessionId, 'error', msg);
     });
   });
 }
@@ -916,11 +944,7 @@ export async function sendUserMessages(
     }
     existing.inFlight = true;
     existing.agentRun.pushMessage({ text: combinedText, images: combinedImages });
-    broadcast(`session:${sessionId}`, {
-      type: 'run_status',
-      sessionId,
-      status: 'started',
-    });
+    emitRunStatus(sessionId, 'started');
     // Repaint the canvas: worker just transitioned idle → running mid-
     // AgentRun (next turn starts via pushMessage rather than a fresh
     // adapter spawn).
@@ -944,12 +968,7 @@ export async function sendUserMessages(
       role: 'system',
       content: `[runner error] ${message}`,
     });
-    broadcast(`session:${sessionId}`, {
-      type: 'run_status',
-      sessionId,
-      status: 'error',
-      error: message,
-    });
+    emitRunStatus(sessionId, 'error', message);
   });
 
   return persisted;
@@ -1214,11 +1233,7 @@ async function runAttempt(
             active.hasPendingPlanItem = false;
           }
           active.inFlight = false;
-          broadcast(`session:${ctx.id}`, {
-            type: 'run_status',
-            sessionId: ctx.id,
-            status: 'finished',
-          });
+          emitRunStatus(ctx.id, 'finished');
           // Anything the user typed during this turn now goes into the
           // next one — no interrupt needed, the run is idle.
           tryDrainQueue(ctx.id);
@@ -1295,7 +1310,7 @@ async function runAssistant(
   images: ImageInput[] = [],
   model?: string,
 ): Promise<void> {
-  broadcast(`session:${ctx.id}`, { type: 'run_status', sessionId: ctx.id, status: 'started' });
+  emitRunStatus(ctx.id, 'started');
 
   const pinsContext = buildPinsContext(ctx.id);
   const envVarsContext = buildEnvVarsContext();
@@ -1414,12 +1429,7 @@ async function runAssistant(
         role: 'system',
         content: '[cancelled by user]',
       });
-      broadcast(`session:${ctx.id}`, {
-        type: 'run_status',
-        sessionId: ctx.id,
-        status: 'error',
-        error: 'cancelled',
-      });
+      emitRunStatus(ctx.id, 'error', 'cancelled');
       return;
     }
     // Run-level `finished` covers the case where the agent's event stream
@@ -1427,11 +1437,7 @@ async function runAssistant(
     // cases). Per-turn `finished` is already broadcast inside `runAttempt`
     // on `turn_complete`, so this is a safety net rather than a duplicate
     // in normal production flow.
-    broadcast(`session:${ctx.id}`, {
-      type: 'run_status',
-      sessionId: ctx.id,
-      status: 'finished',
-    });
+    emitRunStatus(ctx.id, 'finished');
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     persistMessage({
@@ -1440,11 +1446,6 @@ async function runAssistant(
       role: 'system',
       content: `[runner error] ${errorMsg}`,
     });
-    broadcast(`session:${ctx.id}`, {
-      type: 'run_status',
-      sessionId: ctx.id,
-      status: 'error',
-      error: errorMsg,
-    });
+    emitRunStatus(ctx.id, 'error', errorMsg);
   }
 }

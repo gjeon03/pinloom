@@ -5,6 +5,7 @@ import { AppShell } from './components/AppShell.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
 import { GithubLink } from './components/GithubLink.js';
 import { NotepadToggle, NotepadPanel } from './components/Notepad.js';
+import { ChatDoneNotifier } from './components/ChatDoneNotifier.js';
 import { ProjectPage } from './pages/ProjectPage.js';
 import { PinsPage } from './pages/PinsPage.js';
 import { SessionPage } from './pages/SessionPage.js';
@@ -26,6 +27,7 @@ export function App() {
   const [notepadOpen, setNotepadOpen] = useState(false);
   return (
     <SWRConfig value={swrConfig}>
+      <ChatDoneNotifier />
       <div className="flex h-screen overflow-hidden">
         {/* Content column. The top-right control cluster is positioned
             relative to this column (not the viewport) so it tracks the

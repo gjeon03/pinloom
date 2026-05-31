@@ -10,7 +10,11 @@ import {
 } from 'react';
 import { api, type WikiAnalysisLogEntry } from '../api/client.js';
 
-export type NotificationKind = 'wiki-sync' | 'wiki-analyze' | 'generic';
+export type NotificationKind =
+  | 'wiki-sync'
+  | 'wiki-analyze'
+  | 'generic'
+  | 'chat-done';
 export type NotificationStatus = 'running' | 'success' | 'error';
 
 export interface NotificationItem {
@@ -37,9 +41,19 @@ interface StartArgs {
   meta?: NotificationItem['meta'];
 }
 
+interface NotifyArgs {
+  kind: NotificationKind;
+  title: string;
+  status?: 'success' | 'error';
+  detail?: string;
+  meta?: NotificationItem['meta'];
+}
+
 interface NotificationContextValue {
   items: NotificationItem[];
   start(args: StartArgs): string;
+  /** One-shot notification for an instantaneous event (no running phase). */
+  notify(args: NotifyArgs): string;
   resolve(id: string, detail?: string): void;
   fail(id: string, error: string): void;
   dismiss(id: string): void;
@@ -82,6 +96,27 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         title: args.title,
         meta: args.meta,
         startedAt: Date.now(),
+        read: false,
+      };
+      return [item, ...prev].slice(0, MAX_HISTORY);
+    });
+    return id;
+  }, []);
+
+  const notify = useCallback((args: NotifyArgs): string => {
+    counter.current += 1;
+    const id = `n-${Date.now()}-${counter.current}`;
+    setItems((prev) => {
+      const now = Date.now();
+      const item: NotificationItem = {
+        id,
+        kind: args.kind,
+        status: args.status ?? 'success',
+        title: args.title,
+        detail: args.detail,
+        meta: args.meta,
+        startedAt: now,
+        finishedAt: now,
         read: false,
       };
       return [item, ...prev].slice(0, MAX_HISTORY);
@@ -211,6 +246,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     () => ({
       items,
       start,
+      notify,
       resolve,
       fail,
       dismiss,
@@ -223,6 +259,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     [
       items,
       start,
+      notify,
       resolve,
       fail,
       dismiss,

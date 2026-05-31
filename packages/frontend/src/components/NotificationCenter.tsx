@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, BookPlus, Check, CircleAlert, Loader2, Sparkles, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Bell, BookPlus, Check, CircleAlert, Loader2, MessageSquare, Sparkles, X } from 'lucide-react';
 import {
   useNotifications,
   type NotificationItem,
   type NotificationKind,
 } from '../stores/notifications.js';
+import { gotoSessionTab } from '../utils/gotoSession.js';
 import { NotificationDetail } from './NotificationDetail.js';
 
 function formatRelative(ts: number): string {
@@ -21,6 +23,7 @@ function formatRelative(ts: number): string {
 function kindIcon(kind: NotificationKind) {
   if (kind === 'wiki-sync') return <BookPlus size={12} />;
   if (kind === 'wiki-analyze') return <Sparkles size={12} />;
+  if (kind === 'chat-done') return <MessageSquare size={12} />;
   return <Bell size={12} />;
 }
 
@@ -47,6 +50,19 @@ export function NotificationCenter() {
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+
+  // Chat-done notifications jump to the session's tab; everything else opens
+  // its detail panel.
+  function openItem(it: NotificationItem) {
+    markRead(it.id);
+    setOpen(false);
+    if (it.kind === 'chat-done' && it.meta?.sessionId && it.meta?.projectId) {
+      gotoSessionTab(navigate, it.meta.projectId, it.meta.sessionId);
+      return;
+    }
+    setSelectedId(it.id);
+  }
 
   // Re-render once a second while there are running items so "Xs ago" stays fresh
   const [, forceTick] = useState(0);
@@ -79,11 +95,11 @@ export function NotificationCenter() {
   const selectedItem = selectedId ? items.find((it) => it.id === selectedId) ?? null : null;
 
   function toggleOpen() {
-    setOpen((v) => {
-      const next = !v;
-      if (next) markAllRead();
-      return next;
-    });
+    // Run the side-effect outside the updater so we don't update
+    // NotificationProvider's state from inside NotificationCenter's render.
+    const next = !open;
+    setOpen(next);
+    if (next) markAllRead();
   }
 
   return (
@@ -135,11 +151,7 @@ export function NotificationCenter() {
                   <NotificationRow
                     key={it.id}
                     item={it}
-                    onClick={() => {
-                      setSelectedId(it.id);
-                      setOpen(false);
-                      markRead(it.id);
-                    }}
+                    onClick={() => openItem(it)}
                     onDismiss={() => dismiss(it.id)}
                   />
                 ))}
@@ -152,11 +164,7 @@ export function NotificationCenter() {
                   <NotificationRow
                     key={it.id}
                     item={it}
-                    onClick={() => {
-                      setSelectedId(it.id);
-                      setOpen(false);
-                      markRead(it.id);
-                    }}
+                    onClick={() => openItem(it)}
                     onDismiss={() => dismiss(it.id)}
                   />
                 ))}

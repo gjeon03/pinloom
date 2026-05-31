@@ -24,6 +24,7 @@ import type {
   TeamMember,
 } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { gotoSessionTab } from '../utils/gotoSession.js';
 import { AgentBadge } from '../components/AgentBadge.js';
 import { DirectoryPicker } from '../components/DirectoryPicker.js';
 
@@ -616,31 +617,6 @@ function Section({
       {children}
     </div>
   );
-}
-
-// Open a session in its PROJECT view (sidebar + session tabs) rather than
-// the standalone /s/:id page. Mirrors the canvas / pin "go to tab" channel:
-// seed the project's last-session marker, fire goto-session for the
-// already-mounted case, then route to the project.
-function gotoSessionTab(
-  navigate: ReturnType<typeof useNavigate>,
-  projectId: string,
-  sessionId: string,
-) {
-  try {
-    localStorage.setItem(`pinloom:lastSession:${projectId}`, sessionId);
-    localStorage.removeItem(`pinloom:lastCanvas:${projectId}`);
-    localStorage.removeItem(`pinloom:planActive:${projectId}`);
-  } catch {
-    // localStorage unavailable — the goto-session event still covers the
-    // same-project case below.
-  }
-  window.dispatchEvent(
-    new CustomEvent('pinloom:goto-session', {
-      detail: { projectId, sessionId },
-    }),
-  );
-  navigate(`/projects/${projectId}`);
 }
 
 function OpenSessionButton({
