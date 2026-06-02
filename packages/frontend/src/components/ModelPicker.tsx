@@ -16,9 +16,14 @@ export const CLAUDE_MODELS: ModelOption[] = [
     description: 'Use whatever your local Claude Code CLI is configured for',
   },
   {
+    id: 'claude-opus-4-8[1m]',
+    label: 'Opus 4.8 (1M)',
+    description: 'Most capable — 1M context, best for complex work',
+  },
+  {
     id: 'claude-opus-4-7[1m]',
     label: 'Opus 4.7 (1M)',
-    description: 'Most capable — 1M context, best for complex work',
+    description: 'Previous-generation Opus — CLI hides it, still usable by id',
   },
   {
     id: 'claude-sonnet-4-6',
@@ -56,17 +61,7 @@ export const CODEX_MODELS: ModelOption[] = [
   {
     id: 'gpt-5.4-mini',
     label: 'GPT-5.4 mini',
-    description: 'Small, fast, cost-efficient — good for simpler tasks',
-  },
-  {
-    id: 'gpt-5.3-codex',
-    label: 'GPT-5.3 Codex',
-    description: 'Coding-optimized model',
-  },
-  {
-    id: 'gpt-5.2',
-    label: 'GPT-5.2',
-    description: 'Optimized for professional work and long-running agents',
+    description: 'Small, fast, cost-efficient model for simpler coding tasks',
   },
 ];
 
@@ -269,7 +264,7 @@ export function ModelPicker({
                     setOpen(false);
                   }
                 }}
-                placeholder={agent === 'codex' ? 'e.g. gpt-5.4-codex' : 'e.g. claude-opus-5'}
+                placeholder={agent === 'codex' ? 'e.g. gpt-5.3-codex' : 'e.g. claude-opus-5'}
                 spellCheck={false}
                 autoComplete="off"
                 className="flex-1 min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[11px] text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-accent)]"
