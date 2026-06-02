@@ -24,6 +24,7 @@ import {
 import { checkAgentClis } from './services/cli-check.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
+import { startEventLoopMonitor } from './services/event-loop-monitor.js';
 
 // Guard the WebSocket routes against cross-site hijacking. The terminal
 // socket is effectively local RCE, so a malicious page the user happens to
@@ -54,6 +55,13 @@ export async function createApp() {
   const app = Fastify({ logger: true, bodyLimit: 100 * 1024 * 1024 });
 
   getDb();
+
+  // Warn when something blocks the event loop for >200ms — better-sqlite3
+  // is synchronous, so a runaway query silently serializes every fetch +
+  // WS handshake behind it. Skipped under tests to keep them quiet.
+  if (process.env.NODE_ENV !== 'test') {
+    startEventLoopMonitor();
+  }
 
   // On shutdown, deterministically tear down terminal shells + anything they
   // spawned. app.close() awaits this, and server.ts's shutdown awaits

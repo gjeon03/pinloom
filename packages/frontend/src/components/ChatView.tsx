@@ -239,52 +239,45 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
 
   // Mention autocomplete: fetch the team this session orchestrates (if
-  // any) so we can suggest workers when the user types "@". Refetches
-  // when the user mutates team membership in the Teams page (we listen
-  // to the same window event SessionTabs uses).
-  const [mentionWorkers, setMentionWorkers] = useState<MentionWorker[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    async function reload() {
-      try {
-        const [teams, sessions, projects] = await Promise.all([
-          api.listTeams(),
-          api.listAllSessions(),
-          api.listProjects(),
-        ]);
-        if (cancelled) return;
-        const team = teams.find((t) => t.orchestratorSessionId === session.id);
-        if (!team) {
-          setMentionWorkers([]);
-          return;
-        }
-        const sessionsById = new Map(sessions.map((s) => [s.id, s]));
-        const projectsById = new Map(projects.map((p) => [p.id, p]));
-        setMentionWorkers(
-          team.members.map((m) => {
-            const s = sessionsById.get(m.sessionId) ?? null;
-            const project = s ? projectsById.get(s.projectId) : null;
-            return {
-              member: m,
-              session: s,
-              projectName: project?.name ?? null,
-            };
-          }),
-        );
-      } catch {
-        if (!cancelled) setMentionWorkers([]);
-      }
-    }
-    reload();
-    function onTeamsChanged() {
-      reload();
-    }
-    window.addEventListener('pinloom:teams-changed', onTeamsChanged);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('pinloom:teams-changed', onTeamsChanged);
-    };
-  }, [session.id]);
+  // any) so we can suggest workers when the user types "@". Goes through
+  // SWR so multiple ChatView instances share one inflight per endpoint
+  // (raw fetches previously bypassed dedupingInterval and stacked up on
+  // every `pinloom:teams-changed` event). sessions/projects are gated
+  // behind `team` — most sessions aren't orchestrators and don't need
+  // them at all. The window event is now handled centrally in App.tsx,
+  // which calls `mutate(cacheKeys.teams())` to refresh every subscriber
+  // in one shared fetch.
+  // Fetchers are wrapped in arrow functions because SWR invokes the
+  // fetcher with the key tuple as its first argument — passing the raw
+  // `api.listTeams` would (silently today, loudly tomorrow if the signature
+  // grows options) hand `['teams']` to the API client.
+  const { data: teams = [] } = useSWR(cacheKeys.teams(), () => api.listTeams());
+  const team = useMemo(
+    () => teams.find((t) => t.orchestratorSessionId === session.id) ?? null,
+    [teams, session.id],
+  );
+  const { data: allSessionsForMentions } = useSWR(
+    team ? cacheKeys.allSessions() : null,
+    () => api.listAllSessions(),
+  );
+  const { data: projectsForMentions } = useSWR(
+    team ? cacheKeys.projects() : null,
+    () => api.listProjects(),
+  );
+  const mentionWorkers = useMemo<MentionWorker[]>(() => {
+    if (!team || !allSessionsForMentions || !projectsForMentions) return [];
+    const sessionsById = new Map(allSessionsForMentions.map((s) => [s.id, s]));
+    const projectsById = new Map(projectsForMentions.map((p) => [p.id, p]));
+    return team.members.map((m) => {
+      const s = sessionsById.get(m.sessionId) ?? null;
+      const project = s ? projectsById.get(s.projectId) : null;
+      return {
+        member: m,
+        session: s,
+        projectName: project?.name ?? null,
+      };
+    });
+  }, [team, allSessionsForMentions, projectsForMentions]);
 
   // Mention popup state. `range` is the [start, end) span in `input`
   // currently being mentioned; `query` is the lowercased text after the

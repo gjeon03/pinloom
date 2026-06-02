@@ -9,4 +9,15 @@ export const cacheKeys = {
     ['session-queue', sessionId] as const,
   sessionPins: (sessionId: string) => ['session-pins', sessionId] as const,
   runStatus: (sessionId: string) => ['run-status', sessionId] as const,
+  // Cross-page lookups. Centralized so any component fetching them shares
+  // SWR's deduped inflight + window-focus revalidation, instead of each
+  // mount kicking off its own raw fetch (the thundering-herd cause of the
+  // 1s+ latency burst when several ChatView/SessionTabs were mounted).
+  //
+  // TODO: migrate the remaining raw callers to these keys so they share
+  // the dedup window — SessionPickerModal, TeamsPage, TeamCanvasPage,
+  // SessionTabs's worker-picker (~line 1248), AppShell's project list.
+  teams: () => ['teams'] as const,
+  allSessions: () => ['sessions-all'] as const,
+  projects: () => ['projects'] as const,
 };
