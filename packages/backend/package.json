@@ -14,7 +14,7 @@
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.96",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "@fastify/cors": "^10.0.2",
     "@fastify/websocket": "^11.0.2",
     "@pinloom/mcp-server": "workspace:*",

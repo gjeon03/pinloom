@@ -21,7 +21,7 @@ importers:
   packages/backend:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.96
+        specifier: ^0.2.114
         version: 0.2.114(zod@4.3.6)
       '@fastify/cors':
         specifier: ^10.0.2
