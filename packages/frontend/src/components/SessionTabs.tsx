@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import useSWR, { mutate as globalMutate } from 'swr';
 import {
   ChevronDown,
   Crown,
@@ -25,6 +26,7 @@ import type {
   Team,
 } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { cacheKeys } from '../api/cacheKeys.js';
 import { AgentBadge } from './AgentBadge.js';
 import { Tooltip } from './Tooltip.js';
 
@@ -258,31 +260,11 @@ export function SessionTabs({
   const navigate = useNavigate();
 
   // Team membership lookup so we can render "@alias" / "orchestrator"
-  // badges next to tab titles. Refetched whenever the user creates or
-  // changes a team via the same window event the AppShell sidebar uses.
-  const [teams, setTeams] = useState<Team[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    function reload() {
-      api
-        .listTeams()
-        .then((t) => {
-          if (!cancelled) setTeams(t);
-        })
-        .catch(() => {
-          if (!cancelled) setTeams([]);
-        });
-    }
-    reload();
-    function onTeamsChanged() {
-      reload();
-    }
-    window.addEventListener('pinloom:teams-changed', onTeamsChanged);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('pinloom:teams-changed', onTeamsChanged);
-    };
-  }, []);
+  // badges next to tab titles. The `pinloom:teams-changed` window event
+  // (dispatched on team mutation) is handled centrally in App.tsx which
+  // calls `mutate(cacheKeys.teams())` — so all SessionTabs/ChatView
+  // instances refresh from one shared inflight instead of N raw fetches.
+  const { data: teams = [] } = useSWR(cacheKeys.teams(), () => api.listTeams());
   const rolesBySessionId = useMemo(() => buildTeamRoles(teams), [teams]);
 
   // One-shot health probe to know whether the Codex CLI is on PATH.
@@ -1040,9 +1022,17 @@ export function SessionTabs({
           onClose={() => setCreateTeamModal(null)}
           onCreated={(team) => {
             setCreateTeamModal(null);
-            // Refresh the role badges in this strip and any other surface
-            // that watches for team changes (sidebar, TeamsPage, etc.).
-            setTeams((prev) => [...prev, team]);
+            // Optimistically append to the shared SWR cache so badges
+            // appear instantly. The subsequent `pinloom:teams-changed`
+            // dispatch makes App.tsx's central listener revalidate the
+            // same key — safe because better-sqlite3 is synchronous, so
+            // the POST that produced `team` is already durably visible
+            // before this handler runs (no read-your-write race).
+            void globalMutate(
+              cacheKeys.teams(),
+              (prev: Team[] | undefined) => [...(prev ?? []), team],
+              { revalidate: false },
+            );
             window.dispatchEvent(new Event('pinloom:teams-changed'));
           }}
         />
