@@ -41,7 +41,7 @@ function terminalKey(projectId: string, localId: string): string {
 
 function loadProjectCwd(projectId: string): string | null {
   const row = getDb()
-    .prepare('SELECT cwd FROM projects WHERE id = ? AND deleted_at IS NULL')
+    .prepare('SELECT cwd FROM projects WHERE id = ?')
     .get(projectId) as { cwd: string } | undefined;
   return row?.cwd ?? null;
 }

@@ -92,7 +92,7 @@ export async function projectNotepadRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const projectId = req.params.projectId;
       const project = db
-        .prepare('SELECT id FROM projects WHERE id = ? AND deleted_at IS NULL')
+        .prepare('SELECT id FROM projects WHERE id = ?')
         .get(projectId);
       if (!project) {
         reply.code(404);
