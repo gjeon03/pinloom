@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, BookPlus, Check, CircleAlert, Loader2, MessageSquare, Sparkles, X } from 'lucide-react';
 import {
@@ -37,6 +37,10 @@ function statusIcon(item: NotificationItem) {
   return <CircleAlert size={12} className="text-red-400" />;
 }
 
+type RecentFilter = 'all' | 'unread' | 'read';
+
+const PAGE_SIZE = 20;
+
 export function NotificationCenter() {
   const {
     items,
@@ -49,7 +53,11 @@ export function NotificationCenter() {
   } = useNotifications();
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<RecentFilter>('all');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   // Chat-done notifications jump to the session's tab; everything else opens
@@ -90,6 +98,47 @@ export function NotificationCenter() {
   const running = items.filter((it) => it.status === 'running');
   const recent = items.filter((it) => it.status !== 'running');
 
+  const filteredRecent = useMemo(() => {
+    if (filter === 'all') return recent;
+    if (filter === 'read') return recent.filter((it) => it.read);
+    return recent.filter((it) => !it.read);
+  }, [recent, filter]);
+  const visibleRecent = filteredRecent.slice(0, visibleCount);
+  const hasMoreRecent = filteredRecent.length > visibleCount;
+
+  // Switching filters or closing the dropdown resets the slide window so
+  // a stray `visibleCount` doesn't leak across views — opening again starts
+  // at PAGE_SIZE every time.
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [filter, open]);
+
+  // Infinite scroll: when the sentinel below the last visible row enters
+  // the dropdown's scroll area, request +PAGE_SIZE more. The effect deps
+  // include `visibleCount` so the observer is torn down + re-created after
+  // every bump — that resets the observer's intersection state so a
+  // sentinel that's still on-screen after the new rows render won't keep
+  // re-firing in a cascade. The setter also clamps to filteredRecent.length
+  // as a defense-in-depth bound.
+  useEffect(() => {
+    if (!open || !hasMoreRecent) return;
+    const sentinel = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!sentinel || !root) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((n) =>
+            Math.min(n + PAGE_SIZE, filteredRecent.length),
+          );
+        }
+      },
+      { root, rootMargin: '0px 0px 80px 0px' },
+    );
+    obs.observe(sentinel);
+    return () => obs.disconnect();
+  }, [open, hasMoreRecent, filteredRecent.length, visibleCount]);
+
   const showBadge = runningCount > 0 || unreadCount > 0;
   const badgeCount = runningCount + unreadCount;
   const selectedItem = selectedId ? items.find((it) => it.id === selectedId) ?? null : null;
@@ -123,21 +172,42 @@ export function NotificationCenter() {
         </button>
 
         {open && (
-          <div className="absolute top-full right-0 mt-2 w-80 max-h-[70vh] overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl">
-            <header className="sticky top-0 bg-[var(--color-surface-2)]/95 backdrop-blur-sm border-b border-[var(--color-border)] px-3 py-2 flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-                Notifications
-              </span>
-              {recent.length > 0 && (
-                <button
-                  type="button"
-                  onClick={clearFinished}
-                  className="text-[10px] text-[var(--color-ink-muted)] hover:text-red-400"
-                >
-                  Clear finished
-                </button>
-              )}
-            </header>
+          <div
+            ref={scrollRef}
+            className="absolute top-full right-0 mt-2 w-80 max-h-[70vh] overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl"
+          >
+            <div className="sticky top-0 z-10 bg-[var(--color-surface-2)]/95 backdrop-blur-sm border-b border-[var(--color-border)]">
+              <header className="px-3 py-2 flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+                  Notifications
+                </span>
+                {recent.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearFinished}
+                    className="text-[10px] text-[var(--color-ink-muted)] hover:text-red-400"
+                  >
+                    Clear finished
+                  </button>
+                )}
+              </header>
+              <div className="px-3 py-1.5 border-t border-[var(--color-border)]/40 flex gap-1">
+                {(['all', 'unread', 'read'] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setFilter(f)}
+                    className={`text-[10px] px-2 py-0.5 rounded ${
+                      filter === f
+                        ? 'bg-[var(--color-accent)] text-black'
+                        : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+                    }`}
+                  >
+                    {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : 'Read'}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             {items.length === 0 && (
               <p className="px-3 py-6 text-center text-xs text-[var(--color-ink-muted)]">
@@ -159,15 +229,34 @@ export function NotificationCenter() {
             )}
 
             {recent.length > 0 && (
-              <Section title={`Recent (${recent.length})`}>
-                {recent.map((it) => (
-                  <NotificationRow
-                    key={it.id}
-                    item={it}
-                    onClick={() => openItem(it)}
-                    onDismiss={() => dismiss(it.id)}
-                  />
-                ))}
+              <Section
+                title={
+                  filter === 'all'
+                    ? `Recent (${recent.length})`
+                    : `Recent (${filteredRecent.length} / ${recent.length})`
+                }
+              >
+                {filteredRecent.length === 0 ? (
+                  <li className="px-3 py-4 text-center text-[10px] text-[var(--color-ink-muted)]">
+                    No notifications match this filter.
+                  </li>
+                ) : (
+                  <>
+                    {visibleRecent.map((it) => (
+                      <NotificationRow
+                        key={it.id}
+                        item={it}
+                        onClick={() => openItem(it)}
+                        onDismiss={() => dismiss(it.id)}
+                      />
+                    ))}
+                    {hasMoreRecent && (
+                      <li>
+                        <div ref={sentinelRef} className="h-2" aria-hidden="true" />
+                      </li>
+                    )}
+                  </>
+                )}
               </Section>
             )}
           </div>
@@ -205,12 +294,28 @@ function NotificationRow({
   onDismiss: () => void;
 }) {
   const ts = item.finishedAt ?? item.startedAt;
+  // Visited-state styling is reserved for agent-turn notifications: those
+  // are the ones whose read flag tracks "did the user actually look at
+  // that agent's session". Other kinds collapse to read on bell open and
+  // keep the original visual weight.
+  const isAgent = item.kind === 'chat-done';
+  const unread = isAgent && !item.read;
   return (
     <li className="group relative">
+      {isAgent && (
+        <span
+          className={`absolute left-0 top-0 bottom-0 w-[2px] ${
+            unread ? 'bg-[var(--color-accent)]' : 'bg-transparent'
+          }`}
+          aria-hidden="true"
+        />
+      )}
       <button
         type="button"
         onClick={onClick}
-        className="w-full text-left px-3 py-2 hover:bg-[var(--color-surface-3)] flex items-start gap-2"
+        className={`w-full text-left px-3 py-2 hover:bg-[var(--color-surface-3)] flex items-start gap-2 ${
+          isAgent ? 'pl-[14px]' : ''
+        }`}
       >
         <div className="shrink-0 mt-0.5 text-[var(--color-ink-muted)]">
           {kindIcon(item.kind)}
@@ -218,7 +323,29 @@ function NotificationRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 text-xs">
             {statusIcon(item)}
-            <span className="font-medium truncate">{item.title}</span>
+            <span
+              className={`truncate ${
+                isAgent
+                  ? unread
+                    ? 'font-semibold text-[var(--color-ink)]'
+                    : 'font-normal text-[var(--color-ink-muted)]'
+                  : 'font-medium'
+              }`}
+            >
+              {item.title}
+            </span>
+            {isAgent && (
+              <span
+                className={`shrink-0 text-[9px] leading-none px-1.5 py-[2px] rounded-full ${
+                  unread
+                    ? 'bg-[var(--color-accent)] text-black'
+                    : 'border border-[var(--color-border)] text-[var(--color-ink-muted)]'
+                }`}
+                aria-label={unread ? 'unvisited' : 'visited'}
+              >
+                {unread ? 'Unvisited' : 'Visited'}
+              </span>
+            )}
           </div>
           {(item.meta?.sessionTitle || item.meta?.projectName) && (
             <div className="text-[10px] text-[var(--color-ink-muted)] truncate">
