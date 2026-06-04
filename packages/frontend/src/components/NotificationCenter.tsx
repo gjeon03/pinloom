@@ -203,7 +203,7 @@ export function NotificationCenter() {
                         : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
                     }`}
                   >
-                    {f === 'all' ? '전체' : f === 'unread' ? '안 읽음' : '읽음'}
+                    {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : 'Read'}
                   </button>
                 ))}
               </div>
@@ -343,7 +343,7 @@ function NotificationRow({
                 }`}
                 aria-label={unread ? 'unvisited' : 'visited'}
               >
-                {unread ? '미확인' : '확인됨'}
+                {unread ? 'Unvisited' : 'Visited'}
               </span>
             )}
           </div>
