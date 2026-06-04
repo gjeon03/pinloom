@@ -1,10 +1,16 @@
 // Interactive terminals backed by node-pty. Terminals are per-project (a
 // project can hold several — the bottom panel adds them with "+"), each
 // keyed by `${projectId}::${localId}` and spawned in the project cwd. The
-// pty is kept alive across websocket disconnects (reloads, tab switches)
-// and reaped after an idle window; on reconnect a bounded scrollback buffer
-// is replayed so it looks continuous. Separate from ws/hub (broadcast-only)
-// because a terminal also reads client keystrokes.
+// pty stays alive across every websocket disconnect (reload, tab switch,
+// bottom-panel collapse) until the user explicitly closes the tab or the
+// backend shuts down. On reconnect a bounded scrollback buffer is replayed
+// so it looks continuous. Host-resource bounds come from MAX_TERMINALS, not
+// from a time-based reaper — a long-running `pnpm dev` that the user has
+// collapsed out of view must survive an open-ended AI chat window without
+// being killed underneath them.
+//
+// Separate from ws/hub (broadcast-only) because a terminal also reads
+// client keystrokes.
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -13,7 +19,6 @@ import type { IPty } from 'node-pty';
 import { getDb } from '../db/connection.js';
 
 const SCROLLBACK_BYTES = 200 * 1024;
-const IDLE_REAP_MS = 10 * 60 * 1000;
 // Ceiling on concurrent live terminals across all projects — each is a real
 // shell process plus scrollback, so this bounds host resources if something
 // (a bug, a runaway client) tries to spawn without limit. Far above any
@@ -23,12 +28,11 @@ export const MAX_TERMINALS = 50;
 interface TerminalSession {
   pty: IPty;
   buffer: string;
-  idleTimer: NodeJS.Timeout | null;
   onData: ((data: string) => void) | null;
   onExit: ((code: number) => void) | null;
-  // Bumped on every attach so a superseded consumer's detach() becomes a
-  // no-op — otherwise a second socket attaching to the same terminal would
-  // get reaped when the first socket later closes.
+  // Bumped on every attach so a superseded consumer's detach() is a no-op
+  // for callback-clearing — otherwise a second socket attaching to the same
+  // terminal could have its callbacks wiped by the first socket's close.
   attachId: number;
 }
 
@@ -111,7 +115,6 @@ export function attachTerminal(
     const created: TerminalSession = {
       pty: child,
       buffer: notice,
-      idleTimer: null,
       onData: null,
       onExit: null,
       attachId: 0,
@@ -122,16 +125,11 @@ export function attachTerminal(
     });
     child.onExit(({ exitCode }) => {
       created.onExit?.(exitCode);
-      if (created.idleTimer) clearTimeout(created.idleTimer);
       sessions.delete(key);
     });
     sessions.set(key, created);
     session = created;
   } else {
-    if (session.idleTimer) {
-      clearTimeout(session.idleTimer);
-      session.idleTimer = null;
-    }
     try {
       session.pty.resize(cols, rows);
     } catch {
@@ -164,17 +162,11 @@ export function attachTerminal(
     detach() {
       // A newer consumer has taken over this terminal — let it keep the pty.
       if (bound.attachId !== myAttachId) return;
+      // Disconnecting the socket only severs the consumer callbacks; the
+      // pty (and whatever is running inside it) keeps going until the user
+      // closes the tab via killTerminal() or the backend shuts down.
       bound.onData = null;
       bound.onExit = null;
-      if (bound.idleTimer) clearTimeout(bound.idleTimer);
-      bound.idleTimer = setTimeout(() => {
-        try {
-          bound.pty.kill();
-        } catch {
-          // best-effort
-        }
-        sessions.delete(key);
-      }, IDLE_REAP_MS);
     },
   };
   return { ok: true, handle };
@@ -184,7 +176,6 @@ export function killTerminal(projectId: string, localId: string): void {
   const key = terminalKey(projectId, localId);
   const session = sessions.get(key);
   if (!session) return;
-  if (session.idleTimer) clearTimeout(session.idleTimer);
   try {
     session.pty.kill();
   } catch {
@@ -205,10 +196,7 @@ export function killTerminal(projectId: string, localId: string): void {
  * SIGHUP / daemonizes itself can still survive — that's inherent.
  */
 export async function killAllTerminals(): Promise<void> {
-  const ptys = [...sessions.values()].map((s) => {
-    if (s.idleTimer) clearTimeout(s.idleTimer);
-    return s.pty;
-  });
+  const ptys = [...sessions.values()].map((s) => s.pty);
   sessions.clear();
   if (ptys.length === 0) return;
 
