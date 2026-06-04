@@ -59,6 +59,13 @@ interface NotificationContextValue {
   dismiss(id: string): void;
   markRead(id: string): void;
   markAllRead(): void;
+  /**
+   * Mark every `chat-done` notification for the given session as read.
+   * Called by ProjectPage when a session becomes the foreground tab —
+   * "visiting the agent" is what counts as confirming its notifications,
+   * not opening the bell.
+   */
+  markSessionRead(sessionId: string): void;
   clearFinished(): void;
   runningCount: number;
   unreadCount: number;
@@ -66,7 +73,7 @@ interface NotificationContextValue {
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
-const MAX_HISTORY = 50;
+const MAX_HISTORY = 200;
 
 // Deterministic id derived from the backend log entry. Same projectId +
 // startedAt always maps to the same notification, so reload + initial
@@ -155,7 +162,37 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const markAllRead = useCallback(() => {
-    setItems((prev) => prev.map((it) => ({ ...it, read: true })));
+    // Opening the bell counts as "seen" for ambient notifications
+    // (wiki-sync, wiki-analyze, generic) but NOT for `chat-done`: those
+    // only flip to read when the user actually navigates to that agent's
+    // session via `markSessionRead`. Otherwise the user can't tell which
+    // agents they still owe attention to just by looking at the list.
+    setItems((prev) =>
+      prev.map((it) => (it.kind === 'chat-done' ? it : { ...it, read: true })),
+    );
+  }, []);
+
+  const markSessionRead = useCallback((sessionId: string) => {
+    setItems((prev) => {
+      // Idempotent: if no chat-done for this session is currently unread,
+      // return the same array reference so React bails on the state update.
+      // The visibility listener in ProjectPage calls this on every tab show,
+      // and the active-session effect calls it on every project switch — a
+      // non-bailing reducer here would churn renders downstream.
+      let mutated = false;
+      const next = prev.map((it) => {
+        if (
+          it.kind === 'chat-done' &&
+          it.meta?.sessionId === sessionId &&
+          !it.read
+        ) {
+          mutated = true;
+          return { ...it, read: true };
+        }
+        return it;
+      });
+      return mutated ? next : prev;
+    });
   }, []);
 
   const clearFinished = useCallback(() => {
@@ -252,6 +289,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       dismiss,
       markRead,
       markAllRead,
+      markSessionRead,
       clearFinished,
       runningCount,
       unreadCount,
@@ -265,6 +303,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       dismiss,
       markRead,
       markAllRead,
+      markSessionRead,
       clearFinished,
       runningCount,
       unreadCount,

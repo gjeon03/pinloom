@@ -9,6 +9,7 @@ import type {
 import { api, projectNotepadApi } from '../api/client.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import { setActiveSessionId } from '../stores/activeSession.js';
+import { useNotifications } from '../stores/notifications.js';
 import {
   SessionTabs,
   type InlineCanvasTab,
@@ -53,6 +54,7 @@ export function ProjectPage({
   // own shapes for everything else (data fetching, persistence); this
   // array only governs the strip order.
   const [tabOrder, setTabOrder] = useState<TabRef[]>([]);
+  const { markSessionRead } = useNotifications();
 
   function persistCanvasTabs(projectId: string, tabs: InlineCanvasTab[]) {
     try {
@@ -282,15 +284,32 @@ export function ProjectPage({
   }, [project.id, activeSession?.id]);
 
   // Publish which session is visible in the foreground so the chat-done
-  // notifier can suppress notifications for the chat you're looking at.
+  // notifier can suppress notifications for the chat you're looking at,
+  // and confirm any pending agent notifications for that session — landing
+  // on the tab is what counts as "I've checked this agent".
+  const visibleSessionId =
+    activeCanvasTeamId === null && activeNotepadId === null
+      ? activeSession?.id ?? null
+      : null;
   useEffect(() => {
-    const visible =
-      activeCanvasTeamId === null && activeNotepadId === null
-        ? activeSession?.id ?? null
-        : null;
-    setActiveSessionId(visible);
+    setActiveSessionId(visibleSessionId);
+    if (visibleSessionId) markSessionRead(visibleSessionId);
     return () => setActiveSessionId(null);
-  }, [activeSession?.id, activeCanvasTeamId, activeNotepadId]);
+  }, [visibleSessionId, markSessionRead]);
+
+  // Cover the "session was foreground but window hidden when the agent
+  // finished" case: the notification was created with read=false and the
+  // tab-switch effect above didn't re-run because the active session id
+  // never changed. When the user returns to the window, retroactively
+  // confirm any chat-done items for the session they're already on.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== 'visible') return;
+      if (visibleSessionId) markSessionRead(visibleSessionId);
+    }
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [visibleSessionId, markSessionRead]);
 
   // Per-session pins via SWR — the cache survives session tab switches
   // so going back to a previously visited session renders pins from memory
