@@ -5,7 +5,12 @@
 // `session_id`) on stdin. We install — only in a temp `--settings` file, never
 // the user's global ~/.claude/settings.json — a Stop hook whose command forwards
 // that payload to this server. awaitStop(sessionId) resolves when it arrives.
+//
+// Hardening: bound to loopback only, ephemeral port, 1 MB body cap, and a random
+// per-server token baked into the URL path so another local process can't forge
+// a turn completion (the token only travels through the temp settings command).
 
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -15,7 +20,7 @@ interface PendingWaiter {
 }
 
 export interface StopHookServer {
-  /** POST URL the Stop-hook forwarder should hit. */
+  /** POST URL the Stop-hook forwarder should hit (carries the secret token). */
   url(): string;
   /**
    * Resolve when the next Stop hook for `sessionId` fires. If a hook already
@@ -23,37 +28,47 @@ export interface StopHookServer {
    * resolves immediately. Rejects on abort or timeout.
    */
   awaitStop(sessionId: string, signal: AbortSignal, timeoutMs?: number): Promise<void>;
+  /** Drop a session's bookkeeping (call on dispose) so the maps don't leak. */
+  release(sessionId: string): void;
   close(): Promise<void>;
 }
 
 export async function startStopHookServer(): Promise<StopHookServer> {
   // One waiter at a time per session (turns are serialized), but we keep a
-  // queue + a "fired before armed" counter to make the arm/fire order
-  // race-free.
+  // queue + a "fired before armed" flag to make the arm/fire order race-free.
   const waiters = new Map<string, PendingWaiter[]>();
-  const firedAhead = new Map<string, number>();
+  // Capped at one buffered pre-arm fire per session: a real Stop hook fires at
+  // the end of every turn, so an *uncapped* counter would let stale completions
+  // accumulate and a later arm would consume turn N-1's signal for turn N.
+  const firedAhead = new Set<string>();
+  // Random token; only the spawned claude (via temp settings) learns it.
+  const token = randomUUID();
+  const stopPath = `/stop/${token}`;
 
   function deliver(sessionId: string): void {
     const q = waiters.get(sessionId);
     if (q && q.length > 0) {
-      const w = q.shift()!;
-      w.resolve();
+      q.shift()!.resolve();
       return;
     }
-    firedAhead.set(sessionId, (firedAhead.get(sessionId) ?? 0) + 1);
+    firedAhead.add(sessionId);
   }
 
   const server: Server = createServer((req, res) => {
-    if (req.method !== 'POST') {
-      res.statusCode = 405;
+    if (req.method !== 'POST' || req.url !== stopPath) {
+      res.statusCode = 404;
       res.end();
       return;
     }
     let body = '';
-    req.on('data', (c) => {
+    let length = 0;
+    req.on('data', (c: Buffer | string) => {
+      length += typeof c === 'string' ? Buffer.byteLength(c) : c.length;
+      if (length > 1_000_000) {
+        req.destroy();
+        return;
+      }
       body += c;
-      // Guard against an unbounded body (hook payloads are tiny).
-      if (body.length > 1_000_000) req.destroy();
     });
     req.on('end', () => {
       let sessionId = '';
@@ -63,7 +78,13 @@ export async function startStopHookServer(): Promise<StopHookServer> {
       } catch {
         // ignore malformed payloads
       }
-      if (sessionId) deliver(sessionId);
+      if (sessionId) {
+        deliver(sessionId);
+      } else {
+        // A renamed field in a future CLI would silently time out every turn —
+        // surface it once instead of leaving the user staring at a 5-min hang.
+        console.warn('[claude-pty] Stop hook POST had no session_id; ignoring');
+      }
       res.statusCode = 204;
       res.end();
     });
@@ -80,14 +101,13 @@ export async function startStopHookServer(): Promise<StopHookServer> {
 
   return {
     url(): string {
-      return `http://127.0.0.1:${port}/stop`;
+      return `http://127.0.0.1:${port}${stopPath}`;
     },
 
     awaitStop(sessionId, signal, timeoutMs = 5 * 60_000): Promise<void> {
       // Consume a hook that fired before we armed.
-      const ahead = firedAhead.get(sessionId) ?? 0;
-      if (ahead > 0) {
-        firedAhead.set(sessionId, ahead - 1);
+      if (firedAhead.has(sessionId)) {
+        firedAhead.delete(sessionId);
         return Promise.resolve();
       }
       if (signal.aborted) return Promise.reject(new Error('aborted'));
@@ -112,6 +132,7 @@ export async function startStopHookServer(): Promise<StopHookServer> {
           if (list) {
             const i = list.indexOf(waiter);
             if (i !== -1) list.splice(i, 1);
+            if (list.length === 0) waiters.delete(sessionId);
           }
         }
         function done() {
@@ -125,12 +146,22 @@ export async function startStopHookServer(): Promise<StopHookServer> {
       });
     },
 
+    release(sessionId: string): void {
+      firedAhead.delete(sessionId);
+      const q = waiters.get(sessionId);
+      if (q) {
+        for (const w of q) w.reject(new Error('session released'));
+        waiters.delete(sessionId);
+      }
+    },
+
     close(): Promise<void> {
       return new Promise<void>((resolve) => {
         for (const [, q] of waiters) {
           for (const w of q) w.reject(new Error('server closed'));
         }
         waiters.clear();
+        firedAhead.clear();
         server.close(() => resolve());
       });
     },

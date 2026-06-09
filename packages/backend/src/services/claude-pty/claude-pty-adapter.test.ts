@@ -135,6 +135,43 @@ describe('createClaudePtyAdapter', () => {
     expect(events.at(-1)).toEqual({ type: 'turn_complete' });
   });
 
+  it('ends cleanly (no throw) when aborted mid-turn, and disposes', async () => {
+    // A session whose runTurn blocks until abort, then rejects — mirrors the
+    // real awaitStop rejecting on abort. The generator must end cleanly, not
+    // surface the rejection to the consumer.
+    class AbortingSession implements ClaudeSession {
+      disposed = false;
+      sessionId() {
+        return 'mock';
+      }
+      runTurn(_p: UserPrompt, signal: AbortSignal): Promise<JsonlLine[]> {
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      }
+      async dispose(): Promise<void> {
+        this.disposed = true;
+      }
+    }
+    const session = new AbortingSession();
+    const abortController = new AbortController();
+    const adapter = createClaudePtyAdapter(makeFactory(session));
+    const run = adapter.run(makeArgs({ abortController }));
+
+    const consume = (async () => {
+      const evs: NormalizedEvent[] = [];
+      for await (const ev of run.events) evs.push(ev);
+      return evs;
+    })();
+
+    await new Promise((r) => setTimeout(r, 20));
+    abortController.abort();
+
+    const events = await consume; // resolves (does not reject)
+    expect(session.disposed).toBe(true);
+    expect(events.every((e) => e.type === 'session_id')).toBe(true);
+  });
+
   it('passes resume + concatenated system prompt to the factory', async () => {
     const session = new MockSession();
     const factory = makeFactory(session);

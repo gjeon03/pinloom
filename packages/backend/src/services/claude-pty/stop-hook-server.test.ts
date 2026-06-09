@@ -48,6 +48,30 @@ describe('startStopHookServer', () => {
     await expect(waited).rejects.toThrow(/aborted/);
   });
 
+  it('release() rejects a pending waiter and drops bookkeeping', async () => {
+    server = await startStopHookServer();
+    const waited = server.awaitStop('sess-R', new AbortController().signal);
+    server.release('sess-R');
+    await expect(waited).rejects.toThrow(/released/);
+  });
+
+  it('ignores POSTs to the wrong token path', async () => {
+    server = await startStopHookServer();
+    const ac = new AbortController();
+    const waited = server.awaitStop('sess-T', ac.signal);
+    // forge a POST to a guessed path without the token
+    await fetch('http://127.0.0.1:' + new URL(server.url()).port + '/stop/wrong', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: 'sess-T' }),
+    });
+    let settled = false;
+    void waited.then(() => (settled = true)).catch(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(settled).toBe(false);
+    ac.abort();
+    await waited.catch(() => {});
+  });
+
   it('rejects on timeout', async () => {
     server = await startStopHookServer();
     await expect(

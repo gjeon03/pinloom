@@ -65,7 +65,16 @@ export function createClaudePtyAdapter(factory: ClaudeSessionFactory): AgentAdap
               if (sid) yield { type: 'session_id', id: sid };
             }
 
-            const turnLines = await session.runTurn(prompt, args.abortController.signal);
+            let turnLines;
+            try {
+              turnLines = await session.runTurn(prompt, args.abortController.signal);
+            } catch (err) {
+              // abort/close make awaitStop reject — that's an expected, clean
+              // end of the run (matches the SDK/Codex adapters' break-on-abort),
+              // not a failure to propagate. A genuine error still surfaces.
+              if (aborted) return;
+              throw err;
+            }
             if (aborted) return;
 
             // session_id was already emitted once on start; per-turn mapping

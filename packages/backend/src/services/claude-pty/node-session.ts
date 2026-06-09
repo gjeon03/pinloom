@@ -56,12 +56,14 @@ function cleanEnv(): Record<string, string> {
   return env;
 }
 
-function materializeImages(images: ImageInput[], dir: string): string[] {
+function materializeImages(images: ImageInput[], dir: string, turn: number): string[] {
   const paths: string[] = [];
   for (let i = 0; i < images.length; i++) {
     const img = images[i];
     const ext = img.mimeType.split('/')[1] ?? 'png';
-    const file = path.join(dir, `img-${i}.${ext}`);
+    // Per-turn prefix so a later turn's images can't clobber an earlier turn's
+    // files in the session-lifetime temp dir.
+    const file = path.join(dir, `img-${turn}-${i}.${ext}`);
     writeFileSync(file, Buffer.from(img.base64, 'base64'));
     paths.push(file);
   }
@@ -205,7 +207,8 @@ export function createNodeClaudeSessionFactory(
     }
 
     const sessionFile = sessionFilePath(spec.cwd, sessionId, home);
-    let disposed = false;
+    let disposeP: Promise<void> | null = null;
+    let turnSeq = 0;
 
     return {
       sessionId(): string {
@@ -219,7 +222,7 @@ export function createNodeClaudeSessionFactory(
         // the Stop hook before we're listening.
         const stopped = server.awaitStop(sessionId, signal);
 
-        const imagePaths = materializeImages(prompt.images, tmp);
+        const imagePaths = materializeImages(prompt.images, tmp, turnSeq++);
         const text =
           imagePaths.length > 0
             ? `${prompt.text} ${imagePaths.map((p) => `@${p}`).join(' ')}`
@@ -231,15 +234,21 @@ export function createNodeClaudeSessionFactory(
         return extractTurnLines(readLines(sessionFile), checkpoint);
       },
 
-      async dispose(): Promise<void> {
-        if (disposed) return;
-        disposed = true;
-        await killGroup(child);
-        try {
-          rmSync(tmp, { recursive: true, force: true });
-        } catch {
-          // best-effort
-        }
+      dispose(): Promise<void> {
+        // Memoize the in-flight teardown so a concurrent caller (abort listener
+        // + events() finally both fire dispose) actually awaits completion
+        // instead of returning before killGroup's grace period elapses.
+        if (disposeP) return disposeP;
+        disposeP = (async () => {
+          server.release(sessionId);
+          await killGroup(child);
+          try {
+            rmSync(tmp, { recursive: true, force: true });
+          } catch {
+            // best-effort
+          }
+        })();
+        return disposeP;
       },
     };
     },

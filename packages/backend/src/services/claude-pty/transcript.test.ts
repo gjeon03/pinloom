@@ -79,6 +79,15 @@ describe('transcript fs helpers', () => {
     expect(found).toBe(created);
   });
 
+  it('discoverNewSessionFile throws when >1 new transcript appears (ambiguous)', async () => {
+    const before = listSessionFiles(cwd, home);
+    writeSession('one', [{ type: 'user', uuid: 'u1' }]);
+    writeSession('two', [{ type: 'user', uuid: 'u2' }]);
+    await expect(
+      discoverNewSessionFile(cwd, before, { home, timeoutMs: 1000 }),
+    ).rejects.toThrow(/ambiguous/);
+  });
+
   it('discoverNewSessionFile throws on timeout when nothing new appears', async () => {
     const before = listSessionFiles(cwd, home);
     await expect(

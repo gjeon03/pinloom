@@ -64,8 +64,16 @@ export async function discoverNewSessionFile(
   const pollMs = opts.pollMs ?? 100;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    for (const f of listSessionFiles(cwd, opts.home)) {
-      if (!before.has(f)) return f;
+    const fresh = [...listSessionFiles(cwd, opts.home)].filter((f) => !before.has(f));
+    if (fresh.length === 1) return fresh[0];
+    if (fresh.length > 1) {
+      // Another claude process (a second pinloom session, or a `claude` the user
+      // ran in the terminal panel) created a transcript in the same project slug
+      // dir during our window — we can't tell which is ours. Refuse to guess.
+      throw new Error(
+        `ambiguous claude session: ${fresh.length} new transcripts appeared in ` +
+          `${projectDir(cwd, opts.home)} (concurrent claude in the same project?)`,
+      );
     }
     await sleep(pollMs);
   }
