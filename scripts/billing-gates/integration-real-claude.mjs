@@ -60,9 +60,12 @@ async function driveRun(runArgs, onComplete) {
   const run = claudePtyAdapter.run(runArgs);
   const events = [];
   let turns = 0;
+  let t0 = Date.now();
   for await (const ev of run.events) {
     events.push(ev);
-    console.log('  ', JSON.stringify(ev));
+    const dt = Date.now() - t0;
+    console.log(`  +${String(dt).padStart(6)}ms`, JSON.stringify(ev));
+    if (ev.type === 'text_delta' || ev.type === 'turn_complete') t0 = Date.now();
     if (ev.type === 'turn_complete') {
       turns += 1;
       const next = onComplete(turns);
