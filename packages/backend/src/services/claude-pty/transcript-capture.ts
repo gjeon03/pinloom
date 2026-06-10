@@ -43,6 +43,8 @@ interface CaptureState {
   agentSessionId: string | null;
   /** Re-entrancy guard so two Stops can't double-process. */
   running: boolean;
+  /** True while a rescan tail is chasing a not-yet-flushed assistant reply. */
+  rescanPending: boolean;
 }
 
 const captures = new Map<string, CaptureState>();
@@ -64,6 +66,7 @@ export async function startCapture(
     cursor: cursorRow?.c ?? null,
     agentSessionId: resumeSessionId,
     running: false,
+    rescanPending: false,
   };
   captures.set(pinloomSessionId, state);
 
@@ -85,22 +88,37 @@ function blocksOf(line: { message?: { content?: unknown } }): JsonlContentBlock[
   return Array.isArray(c) ? (c as JsonlContentBlock[]) : [];
 }
 
+const EMPTY_SEEN: ReadonlySet<string> = new Set();
+
+/**
+ * Is the conversation "settled" — does the transcript's last real user/assistant
+ * line belong to the assistant? A trailing USER line means a reply is still
+ * coming (or flushing); a trailing ASSISTANT line means we've caught up. This is
+ * the rescan's termination signal: it must keep chasing until the tail is a
+ * reply, NOT merely until it sees some assistant text — otherwise a turn whose
+ * Stop got dropped (re-entrancy guard) while an earlier rescan was draining would
+ * leave its reply orphaned until the next turn. (`selectTurnLines` with an empty
+ * seen-set applies the exact same noise/sidechain/synthetic filter as capture.)
+ */
+function transcriptTailIsAssistant(transcriptPath: string): boolean {
+  const lines = selectTurnLines(readLines(transcriptPath), EMPTY_SEEN);
+  return lines[lines.length - 1]?.type === 'assistant';
+}
+
 /**
  * Persist every not-yet-seen user/assistant/tool line and advance the cursor.
  * Idempotent via `state.seen` (a re-scan only writes lines that flushed since the
- * last pass). Returns whether anything was written and — crucially — whether
- * assistant *text* landed this pass, the signal that the turn's reply is now in.
+ * last pass). Returns whether anything was written.
  */
 function persistNewLines(
   pinloomSessionId: string,
   state: CaptureState,
   transcriptPath: string,
-): { persistedAny: boolean; sawAssistantText: boolean } {
+): { persistedAny: boolean } {
   const db = getDb();
   const turn = selectTurnLines(readLines(transcriptPath), state.seen);
   let model: string | null = null;
   let persistedAny = false;
-  let sawAssistantText = false;
 
   for (const line of turn) {
     if (line.uuid) state.seen.add(line.uuid);
@@ -130,7 +148,6 @@ function persistNewLines(
             transcriptUuid: line.uuid ?? null,
           });
           persistedAny = true;
-          sawAssistantText = true;
         } else if (block.type === 'tool_use') {
           const name = typeof block.name === 'string' ? block.name : 'tool';
           const input = (block.input ?? {}) as Record<string, unknown>;
@@ -157,7 +174,7 @@ function persistNewLines(
     );
   }
 
-  return { persistedAny, sawAssistantText };
+  return { persistedAny };
 }
 
 /** Notification + team_wait wake: this session's turn is complete. */
@@ -171,12 +188,22 @@ function signalTurnComplete(pinloomSessionId: string): void {
 // get captured on the NEXT turn's Stop — i.e. it'd be missing from history/pins
 // until the user sent another message (the symptom we saw: panel stopped at the
 // user line). Re-reads on a short interval until the assistant text lands.
-// In-handler fast-path wait for the assistant flush (covers the common sub-second
-// case). Kept short so we don't hold the per-session drain lock for long; the
-// rescan tail below is the robust catcher for slower flushes.
-const FLUSH_POLL_ATTEMPTS = 10; // ~1.2s
+//
+// Driven purely by what's in the transcript, never by a payload field: claude's
+// real Stop-hook input doesn't reliably carry the reply text, and a normal turn
+// always ends with an assistant message — so "captured a user line but no reply
+// yet" is itself the signal that a reply is still flushing.
+const FLUSH_POLL_ATTEMPTS = 10; // ~1.2s in-handler fast path (kept short: holds the drain lock)
 const RESCAN_INTERVAL_MS = 250;
 const RESCAN_MAX_ATTEMPTS = 40; // ~10s tail beyond the in-handler poll
+
+/** Start chasing a not-yet-flushed reply (no-op if a tail is already running). */
+function startAssistantRescan(pinloomSessionId: string, transcriptPath: string): void {
+  const state = captures.get(pinloomSessionId);
+  if (!state || state.rescanPending) return;
+  state.rescanPending = true;
+  scheduleAssistantRescan(pinloomSessionId, transcriptPath, 0);
+}
 
 function scheduleAssistantRescan(
   pinloomSessionId: string,
@@ -201,22 +228,26 @@ async function runAssistantRescan(
     return;
   }
   state.running = true;
-  let sawAssistantText = false;
+  let settled = false;
   try {
-    const res = persistNewLines(pinloomSessionId, state, transcriptPath);
-    sawAssistantText = res.sawAssistantText;
+    persistNewLines(pinloomSessionId, state, transcriptPath);
+    // Keep chasing until the conversation tail is a reply, not just until we saw
+    // *some* assistant text — a later turn's user line may still be unanswered.
+    settled = transcriptTailIsAssistant(transcriptPath);
   } catch (err) {
     console.warn('[claude-pty] late assistant re-scan failed for %s:', pinloomSessionId, err);
   } finally {
     state.running = false;
   }
-  if (sawAssistantText) {
+  if (settled) {
+    state.rescanPending = false;
     signalTurnComplete(pinloomSessionId);
     return;
   }
   if (attempt + 1 >= RESCAN_MAX_ATTEMPTS) {
     // Reply never flushed (aborted turn, or claude exited). Signal anyway so the
     // turn isn't left hanging for team_wait / notifications.
+    state.rescanPending = false;
     signalTurnComplete(pinloomSessionId);
     return;
   }
@@ -229,13 +260,8 @@ async function onStop(pinloomSessionId: string, payload: StopHookPayload): Promi
   if (state.running) return;
   state.running = true;
 
-  // The Stop hook carries the just-completed reply text, so a non-empty value is
-  // a definitive "a reply is coming" signal: we should wait for / re-scan for the
-  // assistant line rather than treat its absence as an empty turn.
-  const expectAssistant =
-    !!payload.lastAssistantMessage && payload.lastAssistantMessage.trim().length > 0;
   let persistedAny = false;
-  let sawAssistantText = false;
+  let tailSettled = false;
 
   try {
     const db = getDb();
@@ -261,32 +287,31 @@ async function onStop(pinloomSessionId: string, payload: StopHookPayload): Promi
     }
 
     // claude flushes the completed assistant message to the transcript a beat
-    // AFTER firing the Stop hook (measured). When we know a reply is coming, poll
-    // briefly for it; the rescan tail below covers a flush slower than this window.
-    // No reply expected → don't wait (empty/aborted turn).
-    if (expectAssistant) {
-      let turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
-      for (let i = 0; i < FLUSH_POLL_ATTEMPTS && !turnHasAssistantContent(turn); i++) {
-        await sleep(120);
-        turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
-      }
+    // AFTER firing the Stop hook (measured), so a single read catches the user
+    // line but misses the reply. Poll briefly for the reply; the rescan tail
+    // below covers a flush slower than this window.
+    let turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
+    for (let i = 0; i < FLUSH_POLL_ATTEMPTS && !turnHasAssistantContent(turn); i++) {
+      await sleep(120);
+      turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
     }
 
-    const res = persistNewLines(pinloomSessionId, state, payload.transcriptPath);
-    persistedAny = res.persistedAny;
-    sawAssistantText = res.sawAssistantText;
+    persistedAny = persistNewLines(pinloomSessionId, state, payload.transcriptPath).persistedAny;
+    tailSettled = transcriptTailIsAssistant(payload.transcriptPath);
   } catch (err) {
     console.warn('[claude-pty] transcript capture failed for %s:', pinloomSessionId, err);
   } finally {
     state.running = false;
   }
 
-  // Signal completion once the reply is in (or none was expected). If a reply was
-  // expected but hasn't flushed, hand off to the rescan tail so the "finished"
-  // signal reflects the captured reply instead of firing early on the user line.
-  if (sawAssistantText || (!expectAssistant && persistedAny)) {
+  if (!tailSettled) {
+    // The transcript ends on a user line — the reply is still flushing (or this
+    // Stop fired before it). Chase it so the latest reply doesn't wait for the
+    // next turn's Stop; the tail fires the turn-complete signal once it lands.
+    startAssistantRescan(pinloomSessionId, payload.transcriptPath);
+  } else if (persistedAny) {
+    // Reply is in and we wrote new rows this Stop — turn complete. (A settled
+    // tail with nothing new is a repeat Stop we already folded; stay quiet.)
     signalTurnComplete(pinloomSessionId);
-  } else if (expectAssistant) {
-    scheduleAssistantRescan(pinloomSessionId, payload.transcriptPath, 0);
   }
 }

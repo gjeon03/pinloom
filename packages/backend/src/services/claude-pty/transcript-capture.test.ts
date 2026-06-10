@@ -149,8 +149,9 @@ describe('transcript capture', () => {
     // completed assistant message to the transcript. If the flush is slower than
     // the in-handler poll, the old code persisted only the user line and the
     // reply went missing until the NEXT turn's Stop (symptom: history/pins panel
-    // stopped at the user message). The Stop payload's last_assistant_message
-    // tells us a reply is coming, so the rescan tail must pick it up on its own.
+    // stopped at the user message). A captured user line with no reply yet is
+    // itself the signal that a reply is coming, so the rescan tail must pick it
+    // up on its own — WITHOUT relying on any Stop-payload field.
     const sid = 'sess-cap-late';
     insertSession(sid);
     const dir = mkdtempSync(path.join(tmpdir(), 'cap-'));
@@ -166,8 +167,9 @@ describe('transcript capture', () => {
     writeTranscript(tfile, [userLine]);
 
     await startCapture(sid, null);
-    // Fire WITH last_assistant_message so capture knows a reply is coming.
-    await postStop(sid, tfile, 'claude-late', '😝 메롱이라니 ㅎㅎ');
+    // Fire WITHOUT last_assistant_message — capture must infer "reply coming"
+    // from the unmatched user line alone (the real Stop hook omits the field).
+    await postStop(sid, tfile, 'claude-late');
 
     // The user line lands first (in-handler poll finds no assistant, persists the
     // user row, then schedules the rescan tail).
@@ -201,6 +203,43 @@ describe('transcript capture', () => {
       .prepare('SELECT last_captured_transcript_uuid AS c FROM sessions WHERE id=?')
       .get(sid) as { c: string | null };
     expect(cur.c).toBe('la1');
+
+    stopCapture(sid);
+  });
+
+  it('rescan chases past an intermediate reply until the latest user line is answered', async () => {
+    // Regression for "only the newest reply goes missing": while a rescan chases
+    // turn A's reply, turn B's Stop can be dropped by the re-entrancy guard. If
+    // the rescan terminated as soon as it saw ANY assistant text (turn A's), turn
+    // B's reply would be orphaned until the next turn. The rescan must instead
+    // keep going until the transcript TAIL is a reply — i.e. no user line is left
+    // dangling.
+    const sid = 'sess-cap-dangle';
+    insertSession(sid);
+    const dir = mkdtempSync(path.join(tmpdir(), 'cap-'));
+    const tfile = path.join(dir, 'claude-dangle.jsonl');
+
+    const uA = { type: 'user', uuid: 'duA', parentUuid: null, message: { role: 'user', content: 'A?' } };
+    const aA = { type: 'assistant', uuid: 'daA', parentUuid: 'duA', message: { role: 'assistant', model: 'claude-opus-4-8', content: [{ type: 'text', text: 'A!' }] } };
+    const uB = { type: 'user', uuid: 'duB', parentUuid: 'daA', message: { role: 'user', content: 'B?' } };
+    const aB = { type: 'assistant', uuid: 'daB', parentUuid: 'duB', message: { role: 'assistant', model: 'claude-opus-4-8', content: [{ type: 'text', text: 'B!' }] } };
+
+    writeTranscript(tfile, [uA]);
+    await startCapture(sid, null);
+    await postStop(sid, tfile, 'claude-dangle');
+    await until(() => rows(sid).some((x) => x.content === 'A?'));
+
+    // A's reply lands AND B's prompt arrives — the tail is now a USER line.
+    writeTranscript(tfile, [uA, aA, uB]);
+    await until(() => rows(sid).some((x) => x.content === 'B?'));
+    // The rescan saw an assistant line (A!) but must NOT have stopped: B is still
+    // unanswered, so B!'s slot is empty and the chase continues.
+    expect(rows(sid).some((x) => x.content === 'B!')).toBe(false);
+
+    // B's reply finally flushes — tail becomes an assistant line.
+    writeTranscript(tfile, [uA, aA, uB, aB]);
+    await until(() => rows(sid).some((x) => x.content === 'B!'));
+    expect(rows(sid).map((x) => x.content)).toEqual(['A?', 'A!', 'B?', 'B!']);
 
     stopCapture(sid);
   });
