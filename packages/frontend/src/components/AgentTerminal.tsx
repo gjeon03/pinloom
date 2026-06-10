@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import type { WsEvent } from '@pinloom/shared';
+import { useWebSocket } from '../hooks/useWebSocket.js';
 
 // Terminal-chat mode: a session's real `claude` TUI rendered live in xterm.js,
 // wired to the backend /ws/agent-terminal pty socket. The human types directly
@@ -19,6 +21,19 @@ export function AgentTerminal({ sessionId }: { sessionId: string }) {
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [blockedMsg, setBlockedMsg] = useState<string | null>(null);
   const [connKey, setConnKey] = useState(0);
+  // True while an orchestrator dispatch is driving this worker's TUI — the
+  // backend locks out human keystrokes, so we show an overlay explaining why.
+  const [dispatchLocked, setDispatchLocked] = useState(false);
+
+  const onWsEvent = useCallback(
+    (ev: WsEvent) => {
+      if (ev.type === 'terminal_lock' && ev.sessionId === sessionId) {
+        setDispatchLocked(ev.locked);
+      }
+    },
+    [sessionId],
+  );
+  useWebSocket(`session:${sessionId}`, onWsEvent);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -134,6 +149,11 @@ export function AgentTerminal({ sessionId }: { sessionId: string }) {
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#1a1b26]">
       <div ref={containerRef} className="h-full w-full" />
+      {dispatchLocked && status === 'open' && (
+        <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-[var(--color-accent)] px-3 py-1 text-[10px] font-medium text-black shadow">
+          오케스트레이터 구동 중 — 입력 잠금
+        </div>
+      )}
       {status !== 'open' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 px-4 text-center">
           {blockedMsg && <p className="text-xs text-[#c0caf5]">{blockedMsg}</p>}
