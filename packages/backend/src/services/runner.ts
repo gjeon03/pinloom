@@ -35,7 +35,7 @@ export type { ImageInput, ImageMediaType } from './runner-types.js';
 // open tab) and mirror it onto the global channel enriched with project /
 // title / agent, so one app-wide listener can notify for sessions whose tab
 // isn't open.
-function emitRunStatus(
+export function emitRunStatus(
   sessionId: string,
   status: 'started' | 'finished' | 'error',
   error?: string,
@@ -63,12 +63,16 @@ function emitRunStatus(
   }
 }
 
-interface PersistArgs {
+export interface PersistArgs {
   sessionId: string;
   planItemId: string | null;
   role: MessageRole;
   content: string;
   toolUse?: unknown;
+  /** Model id (set directly by capture; the streaming path uses closeStream). */
+  model?: string | null;
+  /** Source Claude transcript line uuid (terminal capture; dedupe/reference). */
+  transcriptUuid?: string | null;
 }
 
 interface MessageRow {
@@ -207,17 +211,29 @@ When prior knowledge might help:
 Use this sparingly — only when prior context might genuinely help.`;
 }
 
-function persistMessage(args: PersistArgs): Message {
+export function persistMessage(args: PersistArgs): Message {
   const db = getDb();
   const id = nanoid();
   const now = new Date().toISOString();
   const toolUseJson = args.toolUse ? JSON.stringify(args.toolUse) : null;
+  const model = args.model ?? null;
+  const transcriptUuid = args.transcriptUuid ?? null;
 
   db.prepare(
     `INSERT INTO messages
-       (id, session_id, plan_item_id, role, content, tool_use, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, args.sessionId, args.planItemId, args.role, args.content, toolUseJson, now);
+       (id, session_id, plan_item_id, role, content, tool_use, model, transcript_uuid, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    args.sessionId,
+    args.planItemId,
+    args.role,
+    args.content,
+    toolUseJson,
+    model,
+    transcriptUuid,
+    now,
+  );
 
   db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(now, args.sessionId);
 
@@ -232,7 +248,7 @@ function persistMessage(args: PersistArgs): Message {
     pinTitle: null,
     pinnedAt: null,
     sourceMessageId: null,
-    model: null,
+    model,
     createdAt: now,
   };
   broadcast(`session:${args.sessionId}`, { type: 'message', sessionId: args.sessionId, message });
@@ -662,7 +678,7 @@ function emitWorkerStatusIfMember(sessionId: string): void {
   });
 }
 
-function notifySessionIdle(sessionId: string): void {
+export function notifySessionIdle(sessionId: string): void {
   const set = idleListeners.get(sessionId);
   if (!set) return;
   // Snapshot first — listeners may unsubscribe synchronously inside the

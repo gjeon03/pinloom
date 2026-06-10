@@ -20,6 +20,7 @@ import type { IPty } from 'node-pty';
 import { buildSessionLaunchInput } from '../runner.js';
 import { buildClaudeLaunch, type BuiltClaudeLaunch } from './launch-spec.js';
 import { getStopHookServer } from './shared-server.js';
+import { startCapture, stopCapture } from './transcript-capture.js';
 
 const CLAUDE_BIN = process.env.PINLOOM_CLAUDE_BIN ?? 'claude';
 const SCROLLBACK_BYTES = 200 * 1024;
@@ -94,6 +95,7 @@ async function spawnAgentTerminal(
       initialText: null,
     },
     server.url(),
+    { pinloomSessionId: sessionId },
   );
 
   const child = pty.spawn(CLAUDE_BIN, launch.args, {
@@ -120,9 +122,13 @@ async function spawnAgentTerminal(
   child.onExit(({ exitCode }) => {
     created.onExit?.(exitCode);
     sessions.delete(sessionId);
+    stopCapture(sessionId);
     created.launch.cleanup();
   });
   sessions.set(sessionId, created);
+  // Persist this session's turns to the messages table in the background
+  // (history / pins / notifications / teams). resume token seeds the agent id.
+  void startCapture(sessionId, launchInput.resume);
   return created;
 }
 
@@ -212,6 +218,7 @@ export function killAgentTerminal(sessionId: string): void {
   } catch {
     // best-effort
   }
+  stopCapture(sessionId);
   session.launch.cleanup();
   sessions.delete(sessionId);
 }
@@ -222,8 +229,10 @@ export function killAgentTerminal(sessionId: string): void {
  * terminal.ts's killAllTerminals so a backgrounded agent turn can't leak.
  */
 export async function killAllAgentTerminals(): Promise<void> {
+  const ids = [...sessions.keys()];
   const live = [...sessions.values()];
   sessions.clear();
+  for (const id of ids) stopCapture(id);
   if (live.length === 0) return;
 
   for (const s of live) {

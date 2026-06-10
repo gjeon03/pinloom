@@ -13,11 +13,16 @@ import path from 'node:path';
 import type { McpStdioServerConfig } from '../agents/types.js';
 
 // ESM forwarder claude's Stop hook executes: reads the hook JSON on stdin and
-// POSTs it to our localhost server. `fetch` is a Node global (>=18).
+// POSTs it to our localhost server, merging in OUR pinloom session id (argv[3],
+// optional) so the server can map claude's session_id back to the pinloom
+// session without a dir-diff. `fetch` is a Node global (>=18).
 const FORWARDER_SRC = `let d='';
 process.stdin.on('data', (c) => (d += c));
 process.stdin.on('end', async () => {
-  try { await fetch(process.argv[2], { method: 'POST', body: d || '{}' }); } catch {}
+  let payload = {};
+  try { payload = JSON.parse(d || '{}'); } catch {}
+  if (process.argv[3]) payload.pinloom_session_id = process.argv[3];
+  try { await fetch(process.argv[2], { method: 'POST', body: JSON.stringify(payload) }); } catch {}
   process.exit(0);
 });
 `;
@@ -53,30 +58,24 @@ export interface BuiltClaudeLaunch {
 export function buildClaudeLaunch(
   input: ClaudeLaunchInput,
   stopHookUrl: string,
+  opts: { pinloomSessionId?: string } = {},
 ): BuiltClaudeLaunch {
   const tmp = mkdtempSync(path.join(tmpdir(), 'pinloom-claude-pty-'));
 
   const forwarderPath = path.join(tmp, 'stop-forward.mjs');
   writeFileSync(forwarderPath, FORWARDER_SRC, 'utf8');
 
+  // The Stop-hook command forwards the payload to our server, tagging it with
+  // the pinloom session id (3rd arg) so terminal-mode capture can map it back.
+  const command = opts.pinloomSessionId
+    ? `node ${JSON.stringify(forwarderPath)} ${JSON.stringify(stopHookUrl)} ${JSON.stringify(opts.pinloomSessionId)}`
+    : `node ${JSON.stringify(forwarderPath)} ${JSON.stringify(stopHookUrl)}`;
+
   const settingsPath = path.join(tmp, 'settings.json');
   writeFileSync(
     settingsPath,
     JSON.stringify(
-      {
-        hooks: {
-          Stop: [
-            {
-              hooks: [
-                {
-                  type: 'command',
-                  command: `node ${JSON.stringify(forwarderPath)} ${JSON.stringify(stopHookUrl)}`,
-                },
-              ],
-            },
-          ],
-        },
-      },
+      { hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } },
       null,
       2,
     ),

@@ -6,6 +6,7 @@ export {
   parseJsonlLines,
   collectUuids,
   selectTurnLines,
+  summarizeToolCall,
   toNormalizedEvents,
 } from './parse.js';
 export { aggregateUsage } from './usage.js';
