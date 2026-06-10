@@ -10,14 +10,14 @@
 // covered by scripts/billing-gates/integration-real-claude.mjs, which the user
 // runs in a real terminal. See docs/billing/dual-bucket-plan.md.
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { collectUuids, selectTurnLines, type JsonlLine } from '../claude-jsonl/index.js';
 import type { ImageInput } from '../runner-types.js';
 import type { UserPrompt } from '../agents/message-stream.js';
+import { buildClaudeLaunch } from './launch-spec.js';
 import type { ClaudeSession, ClaudeSessionFactory, ClaudeSessionSpec } from './session.js';
 import {
   discoverNewSessionFile,
@@ -48,17 +48,6 @@ let sharedServer: Promise<StopHookServer> | null = null;
 function getStopHookServer(): Promise<StopHookServer> {
   return (sharedServer ??= startStopHookServer());
 }
-
-// ESM forwarder claude's Stop hook executes: reads the hook JSON on stdin and
-// POSTs it to our localhost server. `fetch` is a Node global (>=18). Written
-// fresh into each session's temp dir so there's no install/path resolution.
-const FORWARDER_SRC = `let d='';
-process.stdin.on('data', (c) => (d += c));
-process.stdin.on('end', async () => {
-  try { await fetch(process.argv[2], { method: 'POST', body: d || '{}' }); } catch {}
-  process.exit(0);
-});
-`;
 
 function cleanEnv(): Record<string, string> {
   const env: Record<string, string> = {};
@@ -104,37 +93,6 @@ async function submitToTui(child: IPty, text: string): Promise<void> {
   await sleep(TUI_SETTLE_AFTER_ENTER_MS);
 }
 
-function buildArgs(
-  spec: ClaudeSessionSpec,
-  settingsPath: string,
-  mcpPath: string | null,
-  initialText: string | null,
-): string[] {
-  const args: string[] = [
-    // Isolate OUR Stop hook here; keep the user's own config loading too.
-    '--settings',
-    settingsPath,
-    '--setting-sources',
-    'user,project',
-    // Non-interactive automation: no permission prompts.
-    '--dangerously-skip-permissions',
-  ];
-  if (spec.systemPrompt.length > 0) {
-    args.push('--append-system-prompt', spec.systemPrompt);
-  }
-  if (spec.model) args.push('--model', spec.model);
-  // claude's --effort accepts the same low/medium/high/xhigh/max tokens.
-  if (spec.reasoningEffort) args.push('--effort', spec.reasoningEffort);
-  if (mcpPath) args.push('--mcp-config', mcpPath);
-  if (spec.resume) args.push('--resume', spec.resume);
-  // Positional [prompt]: seeds the first turn so the (fresh OR resumed) session
-  // auto-runs it, instead of us typing into the freshly-launched TUI.
-  if (initialText && initialText.length > 0) {
-    args.push(initialText);
-  }
-  return args;
-}
-
 async function killGroup(child: IPty): Promise<void> {
   try {
     child.kill('SIGHUP');
@@ -171,39 +129,20 @@ export function createNodeClaudeSessionFactory(
     async start(spec: ClaudeSessionSpec): Promise<ClaudeSession> {
       const server = await getStopHookServer();
 
-      const tmp = mkdtempSync(path.join(tmpdir(), 'pinloom-claude-pty-'));
-      const forwarderPath = path.join(tmp, 'stop-forward.mjs');
-      writeFileSync(forwarderPath, FORWARDER_SRC, 'utf8');
-
-      const settingsPath = path.join(tmp, 'settings.json');
-      writeFileSync(
-        settingsPath,
-        JSON.stringify(
-          {
-            hooks: {
-              Stop: [
-                {
-                  hooks: [
-                    {
-                      type: 'command',
-                      command: `node ${JSON.stringify(forwarderPath)} ${JSON.stringify(server.url())}`,
-                    },
-                  ],
-                },
-              ],
-            },
-          },
-          null,
-          2,
-        ),
-        'utf8',
+      // Build the temp launch env (isolated Stop-hook settings + forwarder + mcp)
+      // and base argv via the shared launch spec. The positional seed prompt is
+      // appended below, after we materialize turn-1 images into the temp dir.
+      const launch = buildClaudeLaunch(
+        {
+          systemPrompt: spec.systemPrompt,
+          model: spec.model,
+          reasoningEffort: spec.reasoningEffort,
+          resume: spec.resume,
+          mcpServers: spec.mcpServers,
+        },
+        server.url(),
       );
-
-      let mcpPath: string | null = null;
-      if (spec.mcpServers && Object.keys(spec.mcpServers).length > 0) {
-        mcpPath = path.join(tmp, 'mcp.json');
-        writeFileSync(mcpPath, JSON.stringify({ mcpServers: spec.mcpServers }, null, 2), 'utf8');
-      }
+      const tmp = launch.tmpDir;
 
       const before = spec.resume ? new Set<string>() : listSessionFiles(spec.cwd, home);
 
@@ -218,6 +157,7 @@ export function createNodeClaudeSessionFactory(
         seedImages.length > 0
           ? `${spec.initialPrompt.text} ${seedImages.map((p) => `@${p}`).join(' ')}`
           : spec.initialPrompt.text;
+      if (initialText && initialText.length > 0) launch.args.push(initialText);
       const seedSeen: ReadonlySet<string> = spec.resume
         ? collectUuids(readLines(sessionFilePath(spec.cwd, spec.resume, home)))
         : new Set<string>();
@@ -228,7 +168,7 @@ export function createNodeClaudeSessionFactory(
       const childEnv = cleanEnv();
       if (home) childEnv.HOME = home;
 
-      const child = pty.spawn(bin, buildArgs(spec, settingsPath, mcpPath, initialText), {
+      const child = pty.spawn(bin, launch.args, {
         name: 'xterm-color',
         cols: 120,
         rows: 40,
@@ -429,11 +369,7 @@ export function createNodeClaudeSessionFactory(
           disposeP = (async () => {
             if (sessionId) server.release(sessionId);
             await killGroup(child);
-            try {
-              rmSync(tmp, { recursive: true, force: true });
-            } catch {
-              // best-effort
-            }
+            launch.cleanup();
           })();
           return disposeP;
         },
