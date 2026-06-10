@@ -16,6 +16,7 @@ import {
   type TabRef,
 } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
+import { AgentTerminal } from '../components/AgentTerminal.js';
 import { ProjectNotepadView } from '../components/ProjectNotepadView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
@@ -617,6 +618,11 @@ export function ProjectPage({
               // teamId from the URL via useParams, so we route inline by
               // overriding the `teamId` segment via a key + path.
               <InlineCanvasView teamId={activeCanvasTeamId} />
+            ) : activeSession && activeSession.transport === 'terminal' ? (
+              // Terminal-chat mode: render the session's live claude TUI instead
+              // of the structured chat. Pinned per-session (sessions.transport),
+              // so flipping the env only affects newly-created sessions.
+              <AgentTerminal key={activeSession.id} sessionId={activeSession.id} />
             ) : activeSession ? (
               // Force a fresh component instance per session so per-session
               // local state (textarea draft, queue, wikiSyncing flag, etc.)
