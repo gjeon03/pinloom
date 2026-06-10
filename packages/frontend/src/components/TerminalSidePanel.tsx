@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, Pin } from 'lucide-react';
 import type { Message, WsEvent } from '@pinloom/shared';
 import { api } from '../api/client.js';
@@ -14,6 +14,12 @@ import { PinToggleButton } from './MessageActions.js';
 
 const collapsedKey = (sid: string) => `pinloom:termpanel:collapsed:${sid}`;
 
+// How many rows to render initially / per "load older" step. Most opens want the
+// latest turns (mirrors the terminal scrollback + ChatView), so we render the
+// newest WINDOW and let the user scroll up to page in older history — keeps a
+// long session's panel cheap without reversing the natural chat order.
+const WINDOW = 60;
+
 function preview(content: string, max = 600): string {
   const t = content.trim();
   return t.length > max ? `${t.slice(0, max)}…` : t;
@@ -26,7 +32,16 @@ export function TerminalSidePanel({ sessionId }: { sessionId: string }) {
     () => localStorage.getItem(collapsedKey(sessionId)) === '1',
   );
   const [error, setError] = useState<string | null>(null);
+  const [limit, setLimit] = useState(WINDOW);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Sticky-bottom: true while the user is parked at the latest turn. Opening the
+  // panel and new live turns scroll to the bottom; once the user scrolls up to
+  // read history we stop yanking them back down.
+  const stick = useRef(true);
+  // When we page in older rows (limit↑), the content above the viewport grows —
+  // record the pre-grow scrollHeight so a layout effect can re-anchor and keep
+  // the rows the user is looking at from jumping.
+  const prependAnchor = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +90,40 @@ export function TerminalSidePanel({ sessionId }: { sessionId: string }) {
     (m) => (m.role === 'user' || m.role === 'assistant' || m.role === 'tool') && (!pinsOnly || m.pinned),
   );
   const pinCount = messages.filter((m) => m.pinned).length;
+  // Render only the newest `limit` rows; older history pages in on scroll-up.
+  const hasOlder = rows.length > limit;
+  const windowed = hasOlder ? rows.slice(rows.length - limit) : rows;
+
+  // Stick to the bottom on open and on new live turns — unless the user has
+  // scrolled up to read history. Runs after the windowed list paints.
+  useLayoutEffect(() => {
+    if (prependAnchor.current !== null) return; // a load-older paint owns this frame
+    if (!stick.current) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [windowed.length, collapsed]);
+
+  // Re-anchor after paging in older rows so the viewport doesn't jump.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && prependAnchor.current !== null) {
+      el.scrollTop += el.scrollHeight - prependAnchor.current;
+      prependAnchor.current = null;
+    }
+  }, [limit]);
+
+  function onScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    // Near the top with more history available → page in the next older chunk.
+    // Skip if a prior page-in is still settling (prependAnchor not yet consumed)
+    // so one scroll gesture doesn't stack several limit bumps.
+    if (el.scrollTop < 80 && hasOlder && prependAnchor.current === null) {
+      prependAnchor.current = el.scrollHeight;
+      setLimit((n) => n + WINDOW);
+    }
+  }
 
   if (collapsed) {
     return (
@@ -123,14 +172,29 @@ export function TerminalSidePanel({ sessionId }: { sessionId: string }) {
 
       {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto px-2 py-2">
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto px-2 py-2">
         {rows.length === 0 ? (
           <p className="px-2 py-6 text-center text-xs text-[var(--color-ink-muted)]">
             {pinsOnly ? 'No pinned messages yet.' : 'Captured turns appear here as you chat.'}
           </p>
         ) : (
           <ul className="flex flex-col gap-1.5">
-            {rows.map((m) => {
+            {hasOlder && (
+              <li className="py-1 text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = scrollRef.current;
+                    if (el) prependAnchor.current = el.scrollHeight;
+                    setLimit((n) => n + WINDOW);
+                  }}
+                  className="text-[10px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                >
+                  이전 메시지 더 보기 ({rows.length - limit})
+                </button>
+              </li>
+            )}
+            {windowed.map((m) => {
               if (m.role === 'tool') {
                 return (
                   <li
