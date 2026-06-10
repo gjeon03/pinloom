@@ -8,6 +8,10 @@ dist
 data/*.sqlite
 data/*.sqlite-*
 data/*.deleted-backup
+# SQLite DBs also land under a package's own data/ dir when the backend runs
+# with a cwd-relative PINLOOM_DB_PATH (e.g. `dev:terminal` → packages/backend/data/).
+**/data/*.sqlite
+**/data/*.sqlite-*
 .vite
 
 # Playwright

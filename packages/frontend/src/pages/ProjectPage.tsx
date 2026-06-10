@@ -17,6 +17,7 @@ import {
 } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
 import { AgentTerminal } from '../components/AgentTerminal.js';
+import { TerminalSidePanel } from '../components/TerminalSidePanel.js';
 import { ProjectNotepadView } from '../components/ProjectNotepadView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
@@ -625,7 +626,15 @@ export function ProjectPage({
               // of the structured chat. Pinned per-session (sessions.transport),
               // so flipping the env only affects newly-created sessions. Terminal
               // mode is claude-only — codex sessions stay on the structured path.
-              <AgentTerminal key={activeSession.id} sessionId={activeSession.id} />
+              // The live TUI fills the pane; the side panel lists captured turns
+              // and lets the human pin them (the pin UI ChatView gives structured
+              // sessions).
+              <div className="flex h-full w-full min-h-0">
+                <div className="min-w-0 flex-1">
+                  <AgentTerminal key={activeSession.id} sessionId={activeSession.id} />
+                </div>
+                <TerminalSidePanel key={`panel-${activeSession.id}`} sessionId={activeSession.id} />
+              </div>
             ) : activeSession ? (
               // Force a fresh component instance per session so per-session
               // local state (textarea draft, queue, wikiSyncing flag, etc.)

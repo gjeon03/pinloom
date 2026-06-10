@@ -72,7 +72,7 @@ auto-owned 워커(teams)    →  claude-pty 어댑터(주입+완료감지) 유�
 ## 3. 결정 필요 (구현 전 확정할 것)
 
 - [ ] **D1 입력 UX**: 터미널 모드에서 사용자는 (a) **xterm에 직접 타이핑**(터미널 그대로, pinloom 입력창 숨김) vs (b) pinloom 입력창 유지 + 터미널로 주입. → **권장 (a)** (사용자 의도 "터미널환경 그대로", 주입 fragility 회피). 이미지/멘션 등 입력창 기능은 (a)에선 빠짐 → 별도 보조 입력으로 후속.
-- [ ] **D2 히스토리 표시**: 터미널 모드 디스플레이는 **터미널 scrollback**(세션별 생존). 캡처된 DB 메시지는 핀/검색/알림/teams용 — 화면엔 안 겹쳐 띄움(터미널이 곧 뷰). 확인 필요.
+- [x] **D2 히스토리 표시**: 터미널 모드 디스플레이는 **터미널 scrollback**(세션별 생존). 캡처된 DB 메시지는 핀/검색/알림/teams용. → **해소됨**: 터미널은 메인 뷰 그대로 두되, 우측에 `TerminalSidePanel`(`History & Pins`)을 나란히 띄워 캡처된 user/assistant 턴을 나열 + 행별 핀 토글(`PinToggleButton` + `api.updateMessage`) 제공. 구조화 세션의 ChatView가 주던 핀 UI를 터미널 모드에 복원. 핀은 다음 세션 launch 의 system prompt 에 반영(실행 중 TUI 는 launch 시점 prompt 유지) — 푸터에 명시. `session:<id>` WS(`message`/`message_updated`)로 라이브 갱신, collapsible + pins-only 필터.
 - [ ] **D3 트러스트 다이얼로그**: 새 프로젝트 cwd에서 claude 첫 실행 시 "trust this folder"가 터미널에 뜸. (a) 사람이 직접 Enter (터미널이니 자연스러움) vs (b) 세션 시작 시 `~/.claude.json` 에 프로젝트 trust 선반영. → **권장 (a)** + 선택적 (b) 헬퍼.
 - ~~D4 모델/effort 변경~~ **해소됨**: 터미널 모드에선 TUI의 **슬래시 커맨드(`/model`, `/effort`)로 사용자가 실행 중 직접 변경** → 재시작 불필요. pinloom은 **시작 시 초기값만** `--model`/`--effort` 로 넘기고, 이후는 터미널이 소스 오브 트루스. (pinloom DB의 model/effort 값은 "초기값"일 뿐 `/model` 변경과 drift 가능 — 터미널 모드에선 pinloom 피커 미표시, 무방.) "터미널환경 그대로" 철학과 일치: TUI의 모든 네이티브 컨트롤(`/clear`, `/model`, `/effort`, `/resume` 등)을 그대로 사용.
 
