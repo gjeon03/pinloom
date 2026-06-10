@@ -104,6 +104,13 @@ function memberStatus(sessionId: string): DispatchMember['status'] {
 export async function teamDispatchRoutes(app: FastifyInstance) {
   const db = getDb();
 
+  // A 'terminal' worker has no runner driving it — dispatch injects into its TUI
+  // (dispatchToWorker) instead of the enqueue/waitForIdle path.
+  const isTerminalWorker = (sessionId: string): boolean =>
+    (db.prepare('SELECT transport FROM sessions WHERE id = ?').get(sessionId) as
+      | { transport: string | null }
+      | undefined)?.transport === 'terminal';
+
   // Backfill endpoint for the descriptive canvas: returns the in-memory
   // ring buffer of recent dispatch events for this team. Open to the
   // browser (no MCP token required) since the canvas is just observing
@@ -178,6 +185,20 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     if (!member) {
       reply.code(404);
       return { error: `no worker with alias "${alias}" in this team` };
+    }
+    // Terminal worker: fire-and-forget inject into its TUI (the reply lands in
+    // the terminal + capture; the orchestrator doesn't wait on /send).
+    if (isTerminalWorker(member.sessionId)) {
+      void dispatchToWorker(member.sessionId, text, new AbortController().signal);
+      emitDispatchEvent({
+        type: 'dispatch_send',
+        teamId: req.params.teamId,
+        alias: member.alias,
+        sessionId: member.sessionId,
+        previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+        at: new Date().toISOString(),
+      });
+      return { ok: true, queueItemId: `terminal:${member.sessionId}` };
     }
     try {
       const item = enqueueMessage({ sessionId: member.sessionId, content: text });
@@ -463,12 +484,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     // Terminal-mode worker: no runner drives it, so enqueue/waitForIdle don't
     // apply. Inject the prompt into the worker's TUI and read the reply straight
     // from the Stop-hook payload (capture persists the rows asynchronously).
-    const workerTransport = (
-      db.prepare('SELECT transport FROM sessions WHERE id = ?').get(member.sessionId) as
-        | { transport: string | null }
-        | undefined
-    )?.transport;
-    if (workerTransport === 'terminal') {
+    if (isTerminalWorker(member.sessionId)) {
       emitDispatchEvent({
         type: 'dispatch_send',
         teamId: req.params.teamId,
@@ -654,6 +670,33 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     try {
       await Promise.all(
         recipients.map(async (member) => {
+          // Terminal worker: inject into its TUI, reply from the Stop payload.
+          if (isTerminalWorker(member.sessionId)) {
+            emitDispatchEvent({
+              type: 'dispatch_send',
+              teamId: req.params.teamId,
+              alias: member.alias,
+              sessionId: member.sessionId,
+              previewText,
+              at: dispatchedAt,
+            });
+            const result = await dispatchToWorker(member.sessionId, text, ac.signal, timeoutMs);
+            if (result.ok) {
+              replies.push({
+                alias: member.alias,
+                sessionId: member.sessionId,
+                queueItemId: `terminal:${member.sessionId}`,
+                message: {
+                  id: `terminal:${member.sessionId}`,
+                  content: result.reply,
+                  createdAt: new Date().toISOString(),
+                },
+              });
+            } else {
+              failures.push({ alias: member.alias, error: result.error });
+            }
+            return;
+          }
           let queueItemId: string;
           try {
             const item = enqueueMessage({
