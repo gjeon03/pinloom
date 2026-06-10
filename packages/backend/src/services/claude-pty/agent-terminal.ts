@@ -44,8 +44,17 @@ interface AgentTerminalSession {
   attachId: number;
   /** null = idle; otherwise the current single driver (see write lock). */
   lockedBy: TerminalDriver | null;
-  /** Last time the TUI produced output — drives the dispatch quiescence wait. */
+  /** Last time the TUI produced output. */
   lastDataAt: number;
+  /**
+   * A turn is currently running (human or dispatch). Set when the human submits
+   * (an Enter in their keystrokes) or a dispatch injects; cleared on the Stop
+   * hook. Lets a dispatch wait for an in-flight human turn even before its output
+   * starts streaming — which output-quiescence alone can't detect.
+   */
+  turnInFlight: boolean;
+  /** Unregister the Stop listener that clears turnInFlight. */
+  unregisterTurnTracker: () => void;
 }
 
 // Serializes dispatches per worker so two orchestrator asks can't interleave.
@@ -138,6 +147,8 @@ async function spawnAgentTerminal(
     attachId: 0,
     lockedBy: null,
     lastDataAt: Date.now(),
+    turnInFlight: false,
+    unregisterTurnTracker: () => {},
   };
   child.onData((d) => {
     created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
@@ -146,15 +157,30 @@ async function spawnAgentTerminal(
   });
   child.onExit(({ exitCode }) => {
     created.onExit?.(exitCode);
-    sessions.delete(sessionId);
-    stopCapture(sessionId);
-    created.launch.cleanup();
+    teardownSession(sessionId);
+    created.onExit = null;
+  });
+  // Clear turnInFlight whenever a turn completes (human or dispatch).
+  created.unregisterTurnTracker = server.onStop(sessionId, () => {
+    created.turnInFlight = false;
   });
   sessions.set(sessionId, created);
   // Persist this session's turns to the messages table in the background
   // (history / pins / notifications / teams). resume token seeds the agent id.
   void startCapture(sessionId, launchInput.resume);
   return created;
+}
+
+/** Common teardown for a session: stop capture, drop bookkeeping, free temp dir. */
+function teardownSession(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  sessions.delete(sessionId);
+  dispatchChains.delete(sessionId);
+  stopCapture(sessionId);
+  if (session) {
+    session.unregisterTurnTracker();
+    session.launch.cleanup();
+  }
 }
 
 export async function attachAgentTerminal(
@@ -199,9 +225,13 @@ export async function attachAgentTerminal(
     buffer: snapshot,
     write(data: string) {
       // While a dispatch is driving this worker, human keystrokes are locked
-      // out (the client shows a "busy" overlay). Dispatch writes go through
-      // writeAsDispatch(), not this consumer handle.
+      // out (the client shows a "busy" overlay).
       if (bound.lockedBy === 'dispatch') return;
+      // An Enter in the human's keystrokes submits a turn — mark it in flight so
+      // a dispatch waits for it (cleared on the turn's Stop hook). Heuristic, but
+      // catches the "human just submitted, claude not yet streaming" window that
+      // output-quiescence misses.
+      if (data.includes('\r') || data.includes('\n')) bound.turnInFlight = true;
       try {
         bound.pty.write(data);
       } catch {
@@ -243,9 +273,7 @@ export function killAgentTerminal(sessionId: string): void {
   } catch {
     // best-effort
   }
-  stopCapture(sessionId);
-  session.launch.cleanup();
-  sessions.delete(sessionId);
+  teardownSession(sessionId);
 }
 
 /**
@@ -257,7 +285,9 @@ export async function killAllAgentTerminals(): Promise<void> {
   const ids = [...sessions.keys()];
   const live = [...sessions.values()];
   sessions.clear();
+  dispatchChains.clear();
   for (const id of ids) stopCapture(id);
+  for (const s of live) s.unregisterTurnTracker();
   if (live.length === 0) return;
 
   for (const s of live) {
@@ -333,27 +363,36 @@ async function awaitNextStop(
   });
 }
 
-/** Wait until the TUI output goes quiet (so we don't inject mid-turn). */
-async function waitQuiescent(session: AgentTerminalSession, signal: AbortSignal): Promise<void> {
-  const QUIET_MS = 600;
-  const CAP_MS = 5 * 60_000;
+/**
+ * Wait until no turn is running on this worker (an in-flight human turn finishes)
+ * so a dispatch doesn't read the human turn's Stop. turnInFlight is set on the
+ * human's Enter and cleared on the Stop hook — more reliable than output
+ * quiescence, which can't see a just-submitted turn that hasn't streamed yet.
+ * Returns false if it gave up at the cap (a turn ran longer than the budget).
+ */
+async function waitTurnIdle(
+  session: AgentTerminalSession,
+  signal: AbortSignal,
+  capMs: number,
+): Promise<boolean> {
   const start = Date.now();
   while (!signal.aborted) {
-    if (Date.now() - session.lastDataAt >= QUIET_MS) return;
-    if (Date.now() - start >= CAP_MS) return;
+    if (!session.turnInFlight) return true;
+    if (Date.now() - start >= capMs) return false;
     await sleep(100);
   }
+  return false;
 }
 
 export type DispatchResult = { ok: true; reply: string } | { ok: false; error: string };
 
 /**
  * Drive a worker session's terminal with an orchestrator prompt and return its
- * reply. Serialized per worker. If the worker terminal isn't up yet, it's
- * cold-started with the prompt SEEDED via the positional arg (auto-runs —
- * injecting into a fresh TUI is unreliable). If it's already settled, the human
- * is locked out, the TUI is allowed to go quiet, then the prompt is injected.
- * The reply is the Stop-hook payload's last_assistant_message.
+ * reply. Serialized per worker (withDispatchLock). If the worker terminal isn't
+ * up yet, it's cold-started with the prompt SEEDED via the positional arg
+ * (auto-runs — injecting into a fresh TUI is unreliable). If it's already up, the
+ * human is locked out, any in-flight human turn is waited out, then the prompt is
+ * injected. The reply is the Stop-hook payload's last_assistant_message.
  */
 export function dispatchToWorker(
   sessionId: string,
@@ -365,18 +404,29 @@ export function dispatchToWorker(
     try {
       const existing = sessions.get(sessionId);
       if (!existing) {
-        // Cold start: arm the Stop waiter, then spawn with the seeded prompt.
+        // Cold start: arm the Stop waiter, then spawn with the seeded prompt. No
+        // human can be mid-turn (the terminal didn't exist). Lock + mark in-flight
+        // so a human attaching mid-seed can't interleave.
         const stop = awaitNextStop(sessionId, signal, timeoutMs);
         const spawned = await spawnAgentTerminal(sessionId, 120, 40, text);
         if ('reason' in spawned) return { ok: false, error: spawned.reason };
-        const payload = await stop;
-        return { ok: true, reply: payload.lastAssistantMessage ?? '' };
+        setLock(spawned, sessionId, 'dispatch');
+        spawned.turnInFlight = true;
+        try {
+          const payload = await stop;
+          return { ok: true, reply: payload.lastAssistantMessage ?? '' };
+        } finally {
+          if (sessions.get(sessionId) === spawned) setLock(spawned, sessionId, null);
+        }
       }
-      // Settled worker: lock out the human, wait for quiet, inject, await Stop.
+      // Settled worker: lock out new human keystrokes, wait for any in-flight
+      // human turn to finish, THEN arm + inject so the next Stop is ours.
       setLock(existing, sessionId, 'dispatch');
       try {
-        await waitQuiescent(existing, signal);
+        const idle = await waitTurnIdle(existing, signal, timeoutMs);
+        if (!idle) return { ok: false, error: 'worker busy: prior turn did not finish in time' };
         const stop = awaitNextStop(sessionId, signal, timeoutMs);
+        existing.turnInFlight = true;
         await submitToTui(existing.pty, text);
         const payload = await stop;
         return { ok: true, reply: payload.lastAssistantMessage ?? '' };

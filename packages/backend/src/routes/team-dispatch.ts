@@ -193,7 +193,13 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     // Terminal worker: fire-and-forget inject into its TUI (the reply lands in
     // the terminal + capture; the orchestrator doesn't wait on /send).
     if (isTerminalWorker(member.sessionId)) {
-      void dispatchToWorker(member.sessionId, text, new AbortController().signal);
+      // Fire-and-forget: don't await, but surface a failed dispatch instead of
+      // silently dropping the DispatchResult.
+      void dispatchToWorker(member.sessionId, text, new AbortController().signal).then((r) => {
+        if (!r.ok) {
+          console.warn(`[team-dispatch] /send to @${member.alias} failed: ${r.error}`);
+        }
+      });
       emitDispatchEvent({
         type: 'dispatch_send',
         teamId: req.params.teamId,
