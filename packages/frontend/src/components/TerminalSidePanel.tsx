@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BookOpen, BookPlus, ChevronRight } from 'lucide-react';
+import { BookOpen, BookPlus, ChevronDown, ChevronRight, ChevronUp } from 'lucide-react';
 import type { Message, Session, WsEvent } from '@pinloom/shared';
 import { api, type WikiPage } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { useNotifications } from '../stores/notifications.js';
-import { PinToggleButton } from './MessageActions.js';
+import { ActionIconButton, CopyMarkdownButton, PinToggleButton } from './MessageActions.js';
 import { PinnedPanel } from './PinnedPanel.js';
 
 // Right rail for terminal-mode sessions. The live claude TUI is the main view,
@@ -79,6 +79,8 @@ export function TerminalSidePanel({
   );
   const [error, setError] = useState<string | null>(null);
   const [limit, setLimit] = useState(WINDOW);
+  // Per-message "show full content" toggles (history rows truncate by default).
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   // Sticky-bottom: true while the user is parked at the latest turn. Opening the
   // panel and new live turns scroll to the bottom; once the user scrolls up to
@@ -141,6 +143,14 @@ export function TerminalSidePanel({
   function selectTab(next: Tab) {
     setTab(next);
     localStorage.setItem(tabKey(sessionId), next);
+  }
+  function toggleExpand(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   const rows = messages.filter(
@@ -283,6 +293,8 @@ export function TerminalSidePanel({
                     );
                   }
                   const isAssistant = m.role === 'assistant';
+                  const isOpen = expanded.has(m.id);
+                  const long = m.content.trim().length > 600;
                   return (
                     <li
                       key={m.id}
@@ -296,15 +308,29 @@ export function TerminalSidePanel({
                         <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
                           {isAssistant ? 'Assistant' : 'You'}
                         </span>
-                        <PinToggleButton
-                          pinned={m.pinned}
-                          onClick={() => togglePin(m)}
-                          size="sm"
-                          hoverOnly={!m.pinned}
-                        />
+                        <div className="flex items-center gap-0.5">
+                          <span className="opacity-0 transition-opacity group-hover:opacity-100">
+                            <CopyMarkdownButton content={m.content} size="sm" />
+                          </span>
+                          {long && (
+                            <ActionIconButton
+                              onClick={() => toggleExpand(m.id)}
+                              title={isOpen ? 'Collapse' : 'Expand'}
+                              size="sm"
+                            >
+                              {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                            </ActionIconButton>
+                          )}
+                          <PinToggleButton
+                            pinned={m.pinned}
+                            onClick={() => togglePin(m)}
+                            size="sm"
+                            hoverOnly={!m.pinned}
+                          />
+                        </div>
                       </div>
                       <div className="whitespace-pre-wrap break-words text-[var(--color-ink)]">
-                        {preview(m.content)}
+                        {isOpen ? m.content.trim() : preview(m.content)}
                       </div>
                     </li>
                   );
