@@ -26,7 +26,7 @@ import {
   sessionFilePath,
   sessionIdOf,
 } from './transcript.js';
-import { startStopHookServer, type StopHookServer } from './stop-hook-server.js';
+import { getStopHookServer, shutdownStopHookServer } from './shared-server.js';
 
 const CLAUDE_BIN = process.env.PINLOOM_CLAUDE_BIN ?? 'claude';
 
@@ -41,12 +41,6 @@ function ansiToAlpha(s: string): string {
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences
     .replace(/[^a-zA-Z]/g, '')
     .toLowerCase();
-}
-
-// One shared Stop-hook server for the whole backend; sessions key on session_id.
-let sharedServer: Promise<StopHookServer> | null = null;
-function getStopHookServer(): Promise<StopHookServer> {
-  return (sharedServer ??= startStopHookServer());
 }
 
 function cleanEnv(): Record<string, string> {
@@ -383,8 +377,5 @@ export const nodeClaudeSessionFactory: ClaudeSessionFactory =
 
 /** Close the shared Stop-hook server (backend shutdown). */
 export async function shutdownClaudePty(): Promise<void> {
-  if (!sharedServer) return;
-  const s = await sharedServer;
-  sharedServer = null;
-  await s.close();
+  await shutdownStopHookServer();
 }
