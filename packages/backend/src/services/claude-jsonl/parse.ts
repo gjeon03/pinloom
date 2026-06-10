@@ -3,13 +3,14 @@
 // caller hands us already-read lines so this stays trivially unit-testable
 // against recorded fixtures (the riskiest logic in the PTY path, isolated).
 //
-// Two responsibilities:
-//   1. parseJsonlLine        — one raw line  -> typed JsonlLine (or null)
-//   2. extractTurnLines      — given a checkpoint uuid, pick out exactly the
-//                              lines belonging to the turn the injected prompt
-//                              kicked off (parentUuid descendants), dropping
-//                              sidechains/noise/synthetic.
-//   3. toNormalizedEvents    — those lines -> NormalizedEvent[]
+// Responsibilities:
+//   1. parseJsonlLine    — one raw line -> typed JsonlLine (or null)
+//   2. collectUuids      — snapshot the uuids present before a turn
+//   3. selectTurnLines   — given that snapshot, the user/assistant lines that
+//                          appeared since (this turn), dropping sidechain/noise/
+//                          synthetic. A uuid diff, not a parentUuid walk —
+//                          real claude threads turns through attachment lines.
+//   4. toNormalizedEvents — those lines -> NormalizedEvent[]
 //
 // Reused by: the PTY completion detector (turn extraction) AND the usage meter
 // / issue #21 progress bar (token accounting in ./usage.ts).
@@ -56,52 +57,41 @@ function isSynthetic(line: JsonlLine): boolean {
   return line.message?.model === SYNTHETIC_MODEL;
 }
 
+/** Every uuid currently present in the transcript — snapshot before a turn so
+ *  the turn's new lines can be diffed out afterward. */
+export function collectUuids(lines: JsonlLine[]): Set<string> {
+  const out = new Set<string>();
+  for (const l of lines) if (typeof l.uuid === 'string') out.add(l.uuid);
+  return out;
+}
+
 /**
- * Pick out the lines that belong to the turn started by the prompt we injected
- * right after `checkpointUuid`.
+ * Select the user/assistant lines a turn produced, by diffing against the set of
+ * uuids that existed before the prompt was submitted (`seenUuids`).
  *
- * Strategy: the injected user prompt is the first non-noise line whose
- * `parentUuid === checkpointUuid`. From there we walk forward collecting every
- * line whose `parentUuid` is already in the collected set — i.e. the descendant
- * subtree rooted at the injected prompt. This is robust against a *concurrent*
- * injection writing interleaved lines (those descend from a different root) and
- * against trailing lines from a later turn.
- *
- * `checkpointUuid === null` means "fresh session, no prior lines" — the root is
- * then the first non-noise user line in the file.
+ * Why a uuid diff rather than a parentUuid walk: real claude threads a turn's
+ * user→assistant lines THROUGH intermediate `attachment` / `file-history-snapshot`
+ * lines (the assistant's parentUuid points at an attachment, not the user line),
+ * so a "descendants of the user message" walk breaks at every noise hop. Turns
+ * are serialized per PTY session, so "lines that appeared since we snapshotted"
+ * is both simpler and correct. A fresh session passes an empty set → the whole
+ * transcript is the turn.
  *
  * Sidechain (subagent) lines, noise types, and synthetic messages are dropped.
  */
-export function extractTurnLines(
+export function selectTurnLines(
   lines: JsonlLine[],
-  checkpointUuid: string | null,
+  seenUuids: ReadonlySet<string>,
 ): JsonlLine[] {
-  const root = lines.find(
+  return lines.filter(
     (l) =>
+      (l.type === 'user' || l.type === 'assistant') &&
       !NOISE_TYPES.has(l.type) &&
       !l.isSidechain &&
-      l.type === 'user' &&
-      (checkpointUuid === null
-        ? l.parentUuid === null || l.parentUuid === undefined
-        : l.parentUuid === checkpointUuid),
+      !isSynthetic(l) &&
+      typeof l.uuid === 'string' &&
+      !seenUuids.has(l.uuid),
   );
-  if (!root || !root.uuid) return [];
-
-  const collected = new Set<string>([root.uuid]);
-  const turn: JsonlLine[] = [];
-
-  for (const line of lines) {
-    if (line.uuid === root.uuid) continue; // skip the injected prompt itself
-    if (NOISE_TYPES.has(line.type)) continue;
-    if (line.isSidechain) continue;
-    if (isSynthetic(line)) continue;
-    // Belongs to the turn iff its parent is something we've already collected.
-    if (line.parentUuid && collected.has(line.parentUuid)) {
-      if (line.uuid) collected.add(line.uuid);
-      turn.push(line);
-    }
-  }
-  return turn;
 }
 
 function blocksOf(line: JsonlLine): JsonlContentBlock[] {

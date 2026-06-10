@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createClaudePtyAdapter } from './claude-pty-adapter.js';
-import { extractTurnLines } from '../claude-jsonl/index.js';
+import { collectUuids, selectTurnLines } from '../claude-jsonl/index.js';
 import type { JsonlLine } from '../claude-jsonl/index.js';
 import type { ClaudeSession, ClaudeSessionFactory } from './session.js';
 import type { UserPrompt } from '../agents/message-stream.js';
 import type { AgentRunArgs, NormalizedEvent } from '../agents/types.js';
 
 // A deterministic stand-in for a live `claude` REPL. It accumulates transcript
-// lines the way real claude would and uses the REAL extractTurnLines parser, so
+// lines the way real claude would and uses the REAL selectTurnLines parser, so
 // the adapter + parser are exercised together without pty/http/fs.
 class MockSession implements ClaudeSession {
   private lines: JsonlLine[] = [];
@@ -22,13 +22,13 @@ class MockSession implements ClaudeSession {
 
   async runTurn(prompt: UserPrompt): Promise<JsonlLine[]> {
     this.turns += 1;
-    const checkpoint = this.lastUuid;
+    const seen = collectUuids(this.lines);
     const u = `u${this.seq++}`;
     const a = `a${this.seq++}`;
     this.lines.push({
       type: 'user',
       uuid: u,
-      parentUuid: checkpoint,
+      parentUuid: this.lastUuid,
       message: { role: 'user', content: prompt.text },
     });
     this.lines.push({
@@ -43,7 +43,7 @@ class MockSession implements ClaudeSession {
       },
     });
     this.lastUuid = a;
-    return extractTurnLines(this.lines, checkpoint);
+    return selectTurnLines(this.lines, seen);
   }
 
   async dispose(): Promise<void> {

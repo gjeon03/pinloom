@@ -45,6 +45,8 @@ export function createClaudePtyAdapter(factory: ClaudeSessionFactory): AgentAdap
         void session?.dispose().catch(() => {});
       });
 
+      let sessionIdEmitted = false;
+
       async function* events(): AsyncGenerator<NormalizedEvent> {
         try {
           while (!aborted) {
@@ -56,13 +58,12 @@ export function createClaudePtyAdapter(factory: ClaudeSessionFactory): AgentAdap
                 cwd: args.cwd,
                 // TUI claude has no prompt-cache split; concatenate both halves.
                 systemPrompt: args.systemPrompt + (args.systemPromptDynamic ?? ''),
+                initialPrompt: args.initialPrompt,
                 model: args.model,
                 resume: args.resume ?? null,
                 reasoningEffort: args.reasoningEffort,
                 mcpServers: args.mcpServers,
               });
-              const sid = session.sessionId();
-              if (sid) yield { type: 'session_id', id: sid };
             }
 
             let turnLines;
@@ -77,8 +78,17 @@ export function createClaudePtyAdapter(factory: ClaudeSessionFactory): AgentAdap
             }
             if (aborted) return;
 
-            // session_id was already emitted once on start; per-turn mapping
-            // only carries model/blocks/tool results + turn_complete.
+            // The session id is only known after the first turn for a fresh
+            // session (the transcript is created on first submit), so emit it
+            // lazily the moment it becomes available, exactly once.
+            if (!sessionIdEmitted) {
+              const sid = session.sessionId();
+              if (sid) {
+                yield { type: 'session_id', id: sid };
+                sessionIdEmitted = true;
+              }
+            }
+
             for (const ev of toNormalizedEvents(turnLines, { sessionId: null })) {
               yield ev;
             }

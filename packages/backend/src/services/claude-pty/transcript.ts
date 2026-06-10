@@ -58,12 +58,13 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export async function discoverNewSessionFile(
   cwd: string,
   before: ReadonlySet<string>,
-  opts: { timeoutMs?: number; pollMs?: number; home?: string } = {},
+  opts: { timeoutMs?: number; pollMs?: number; home?: string; signal?: AbortSignal } = {},
 ): Promise<string> {
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const pollMs = opts.pollMs ?? 100;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (opts.signal?.aborted) throw new Error('aborted');
     const fresh = [...listSessionFiles(cwd, opts.home)].filter((f) => !before.has(f));
     if (fresh.length === 1) return fresh[0];
     if (fresh.length > 1) {

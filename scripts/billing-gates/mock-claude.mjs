@@ -24,6 +24,29 @@ function argValue(flag) {
   return i !== -1 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
 }
 
+// The positional [prompt] is whatever argv element isn't a flag or a flag value.
+const VALUE_FLAGS = new Set([
+  '--settings',
+  '--setting-sources',
+  '--append-system-prompt',
+  '--model',
+  '--mcp-config',
+  '--resume',
+]);
+function positionalPrompt() {
+  const a = process.argv.slice(2);
+  const positionals = [];
+  for (let i = 0; i < a.length; i++) {
+    const t = a[i];
+    if (t.startsWith('--')) {
+      if (VALUE_FLAGS.has(t)) i++; // skip its value
+      continue;
+    }
+    positionals.push(t);
+  }
+  return positionals.length ? positionals[positionals.length - 1] : null;
+}
+
 const HOME = process.env.HOME || homedir();
 const cwd = process.cwd();
 const slug = cwd.replace(/[^a-zA-Z0-9]/g, '-');
@@ -102,21 +125,28 @@ function handlePrompt(text) {
   setTimeout(fireStopHook, 10);
 }
 
-// Parse bracketed-paste prompts out of the raw keystroke stream.
+// Turn 1 may be seeded via the positional [prompt] arg (like real claude) —
+// auto-run it on launch, mirroring the interactive-session behavior.
+const seed = resume ? null : positionalPrompt();
+if (seed) setTimeout(() => handlePrompt(seed), 20);
+
+// Parse prompts out of the raw keystroke stream. A submission ends with CR (or
+// LF); the text may be typed plainly or wrapped in bracketed paste — strip the
+// paste markers and any stray CSI codes, then treat the line as the prompt.
 let buf = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   buf += chunk;
-  for (;;) {
-    const start = buf.indexOf('\x1b[200~');
-    const end = buf.indexOf('\x1b[201~');
-    if (start === -1 || end === -1 || end < start) break;
-    const text = buf.slice(start + 6, end);
-    // drop everything through the CR that follows the paste-end marker
-    const afterEnd = end + 6;
-    const cr = buf.indexOf('\r', afterEnd);
-    buf = cr === -1 ? buf.slice(afterEnd) : buf.slice(cr + 1);
-    handlePrompt(text);
+  let idx;
+  while ((idx = buf.search(/[\r\n]/)) !== -1) {
+    let line = buf.slice(0, idx);
+    buf = buf.slice(idx + 1);
+    line = line
+      .replace(/\x1b\[200~/g, '')
+      .replace(/\x1b\[201~/g, '')
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+      .trim();
+    if (line) handlePrompt(line);
   }
 });
 process.stdin.on('end', () => process.exit(0));

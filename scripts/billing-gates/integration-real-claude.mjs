@@ -14,6 +14,8 @@
 //   PINLOOM_GATE_CONFIRM=1 node scripts/billing-gates/integration-real-claude.mjs
 
 import { pathToFileURL } from 'node:url';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 if (process.env.PINLOOM_GATE_CONFIRM !== '1') {
@@ -47,29 +49,51 @@ try {
 
 const { claudePtyAdapter, shutdownClaudePty } = mod;
 
+// Use a throwaway cwd so the new transcript is unambiguous (avoids colliding
+// with any claude already running in your project dir). realpathSync resolves
+// macOS's /var -> /private/var so the slug matches claude's resolved cwd.
+const cwd = realpathSync(mkdtempSync(path.join(tmpdir(), 'pinloom-pty-real-')));
+
 const run = claudePtyAdapter.run({
-  cwd: process.cwd(),
+  cwd,
   systemPrompt: '',
   abortController: new AbortController(),
   initialPrompt: { text: 'Reply with exactly: OK', images: [] },
 });
 
-console.log('→ driving real claude for one turn…\n');
+// Two turns: turn 1 is seeded via the positional arg, turn 2 is injected as
+// keystrokes into the now-settled TUI — so this validates BOTH input paths.
+console.log(`→ driving real claude for two turns (cwd=${cwd})…\n`);
 const events = [];
+let turns = 0;
 try {
   for await (const ev of run.events) {
     events.push(ev);
     console.log('  ', JSON.stringify(ev));
-    if (ev.type === 'turn_complete') run.close();
+    if (ev.type === 'turn_complete') {
+      turns += 1;
+      if (turns === 1) {
+        console.log('\n→ turn 1 done; injecting turn 2…\n');
+        run.pushMessage({ text: 'Now reply with exactly: TWO', images: [] });
+      } else {
+        run.close();
+      }
+    }
   }
 } finally {
   await shutdownClaudePty?.();
+  try {
+    rmSync(cwd, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
 }
 
-const gotText = events.some((e) => e.type === 'text_delta');
-const gotComplete = events.some((e) => e.type === 'turn_complete');
+const texts = events.filter((e) => e.type === 'text_delta').map((e) => e.text);
+const completes = events.filter((e) => e.type === 'turn_complete').length;
+const ok = texts.length >= 2 && completes >= 2;
 console.log(
-  `\n[result] text_delta=${gotText} turn_complete=${gotComplete} → ` +
-    (gotText && gotComplete ? 'MECHANISM WORKS ✓' : 'FAILED ✗ (tune submitToTui / transcript slug)'),
+  `\n[result] turns=${completes} texts=${JSON.stringify(texts)} → ` +
+    (ok ? 'MULTI-TURN MECHANISM WORKS ✓' : 'turn 1 ok, turn 2 (injection) needs tuning ✗'),
 );
-process.exit(gotText && gotComplete ? 0 : 1);
+process.exit(ok ? 0 : 1);

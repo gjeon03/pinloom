@@ -4,7 +4,8 @@
 export {
   parseJsonlLine,
   parseJsonlLines,
-  extractTurnLines,
+  collectUuids,
+  selectTurnLines,
   toNormalizedEvents,
 } from './parse.js';
 export { aggregateUsage } from './usage.js';

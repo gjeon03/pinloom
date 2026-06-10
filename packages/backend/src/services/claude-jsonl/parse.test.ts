@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   parseJsonlLine,
   parseJsonlLines,
-  extractTurnLines,
+  collectUuids,
+  selectTurnLines,
   toNormalizedEvents,
 } from './parse.js';
 import type { JsonlLine } from './types.js';
@@ -79,73 +80,66 @@ describe('parseJsonlLine', () => {
   });
 });
 
-describe('extractTurnLines', () => {
-  it('extracts the descendant subtree rooted at the injected prompt', () => {
+describe('collectUuids', () => {
+  it('collects every line uuid, skipping lines without one', () => {
     const lines: JsonlLine[] = [
-      // pre-turn history; checkpoint is the last of these
-      assistantLine('cp', 'older'),
-      // injected prompt (parent = checkpoint)
-      userLine('u1', 'cp', 'do the thing'),
-      assistantLine('a1', 'u1', [{ type: 'text', text: 'on it' }]),
-      assistantLine('a2', 'a1', [
-        { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
-      ]),
-      userLine('ur1', 'a2', [
-        { type: 'tool_result', tool_use_id: 't1', content: 'file.txt' },
-      ]),
-      assistantLine('a3', 'ur1', [{ type: 'text', text: 'done' }]),
+      userLine('u1', null, 'a'),
+      { type: 'file-history-snapshot' }, // no uuid
+      assistantLine('a1', 'u1', []),
     ];
-    const turn = extractTurnLines(lines, 'cp');
-    expect(turn.map((l) => l.uuid)).toEqual(['a1', 'a2', 'ur1', 'a3']);
+    expect(collectUuids(lines)).toEqual(new Set(['u1', 'a1']));
+  });
+});
+
+describe('selectTurnLines', () => {
+  it('selects user/assistant lines whose uuid is new since the snapshot', () => {
+    const prior: JsonlLine[] = [userLine('u0', null, 'old'), assistantLine('a0', 'u0', [])];
+    const seen = collectUuids(prior);
+    const lines: JsonlLine[] = [
+      ...prior,
+      userLine('u1', 'a0', 'new prompt'),
+      assistantLine('a1', 'u1', [{ type: 'text', text: 'reply' }]),
+    ];
+    const turn = selectTurnLines(lines, seen);
+    expect(turn.map((l) => l.uuid)).toEqual(['u1', 'a1']);
   });
 
-  it('excludes a concurrent injection that descends from a different root', () => {
+  it('a fresh session (empty snapshot) yields the whole transcript as the turn', () => {
     const lines: JsonlLine[] = [
-      assistantLine('cp', 'older'),
-      userLine('u1', 'cp', 'mine'),
-      // a concurrent prompt injected by someone else — parent is NOT checkpoint
-      userLine('uX', 'somethingElse', 'not mine'),
-      assistantLine('aX', 'uX', [{ type: 'text', text: 'other turn' }]),
-      assistantLine('a1', 'u1', [{ type: 'text', text: 'mine reply' }]),
+      { type: 'system', uuid: 'boot', parentUuid: null },
+      userLine('u1', 'boot', 'hi'),
+      assistantLine('a1', 'u1', [{ type: 'text', text: 'hello' }]),
     ];
-    const turn = extractTurnLines(lines, 'cp');
-    expect(turn.map((l) => l.uuid)).toEqual(['a1']);
+    const turn = selectTurnLines(lines, new Set());
+    expect(turn.map((l) => l.uuid)).toEqual(['u1', 'a1']);
   });
 
-  it('drops noise types, sidechains, and synthetic messages', () => {
+  it('selects user+assistant even when threaded through attachment/noise lines', () => {
+    // Real claude: the assistant parents off an intermediate attachment, NOT the
+    // user line — a parent-chain walk would miss it, the uuid diff does not.
     const lines: JsonlLine[] = [
-      assistantLine('cp', 'older'),
-      userLine('u1', 'cp', 'go'),
+      { type: 'file-history-snapshot', uuid: 'fhs', parentUuid: null },
+      userLine('u1', 'fhs', 'go'),
+      { type: 'attachment', uuid: 'att1', parentUuid: 'u1' },
+      { type: 'attachment', uuid: 'att2', parentUuid: 'att1' },
+      assistantLine('a1', 'att2', [{ type: 'text', text: 'done' }]),
+    ];
+    const turn = selectTurnLines(lines, new Set());
+    expect(turn.map((l) => l.uuid)).toEqual(['u1', 'a1']);
+  });
+
+  it('drops noise types, sidechains, synthetic messages, and uuid-less lines', () => {
+    const lines: JsonlLine[] = [
+      userLine('u1', null, 'go'),
       { type: 'file-history-snapshot', uuid: 'noise1', parentUuid: 'u1' },
       { type: 'ai-title', uuid: 'noise2', parentUuid: 'u1' },
-      assistantLine('side', 'u1', [{ type: 'text', text: 'subagent' }], {
-        isSidechain: true,
-      }),
-      assistantLine(
-        'synth',
-        'u1',
-        [{ type: 'text', text: 'compaction' }],
-        {},
-        '<synthetic>',
-      ),
+      assistantLine('side', 'u1', [{ type: 'text', text: 'subagent' }], { isSidechain: true }),
+      assistantLine('synth', 'u1', [{ type: 'text', text: 'compaction' }], {}, '<synthetic>'),
+      { type: 'assistant', message: { role: 'assistant', model: 'claude-opus-4-8', content: [] } }, // no uuid
       assistantLine('a1', 'u1', [{ type: 'text', text: 'real' }]),
     ];
-    const turn = extractTurnLines(lines, 'cp');
-    expect(turn.map((l) => l.uuid)).toEqual(['a1']);
-  });
-
-  it('handles a fresh session (checkpoint null → first root user line)', () => {
-    const lines: JsonlLine[] = [
-      userLine('u1', null, 'first message'),
-      assistantLine('a1', 'u1', [{ type: 'text', text: 'hi' }]),
-    ];
-    const turn = extractTurnLines(lines, null);
-    expect(turn.map((l) => l.uuid)).toEqual(['a1']);
-  });
-
-  it('returns [] when no matching root is found', () => {
-    const lines: JsonlLine[] = [assistantLine('a1', 'whatever', [])];
-    expect(extractTurnLines(lines, 'cp')).toEqual([]);
+    const turn = selectTurnLines(lines, new Set());
+    expect(turn.map((l) => l.uuid)).toEqual(['u1', 'a1']);
   });
 });
 

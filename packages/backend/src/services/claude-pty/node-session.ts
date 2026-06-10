@@ -15,14 +15,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
-import { extractTurnLines, type JsonlLine } from '../claude-jsonl/index.js';
+import { collectUuids, selectTurnLines, type JsonlLine } from '../claude-jsonl/index.js';
 import type { ImageInput } from '../runner-types.js';
 import type { UserPrompt } from '../agents/message-stream.js';
 import type { ClaudeSession, ClaudeSessionFactory, ClaudeSessionSpec } from './session.js';
 import {
   discoverNewSessionFile,
   listSessionFiles,
-  readCheckpoint,
   readLines,
   sessionFilePath,
   sessionIdOf,
@@ -30,6 +29,19 @@ import {
 import { startStopHookServer, type StopHookServer } from './stop-hook-server.js';
 
 const CLAUDE_BIN = process.env.PINLOOM_CLAUDE_BIN ?? 'claude';
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Strip ANSI/cursor escapes and reduce to lowercase letters so we can match TUI
+// prompts whose words the terminal lays out with cursor-move codes instead of
+// spaces (e.g. "trust[20Gthis[25Gfolder" -> "trustthisfolder").
+function ansiToAlpha(s: string): string {
+  return s
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '') // CSI sequences
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences
+    .replace(/[^a-zA-Z]/g, '')
+    .toLowerCase();
+}
 
 // One shared Stop-hook server for the whole backend; sessions key on session_id.
 let sharedServer: Promise<StopHookServer> | null = null;
@@ -70,16 +82,34 @@ function materializeImages(images: ImageInput[], dir: string, turn: number): str
   return paths;
 }
 
-// Submit a prompt to the live TUI. Bracketed paste keeps a multi-line prompt
-// from being interpreted as separate submissions; the trailing CR sends it.
-// (Exact sequence is the most likely thing to need tuning against a new claude
-// version — that's what the integration test guards.)
-function submitToTui(child: IPty, text: string): void {
-  child.write('\x1b[200~' + text + '\x1b[201~');
+// Submit a prompt to the live TUI: enter the text, pause so the TUI registers
+// it, then CR to send. A multi-line prompt is wrapped in bracketed paste so its
+// internal newlines aren't treated as separate submissions; a single line is
+// typed plainly (some TUIs swallow the CR that immediately follows a paste-end).
+// These millisecond pauses are the most version-fragile spot — the integration
+// test guards them.
+const TUI_SETTLE_BEFORE_ENTER_MS = 120;
+const TUI_SETTLE_AFTER_ENTER_MS = 20;
+async function submitToTui(child: IPty, text: string): Promise<void> {
+  // Strip bracketed-paste markers from the payload so a prompt that literally
+  // contains them can't break out of the paste and drive the TUI as keystrokes.
+  const safe = text.replace(/\x1b\[20[01]~/g, '');
+  if (safe.includes('\n')) {
+    child.write('\x1b[200~' + safe + '\x1b[201~');
+  } else {
+    child.write(safe);
+  }
+  await sleep(TUI_SETTLE_BEFORE_ENTER_MS);
   child.write('\r');
+  await sleep(TUI_SETTLE_AFTER_ENTER_MS);
 }
 
-function buildArgs(spec: ClaudeSessionSpec, settingsPath: string, mcpPath: string | null): string[] {
+function buildArgs(
+  spec: ClaudeSessionSpec,
+  settingsPath: string,
+  mcpPath: string | null,
+  initialText: string | null,
+): string[] {
   const args: string[] = [
     // Isolate OUR Stop hook here; keep the user's own config loading too.
     '--settings',
@@ -95,6 +125,11 @@ function buildArgs(spec: ClaudeSessionSpec, settingsPath: string, mcpPath: strin
   if (spec.model) args.push('--model', spec.model);
   if (mcpPath) args.push('--mcp-config', mcpPath);
   if (spec.resume) args.push('--resume', spec.resume);
+  // Positional [prompt]: seeds turn 1 so the interactive session auto-runs it,
+  // instead of us typing into the freshly-launched TUI. Skipped when resuming.
+  if (!spec.resume && initialText && initialText.length > 0) {
+    args.push(initialText);
+  }
   return args;
 }
 
@@ -170,13 +205,25 @@ export function createNodeClaudeSessionFactory(
 
       const before = spec.resume ? new Set<string>() : listSessionFiles(spec.cwd, home);
 
+      // Seed turn 1 via the positional [prompt] arg (robust vs typing into the
+      // freshly-launched TUI). Materialize any turn-1 images up front and
+      // reference them by @path in the seed text. Skipped when resuming.
+      const seedImages = spec.resume
+        ? []
+        : materializeImages(spec.initialPrompt.images, tmp, 0);
+      const initialText = spec.resume
+        ? null
+        : seedImages.length > 0
+          ? `${spec.initialPrompt.text} ${seedImages.map((p) => `@${p}`).join(' ')}`
+          : spec.initialPrompt.text;
+
       // When a home override is set (tests), point the child at it too so it
       // writes transcripts where we read them. In production `home` is undefined
       // and the child inherits the real $HOME.
       const childEnv = cleanEnv();
       if (home) childEnv.HOME = home;
 
-      const child = pty.spawn(bin, buildArgs(spec, settingsPath, mcpPath), {
+      const child = pty.spawn(bin, buildArgs(spec, settingsPath, mcpPath, initialText), {
         name: 'xterm-color',
         cols: 120,
         rows: 40,
@@ -185,53 +232,172 @@ export function createNodeClaudeSessionFactory(
       });
 
       // Keep a small tail of TUI output for diagnostics; we don't parse it.
+      // lastDataAt drives the "TUI settled" readiness wait below.
       let tail = '';
+      let lastDataAt = Date.now();
       child.onData((d) => {
         tail = (tail + d).slice(-4096);
+        lastDataAt = Date.now();
       });
 
-      let sessionId: string;
-      try {
-        sessionId = spec.resume
-          ? spec.resume
-          : sessionIdOf(await discoverNewSessionFile(spec.cwd, before, { home }));
-      } catch (err) {
-        await killGroup(child);
-        try {
-          rmSync(tmp, { recursive: true, force: true });
-        } catch {
-          // best-effort
+      // Lazy transcript discovery: a fresh interactive `claude` writes its
+      // session JSONL only AFTER the first prompt is submitted, not on launch —
+      // so for a fresh session we submit first, then discover (see runTurn). A
+      // resumed session already has a known transcript file.
+      let sessionId: string | null = spec.resume ?? null;
+      let sessionFile: string | null = spec.resume
+        ? sessionFilePath(spec.cwd, spec.resume, home)
+        : null;
+      let disposeP: Promise<void> | null = null;
+      // Turn 1's images (if any) used index 0 via the seed; injected turns start at 1.
+      let turnSeq = spec.resume ? 0 : 1;
+      // The first prompt was seeded as the positional arg — the first runTurn
+      // reads it back rather than injecting it. Only when there's actually seed
+      // text: an empty initial prompt isn't passed as a positional, so claude
+      // would sit idle — fall through to the inject path instead.
+      let firstTurnSeeded = !spec.resume && !!initialText;
+
+      // A brand-new cwd triggers claude's "Do you trust this folder?" dialog,
+      // which blocks startup and isn't covered by --dangerously-skip-permissions.
+      // The user added this project to pinloom, so trusting it is implied —
+      // accept the default ("Yes, I trust this folder") by sending Enter once.
+      let trustAccepted = false;
+      function maybeAcceptTrustDialog(): void {
+        if (trustAccepted) return;
+        const clean = ansiToAlpha(tail);
+        if (clean.includes('trustthisfolder') || clean.includes('doyoutrustthefiles')) {
+          trustAccepted = true;
+          child.write('\r');
+          lastDataAt = Date.now(); // expect a redraw; keep waiting for settle
+          if (process.env.PINLOOM_PTY_DEBUG) console.error('[pty] accepted trust dialog');
         }
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(`${msg}\nlast TUI output:\n${tail.slice(-500)}`);
       }
 
-      const sessionFile = sessionFilePath(spec.cwd, sessionId, home);
-      let disposeP: Promise<void> | null = null;
-      let turnSeq = 0;
+      // Let the TUI finish drawing its prompt before we paste. We must NOT treat
+      // the brief silence *before claude prints anything* as ready (that races
+      // ahead of the trust dialog), so require: at least MIN_MS elapsed, some
+      // output seen, and then QUIET_MS of calm. Dismisses the trust dialog en route.
+      async function waitForTuiReady(signal: AbortSignal): Promise<void> {
+        const QUIET_MS = 600;
+        const MIN_MS = 1500;
+        const CAP_MS = 15_000;
+        const startedAt = Date.now();
+        while (!signal.aborted) {
+          maybeAcceptTrustDialog();
+          const elapsed = Date.now() - startedAt;
+          const sawOutput = tail.length > 0;
+          const calm = Date.now() - lastDataAt >= QUIET_MS;
+          if (elapsed >= MIN_MS && sawOutput && calm) break;
+          if (elapsed >= CAP_MS) break;
+          await sleep(100);
+        }
+        if (process.env.PINLOOM_PTY_DEBUG)
+          console.error('[pty] tui ready (trustAccepted=%s)', trustAccepted);
+      }
+
+      // Poll briefly to catch + accept the trust dialog (a pre-trusted dir shows
+      // none). Returns once accepted, once a transcript appears (turn 1 started),
+      // or after a short cap.
+      async function clearStartupDialogs(signal: AbortSignal): Promise<void> {
+        const cap = Date.now() + 10_000;
+        while (!signal.aborted && Date.now() < cap) {
+          maybeAcceptTrustDialog();
+          if (trustAccepted) return;
+          if (listSessionFiles(spec.cwd, home).size > before.size) return;
+          await sleep(150);
+        }
+      }
+
+      // The Stop hook can fire a beat before claude flushes the final assistant
+      // message to the transcript file — poll briefly until the selected turn
+      // actually carries assistant content before returning it.
+      async function readTurnSettled(seen: ReadonlySet<string>): Promise<JsonlLine[]> {
+        let turn: JsonlLine[] = [];
+        let settled = false;
+        for (let i = 0; i < 25; i++) {
+          turn = selectTurnLines(readLines(sessionFile!), seen);
+          settled = turn.some(
+            (l) =>
+              l.type === 'assistant' &&
+              Array.isArray(l.message?.content) &&
+              (l.message?.content as unknown[]).length > 0,
+          );
+          if (settled) break;
+          await sleep(120);
+        }
+        if (!settled) {
+          // Exhausted the retry window without assistant content — the turn ends
+          // up empty (transcript flush stalled, claude crashed post-Stop-hook, or
+          // a schema change). Surface it rather than silently emitting a blank turn.
+          console.warn('[claude-pty] turn produced no assistant content after settle window');
+        }
+        if (process.env.PINLOOM_PTY_DEBUG)
+          console.error('[pty] turn settled: %d lines extracted', turn.length);
+        return turn;
+      }
+
+      async function discover(signal: AbortSignal): Promise<void> {
+        try {
+          sessionId = sessionIdOf(
+            await discoverNewSessionFile(spec.cwd, before, {
+              home,
+              timeoutMs: 30_000,
+              signal,
+            }),
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(`${msg}\nlast TUI output:\n${tail.slice(-500)}`);
+        }
+        sessionFile = sessionFilePath(spec.cwd, sessionId, home);
+      }
 
       return {
-        sessionId(): string {
+        sessionId(): string | null {
           return sessionId;
         },
 
         async runTurn(prompt: UserPrompt, signal: AbortSignal): Promise<JsonlLine[]> {
-          const checkpoint = readCheckpoint(sessionFile);
-
-          // Arm the completion waiter BEFORE injecting so a fast turn can't fire
-          // the Stop hook before we're listening.
-          const stopped = server.awaitStop(sessionId, signal);
+          if (firstTurnSeeded) {
+            // claude was launched with this prompt as its positional arg; once we
+            // clear the trust dialog it auto-runs turn 1. Don't inject — just
+            // discover the transcript it creates and await the Stop hook (the
+            // server buffers a hook that fires before we arm, via firedAhead).
+            firstTurnSeeded = false;
+            await clearStartupDialogs(signal);
+            await discover(signal);
+            if (process.env.PINLOOM_PTY_DEBUG)
+              console.error('[pty] seeded turn discovered sid=%s', sessionId);
+            // Fresh session — nothing pre-existed, so the whole transcript is
+            // this turn.
+            await server.awaitStop(sessionId!, signal);
+            return readTurnSettled(new Set<string>());
+          }
 
           const imagePaths = materializeImages(prompt.images, tmp, turnSeq++);
           const text =
             imagePaths.length > 0
               ? `${prompt.text} ${imagePaths.map((p) => `@${p}`).join(' ')}`
               : prompt.text;
-          submitToTui(child, text);
 
+          if (sessionFile === null) {
+            // Fresh-but-unseeded (shouldn't normally happen): submit first, then
+            // discover + arm completion.
+            await waitForTuiReady(signal);
+            await submitToTui(child, text);
+            await discover(signal);
+            await server.awaitStop(sessionId!, signal);
+            return readTurnSettled(new Set<string>());
+          }
+
+          // Subsequent / resumed turn: snapshot the existing uuids and arm BEFORE
+          // injecting so a fast turn can't beat us to the Stop hook; the new
+          // lines that appear are this turn.
+          const seen = collectUuids(readLines(sessionFile));
+          const stopped = server.awaitStop(sessionId!, signal);
+          await submitToTui(child, text);
           await stopped;
-
-          return extractTurnLines(readLines(sessionFile), checkpoint);
+          return readTurnSettled(seen);
         },
 
         dispose(): Promise<void> {
@@ -240,7 +406,7 @@ export function createNodeClaudeSessionFactory(
           // instead of returning before killGroup's grace period elapses.
           if (disposeP) return disposeP;
           disposeP = (async () => {
-            server.release(sessionId);
+            if (sessionId) server.release(sessionId);
             await killGroup(child);
             try {
               rmSync(tmp, { recursive: true, force: true });

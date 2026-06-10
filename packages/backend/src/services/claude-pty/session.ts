@@ -20,6 +20,13 @@ export interface ClaudeSessionSpec {
   cwd: string;
   /** Full system prompt (static + dynamic concatenated — TUI has no cache split). */
   systemPrompt: string;
+  /**
+   * The first user prompt. Passed to `claude` as the positional `[prompt]` arg
+   * so the interactive session auto-runs turn 1 — far more robust than trying to
+   * type it into the freshly-launched TUI. The first `runTurn` then just reads
+   * that turn back rather than injecting. Ignored when `resume` is set.
+   */
+  initialPrompt: UserPrompt;
   model?: string;
   /** Prior sessionId to `--resume`; null = fresh session. */
   resume?: string | null;
