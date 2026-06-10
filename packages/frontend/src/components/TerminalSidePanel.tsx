@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { BookOpen, BookPlus, ChevronRight } from 'lucide-react';
 import type { Message, Session, WsEvent } from '@pinloom/shared';
-import { api } from '../api/client.js';
+import { api, type WikiPage } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
+import { useNotifications } from '../stores/notifications.js';
 import { PinToggleButton } from './MessageActions.js';
 import { PinnedPanel } from './PinnedPanel.js';
 
@@ -17,10 +19,23 @@ import { PinnedPanel } from './PinnedPanel.js';
 // TUI keeps its launch-time prompt), so a freshly-pinned note reaches claude
 // after the session is reopened / resumed.
 
-type Tab = 'history' | 'pins';
+type Tab = 'history' | 'pins' | 'wiki';
 
 const collapsedKey = (sid: string) => `pinloom:termpanel:collapsed:${sid}`;
 const tabKey = (sid: string) => `pinloom:termpanel:tab:${sid}`;
+
+function isTab(v: string | null): v is Tab {
+  return v === 'history' || v === 'pins' || v === 'wiki';
+}
+
+// Mirror of backend computeWikiSlug (basename of cwd, slugified). We skip the
+// rare same-basename collision suffix — at worst the relevant-pages list shows a
+// few extra pages; the full wiki (with proper scope filters) is one click away.
+function projectSlug(cwd: string): string {
+  const parts = cwd.replace(/\/+$/, '').split('/').filter(Boolean);
+  const base = parts[parts.length - 1] ?? cwd;
+  return base.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '') || 'project';
+}
 
 // How many history rows to render initially / per "show older" step. Most opens
 // want the latest turns (mirrors the terminal scrollback + ChatView), so we
@@ -39,6 +54,8 @@ interface Props {
   /** Propagate a pin add/remove/title change up to the shared pins state. */
   onPinChange: (message: Message) => void;
   projectName: string;
+  /** Project directory — basename drives the wiki scope slug. */
+  projectCwd: string;
   onHandoff?: (newSession: Session) => void;
   onSendPin?: (pin: Message) => void;
 }
@@ -48,13 +65,15 @@ export function TerminalSidePanel({
   pins,
   onPinChange,
   projectName,
+  projectCwd,
   onHandoff,
   onSendPin,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [tab, setTab] = useState<Tab>(
-    () => (localStorage.getItem(tabKey(sessionId)) === 'pins' ? 'pins' : 'history'),
-  );
+  const [tab, setTab] = useState<Tab>(() => {
+    const saved = localStorage.getItem(tabKey(sessionId));
+    return isTab(saved) ? saved : 'history';
+  });
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(collapsedKey(sessionId)) === '1',
   );
@@ -199,6 +218,7 @@ export function TerminalSidePanel({
         <div className="flex items-center">
           {tabBtn('history', 'History')}
           {tabBtn('pins', pinCount > 0 ? `Pins ${pinCount}` : 'Pins')}
+          {tabBtn('wiki', 'Wiki')}
         </div>
         <button
           type="button"
@@ -212,7 +232,9 @@ export function TerminalSidePanel({
 
       {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
 
-      {tab === 'pins' ? (
+      {tab === 'wiki' ? (
+        <WikiTab sessionId={sessionId} projectCwd={projectCwd} />
+      ) : tab === 'pins' ? (
         <div className="min-h-0 flex-1">
           <PinnedPanel
             pins={pins}
@@ -296,5 +318,126 @@ export function TerminalSidePanel({
         </>
       )}
     </aside>
+  );
+}
+
+// Wiki tab: the per-session "sync to wiki" action ChatView's header gives
+// structured sessions (the one wiki affordance terminal mode lacked), plus this
+// project's relevant pages with links into the full wiki. Wiki CONTEXT is already
+// injected into the launch prompt by the backend, so this is purely the UI.
+function WikiTab({ sessionId, projectCwd }: { sessionId: string; projectCwd: string }) {
+  const navigate = useNavigate();
+  const notifications = useNotifications();
+  const [syncing, setSyncing] = useState(false);
+  const [pages, setPages] = useState<WikiPage[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const slug = projectSlug(projectCwd);
+
+  const loadPages = useCallback(async () => {
+    try {
+      const o = await api.wikiOverview();
+      setPages(o.pages);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .wikiOverview()
+      .then((o) => {
+        if (!cancelled) setPages(o.pages);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const relevant = (pages ?? []).filter((p) => {
+    const a = p.meta.appliesTo;
+    return a.length === 0 || a.includes('global') || a.includes(slug);
+  });
+
+  async function sync() {
+    if (syncing) return;
+    setSyncing(true);
+    const id = notifications.start({
+      kind: 'wiki-sync',
+      title: 'Wiki sync',
+      meta: { sessionId },
+    });
+    try {
+      const result = await api.syncWiki(sessionId);
+      notifications.resolve(id, result.output);
+      void loadPages(); // surface any newly written pages in the list
+    } catch (err) {
+      notifications.fail(id, err instanceof Error ? err.message : String(err));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-3 py-3">
+      <button
+        type="button"
+        onClick={sync}
+        disabled={syncing}
+        aria-busy={syncing}
+        className="flex items-center justify-center gap-2 rounded border border-[var(--color-accent)]/50 bg-[var(--color-surface-2)] px-3 py-2 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)] disabled:opacity-60"
+      >
+        <BookPlus className={`h-4 w-4 ${syncing ? 'animate-pulse' : ''}`} />
+        {syncing ? 'Syncing…' : 'Sync this session to wiki'}
+      </button>
+      <p className="text-[10px] leading-relaxed text-[var(--color-ink-muted)]">
+        Distills durable knowledge from this conversation into the project wiki
+        (~/.pinloom/wiki), which is injected into every future session's prompt.
+      </p>
+
+      <div className="flex items-center justify-between border-t border-[var(--color-border)]/50 pt-2">
+        <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+          Pages for {slug}
+        </span>
+        <button
+          type="button"
+          onClick={() => navigate('/wiki')}
+          className="flex items-center gap-1 text-[10px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        >
+          <BookOpen className="h-3 w-3" /> Open wiki
+        </button>
+      </div>
+
+      {error && <p className="text-xs text-red-400">{error}</p>}
+      {pages === null ? (
+        <p className="px-1 text-xs text-[var(--color-ink-muted)]">Loading…</p>
+      ) : relevant.length === 0 ? (
+        <p className="px-1 text-xs text-[var(--color-ink-muted)]">
+          No wiki pages for this project yet. Sync above to create some.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {relevant.map((p) => (
+            <li key={p.relPath}>
+              <button
+                type="button"
+                onClick={() => navigate(`/wiki/${encodeURIComponent(p.relPath)}`)}
+                className="w-full rounded border border-[var(--color-border)]/50 px-2 py-1.5 text-left text-xs hover:border-[var(--color-accent)]"
+              >
+                <div className="truncate text-[var(--color-ink)]">{p.title || p.relPath}</div>
+                {p.meta.summary && (
+                  <div className="truncate text-[10px] text-[var(--color-ink-muted)]">
+                    {p.meta.summary}
+                  </div>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

@@ -102,7 +102,7 @@ rail's Pins tab) — a one-line guard that leaves the structured branch untouche
 4. Commit per phase (English messages, project convention).
 
 ## Status
-- [ ] Phase 1
-- [ ] Phase 2
-- [ ] Phase 3
-- [ ] Phase 4
+- [x] Phase 1 — tabbed History|Pins rail (reuse PinnedPanel), left rail hidden for terminal. Verified (2 agents + Playwright). Commit 69cc789.
+- [ ] Phase 2 — Wiki tab
+- [ ] Phase 3 — History polish
+- [ ] Phase 4 — Integration + regression

@@ -669,6 +669,7 @@ export function ProjectPage({
                   pins={pins}
                   onPinChange={handlePinsChange}
                   projectName={project.name}
+                  projectCwd={project.cwd}
                   onHandoff={(newSession) => {
                     setSessions((prev) => [...prev, newSession]);
                     setActiveSession(newSession);
