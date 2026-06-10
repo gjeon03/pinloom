@@ -21,6 +21,7 @@ import {
 } from '../services/message-queue.js';
 import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
 import { claudeTransport } from '../services/agents/index.js';
+import { killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
 import { runWikiSync } from '../services/wiki-sync.js';
 
@@ -545,6 +546,9 @@ export async function sessionRoutes(app: FastifyInstance) {
       // producing FK errors and orphan in-memory state.
       cancelAiRun(sessionId);
       cancelExecRun(sessionId);
+      // Terminal-mode sessions own a live claude pty + temp dir — kill it so it
+      // doesn't orphan when the row is deleted.
+      killAgentTerminal(sessionId);
       db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
       return { ok: true };
     },

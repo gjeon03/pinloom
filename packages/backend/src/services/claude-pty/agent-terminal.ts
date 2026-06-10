@@ -33,8 +33,6 @@ export type TerminalDriver = 'human' | 'dispatch';
 interface AgentTerminalSession {
   pty: IPty;
   launch: BuiltClaudeLaunch;
-  /** Claude session id once known (from the transcript / resume token). */
-  sessionId: string;
   buffer: string;
   onData: ((data: string) => void) | null;
   onExit: ((code: number) => void) | null;
@@ -44,6 +42,10 @@ interface AgentTerminalSession {
 }
 
 const sessions = new Map<string, AgentTerminalSession>();
+// In-flight spawns, so two near-simultaneous attaches for the same session
+// dedupe onto one `claude` process instead of double-spawning (attach is async —
+// there's an await between the existence check and the map set).
+const spawning = new Map<string, Promise<AgentTerminalSession | { reason: 'no-session' | 'no-cwd' }>>();
 let attachSeq = 0;
 
 function cleanEnv(): { [key: string]: string } {
@@ -71,6 +73,59 @@ export type AttachAgentResult =
  * Attach a websocket consumer to a session's agent terminal, spawning the
  * `claude` TUI on first attach. Idempotent across reconnects (the pty persists).
  */
+async function spawnAgentTerminal(
+  sessionId: string,
+  cols: number,
+  rows: number,
+): Promise<AgentTerminalSession | { reason: 'no-session' | 'no-cwd' }> {
+  const launchInput = buildSessionLaunchInput(sessionId);
+  if (!launchInput) return { reason: 'no-session' };
+  if (!existsSync(launchInput.cwd)) return { reason: 'no-cwd' };
+
+  const server = await getStopHookServer();
+  const launch = buildClaudeLaunch(
+    {
+      systemPrompt: launchInput.systemPrompt,
+      model: launchInput.model ?? undefined,
+      reasoningEffort: launchInput.reasoningEffort ?? undefined,
+      resume: launchInput.resume,
+      mcpServers: launchInput.mcpServers,
+      // Human drives the first turn by typing — no positional seed.
+      initialText: null,
+    },
+    server.url(),
+  );
+
+  const child = pty.spawn(CLAUDE_BIN, launch.args, {
+    name: 'xterm-color',
+    cols,
+    rows,
+    cwd: launchInput.cwd,
+    env: cleanEnv(),
+  });
+
+  const created: AgentTerminalSession = {
+    pty: child,
+    launch,
+    buffer: '',
+    onData: null,
+    onExit: null,
+    attachId: 0,
+    lockedBy: null,
+  };
+  child.onData((d) => {
+    created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
+    created.onData?.(d);
+  });
+  child.onExit(({ exitCode }) => {
+    created.onExit?.(exitCode);
+    sessions.delete(sessionId);
+    created.launch.cleanup();
+  });
+  sessions.set(sessionId, created);
+  return created;
+}
+
 export async function attachAgentTerminal(
   sessionId: string,
   cols: number,
@@ -81,56 +136,20 @@ export async function attachAgentTerminal(
   let session = sessions.get(sessionId);
 
   if (!session) {
-    // Reattaching never counts against the cap; only a brand-new spawn does.
-    if (sessions.size >= MAX_AGENT_TERMINALS) return { ok: false, reason: 'capped' };
-
-    const launchInput = buildSessionLaunchInput(sessionId);
-    if (!launchInput) return { ok: false, reason: 'no-session' };
-    if (!existsSync(launchInput.cwd)) return { ok: false, reason: 'no-cwd' };
-
-    const server = await getStopHookServer();
-    const launch = buildClaudeLaunch(
-      {
-        systemPrompt: launchInput.systemPrompt,
-        model: launchInput.model ?? undefined,
-        reasoningEffort: launchInput.reasoningEffort ?? undefined,
-        resume: launchInput.resume,
-        mcpServers: launchInput.mcpServers,
-        // Human drives the first turn by typing — no positional seed.
-        initialText: null,
-      },
-      server.url(),
-    );
-
-    const child = pty.spawn(CLAUDE_BIN, launch.args, {
-      name: 'xterm-color',
-      cols,
-      rows,
-      cwd: launchInput.cwd,
-      env: cleanEnv(),
-    });
-
-    const created: AgentTerminalSession = {
-      pty: child,
-      launch,
-      sessionId: launchInput.resume ?? '',
-      buffer: '',
-      onData: null,
-      onExit: null,
-      attachId: 0,
-      lockedBy: null,
-    };
-    child.onData((d) => {
-      created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
-      created.onData?.(d);
-    });
-    child.onExit(({ exitCode }) => {
-      created.onExit?.(exitCode);
-      sessions.delete(sessionId);
-      created.launch.cleanup();
-    });
-    sessions.set(sessionId, created);
-    session = created;
+    // Dedupe concurrent attaches onto a single spawn (see `spawning`).
+    let inflight = spawning.get(sessionId);
+    if (!inflight) {
+      // Reattaching never counts against the cap; only a brand-new spawn does.
+      if (sessions.size + spawning.size >= MAX_AGENT_TERMINALS) {
+        return { ok: false, reason: 'capped' };
+      }
+      inflight = spawnAgentTerminal(sessionId, cols, rows);
+      spawning.set(sessionId, inflight);
+      inflight.finally(() => spawning.delete(sessionId));
+    }
+    const result = await inflight;
+    if ('reason' in result) return { ok: false, reason: result.reason };
+    session = result;
   } else {
     try {
       session.pty.resize(cols, rows);

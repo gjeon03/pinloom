@@ -1067,9 +1067,15 @@ export interface SessionLaunchInput {
  * halves since the TUI has no prompt-cache split. Mints a fresh team MCP token
  * for orchestrator sessions (M5). Returns null if the session doesn't exist.
  *
- * This is the read-only "what to launch" seam — it does NOT touch the streaming/
- * queue/activeRuns state, so the terminal transport can reuse it without pulling
- * in the runner's turn loop.
+ * Does NOT touch the streaming/queue/activeRuns state. ONE side effect: for an
+ * orchestrator session it mints a fresh team MCP token (replace-on-mint, same as
+ * the runner). That's safe under the single-writer invariant — a session has ONE
+ * transport (sessions.transport), so a 'terminal' orchestrator is never also
+ * runner-driven, and only one path mints its team's token. Callers MUST honor
+ * that invariant: never build a launch for a session that another driver is
+ * concurrently running, or the live driver's token gets clobbered (→ MCP 403s).
+ * TODO(Phase 5): if mixed transports are ever allowed, give the terminal its own
+ * held token lifecycle instead of re-minting here.
  */
 export function buildSessionLaunchInput(sessionId: string): SessionLaunchInput | null {
   const ctx = loadSession(sessionId);

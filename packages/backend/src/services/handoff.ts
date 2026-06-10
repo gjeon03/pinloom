@@ -149,8 +149,8 @@ export function handoffFromSession(sourceSessionId: string): Session {
   db.prepare(
     `INSERT INTO sessions
        (id, project_id, plan_id, agent, claude_session_id, agent_session_id,
-        title, order_index, source_session_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+        title, order_index, source_session_id, transport, created_at, updated_at)
+     VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
   ).run(
     newId,
     source.project_id,
@@ -159,6 +159,9 @@ export function handoffFromSession(sourceSessionId: string): Session {
     title,
     nextOrder,
     sourceSessionId,
+    // Inherit the source session's transport so a handed-off session opens the
+    // same way (terminal stays terminal); null source → sdk.
+    (source as SessionRow).transport,
     now,
     now,
   );
