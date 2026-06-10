@@ -1,6 +1,22 @@
 # pinloom — Terminal-Chat Mode 구현 플랜 (체크리스트)
 
-> **상태**: planned (구현 미시작). 작성 2026-06-10.
+> **상태**: **구현 거의 완료** (브랜치 `feat/terminal-chat-mode`, 미머지). 작성 2026-06-10.
+>
+> ## 구현 현황
+> - ✅ **Phase 0/0.5**: 마이그레이션 26(transcript_uuid/transport/capture cursor), Stop-hook 페이로드(last_assistant_message), `buildClaudeLaunch`·`buildSessionLaunchInput` 추출, shared-server, 3-way `claudeTransport`, `/api/config`, 세션별 transport
+> - ✅ **Phase 1**: `agent-terminal.ts`(세션 단위 claude TUI, 락 필드) + `/ws/agent-terminal` — 코드리뷰 1회 반영(double-spawn/DELETE 누수/토큰 등)
+> - ✅ **Phase 2**: `AgentTerminal.tsx` + ProjectPage pane 분기(claude+terminal 한정)
+> - ✅ **Phase 3**: `transcript-capture.ts`(턴→messages, 커서·agent_session_id, 알림) — 통합테스트
+> - ✅ **Phase 4**: lifecycle/resume — 기존 와이어링으로 충족(pty 생존, `--resume`, kill, 재시작 재개)
+> - ✅ **Phase 5**: 워커 디스패치(`dispatchToWorker`, 단일-운전자 락, cold-start seed, `last_assistant_message` 반환) + `/ask`·`/ask-tag`·`/send` 터미널 분기 + 락 UI — gated 통합테스트, 코드리뷰 진행
+> - ⏸️ **Phase 6 codex**: claude 전용으로 경계 설정(codex는 구조화 경로 유지). codex 터미널은 향후 스파이크
+> - ◑ **Phase 7 테마**: 다크 테마 적용됨(tokyo-night). 채팅-버블 재포매팅은 범위 밖
+>
+> **검증**: 222 backend 테스트 + gated pty/dispatch 통합 + 프론트 빌드 그린. 모든 dev/test는 `PINLOOM_DB_PATH=data/pinloom.dev.sqlite` 격리. 사람-세션 + teams 디스패치 실사용 가능(실제 claude로 멀티턴/resume는 #97에서 검증된 메커니즘 재사용).
+>
+> ---
+>
+> _(원본 계획 — 참고용)_
 > **목표**: AI 세션을 **실제 터미널(xterm.js)에 claude/codex TUI를 띄우는** 방식으로도 쓸 수 있게 한다.
 > 터미널 에뮬레이터가 pty 스트림을 실시간 렌더하므로 **스트리밍이 공짜**, transcript 파싱·완료감지·키스트로크 주입 같은 fragile한 부분이 **디스플레이에선 불필요**. 인터랙티브(주간) 버킷도 그대로.
 > **기존 SDK / PTY-어댑터 모드는 버리지 않는다.** 환경변수로 3-way 선택.
