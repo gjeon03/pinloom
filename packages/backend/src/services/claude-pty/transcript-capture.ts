@@ -105,17 +105,6 @@ function transcriptTailIsAssistant(transcriptPath: string): boolean {
   return lines[lines.length - 1]?.type === 'assistant';
 }
 
-// Slash commands and their output are logged to the transcript as `user` lines
-// wrapped in synthetic tags — <command-name>/exit</command-name>,
-// <command-message>/<command-args>, <local-command-stdout>…, and a
-// <local-command-caveat> preamble. That's claude's local-command machinery, not
-// conversation, so we don't capture it as a user message (it was leaking into
-// the history/pins panel as raw markup).
-function isLocalCommandNoise(content: string): boolean {
-  const t = content.trimStart();
-  return t.startsWith('<command-') || t.startsWith('<local-command-');
-}
-
 /**
  * Persist every not-yet-seen user/assistant/tool line and advance the cursor.
  * Idempotent via `state.seen` (a re-scan only writes lines that flushed since the
@@ -135,7 +124,7 @@ function persistNewLines(
     if (line.uuid) state.seen.add(line.uuid);
     if (line.type === 'user') {
       const c = line.message?.content;
-      if (typeof c === 'string' && c.trim().length > 0 && !isLocalCommandNoise(c)) {
+      if (typeof c === 'string' && c.trim().length > 0) {
         persistMessage({
           sessionId: pinloomSessionId,
           planItemId: null,
