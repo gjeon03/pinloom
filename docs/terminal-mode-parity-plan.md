@@ -103,6 +103,11 @@ rail's Pins tab) — a one-line guard that leaves the structured branch untouche
 
 ## Status
 - [x] Phase 1 — tabbed History|Pins rail (reuse PinnedPanel), left rail hidden for terminal. Verified (2 agents + Playwright). Commit 69cc789.
-- [ ] Phase 2 — Wiki tab
-- [ ] Phase 3 — History polish
-- [ ] Phase 4 — Integration + regression
+- [x] Phase 2 — Wiki tab (sync this session + relevant pages + open-wiki). Verified (2 agents + Playwright). Commit 585d340.
+- [x] Phase 3 — History polish (per-row Copy + Expand). Verified (agent + Playwright). Commit f5f58d7.
+- [x] Phase 4 — Final review (gating PASS, security clean, integration COMMENT). Fixed the 2 MAJORs: History stays mounted (CSS-hidden) so scroll/refs survive tab switches; sticky-effect gated to the History tab. Verified DOM-persistence via Playwright.
+
+### Known follow-ups (non-blocking, from final review)
+- `api.listMessages` loads all messages into the panel (mirrors ChatView) — fine for now; server-side pagination is a future ticket for very long sessions.
+- `projectSlug` duplicates the backend wiki-slug (collision suffix skipped) — display-only; a shared helper + test would harden it.
+- Tool rows count against the History window budget — could exclude them later.

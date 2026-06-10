@@ -165,6 +165,7 @@ export function TerminalSidePanel({
   // scrolled up to read history. Runs after the windowed list paints. No-ops
   // when the History tab isn't mounted (scrollRef null).
   useLayoutEffect(() => {
+    if (tab !== 'history') return; // History is hidden (display:none) on other tabs
     if (prependAnchor.current !== null) return; // a load-older paint owns this frame
     if (!stick.current) return;
     const el = scrollRef.current;
@@ -242,22 +243,9 @@ export function TerminalSidePanel({
 
       {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
 
-      {tab === 'wiki' ? (
-        <WikiTab sessionId={sessionId} projectCwd={projectCwd} />
-      ) : tab === 'pins' ? (
-        <div className="min-h-0 flex-1">
-          <PinnedPanel
-            pins={pins}
-            onChange={onPinChange}
-            sessionId={sessionId}
-            projectName={projectName}
-            showPopOut={false}
-            onHandoff={onHandoff}
-            onSendPin={onSendPin}
-          />
-        </div>
-      ) : (
-        <>
+      {/* History stays mounted (hidden when inactive) so its scroll position and
+          sticky-bottom refs survive tab switches; Pins/Wiki mount on demand. */}
+      <div className={`flex min-h-0 flex-1 flex-col ${tab === 'history' ? '' : 'hidden'}`}>
           <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto px-2 py-2">
             {rows.length === 0 ? (
               <p className="px-2 py-6 text-center text-xs text-[var(--color-ink-muted)]">
@@ -341,8 +329,22 @@ export function TerminalSidePanel({
           <footer className="border-t border-[var(--color-border)]/50 px-3 py-1.5 text-[9px] text-[var(--color-ink-muted)]">
             Pins apply on the session's next launch (the live TUI keeps its launch-time prompt).
           </footer>
-        </>
+      </div>
+
+      {tab === 'pins' && (
+        <div className="min-h-0 flex-1">
+          <PinnedPanel
+            pins={pins}
+            onChange={onPinChange}
+            sessionId={sessionId}
+            projectName={projectName}
+            showPopOut={false}
+            onHandoff={onHandoff}
+            onSendPin={onSendPin}
+          />
+        </div>
       )}
+      {tab === 'wiki' && <WikiTab sessionId={sessionId} projectCwd={projectCwd} />}
     </aside>
   );
 }
@@ -369,19 +371,8 @@ function WikiTab({ sessionId, projectCwd }: { sessionId: string; projectCwd: str
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    api
-      .wikiOverview()
-      .then((o) => {
-        if (!cancelled) setPages(o.pages);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void loadPages();
+  }, [loadPages]);
 
   const relevant = (pages ?? []).filter((p) => {
     const a = p.meta.appliesTo;
