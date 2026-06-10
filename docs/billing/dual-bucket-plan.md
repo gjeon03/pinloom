@@ -7,6 +7,19 @@
 > (critic·architect·codex 3-에이전트 리뷰 반영본). 이 문서는 그 전략을 **현재 코드 기준으로
 > 실측 갱신 + 구현 수준으로 상세화**한 것.
 
+## 활성화 (opt-in, 기본 OFF)
+
+PTY 트랜스포트는 환경변수로 켭니다 — 기본값은 SDK라 켜기 전엔 무회귀:
+
+```bash
+PINLOOM_CLAUDE_TRANSPORT=pty pnpm dev:backend
+```
+
+켜면 모든 `claude` 세션이 인터랙티브 `claude` REPL을 PTY로 구동(=인터랙티브 버킷).
+끄면(미설정) 기존 Agent SDK 경로. `codex` 세션은 플래그와 무관하게 그대로.
+메커니즘은 실제 claude로 멀티턴 검증됨 (`scripts/billing-gates/integration-real-claude.mjs`).
+**단, 어느 버킷에 과금되는지는 6/15 게이트2에서 확정** — 그 전엔 "동작 검증"까지만.
+
 ## 0. 한 줄 요약
 
 목표는 **"SDK 제거"가 아니라 두 과금 버킷(주간 인터랙티브 한도 + 이미 낸 $200 SDK 크레딧)을

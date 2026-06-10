@@ -123,6 +123,8 @@ function buildArgs(
     args.push('--append-system-prompt', spec.systemPrompt);
   }
   if (spec.model) args.push('--model', spec.model);
+  // claude's --effort accepts the same low/medium/high/xhigh/max tokens.
+  if (spec.reasoningEffort) args.push('--effort', spec.reasoningEffort);
   if (mcpPath) args.push('--mcp-config', mcpPath);
   if (spec.resume) args.push('--resume', spec.resume);
   // Positional [prompt]: seeds turn 1 so the interactive session auto-runs it,
@@ -256,6 +258,8 @@ export function createNodeClaudeSessionFactory(
       // text: an empty initial prompt isn't passed as a positional, so claude
       // would sit idle — fall through to the inject path instead.
       let firstTurnSeeded = !spec.resume && !!initialText;
+      // Whether the TUI has been waited-for-ready + trust-cleared at least once.
+      let tuiPrepared = false;
 
       // A brand-new cwd triggers claude's "Do you trust this folder?" dialog,
       // which blocks startup and isn't covered by --dangerously-skip-permissions.
@@ -365,6 +369,7 @@ export function createNodeClaudeSessionFactory(
             // server buffers a hook that fires before we arm, via firedAhead).
             firstTurnSeeded = false;
             await clearStartupDialogs(signal);
+            tuiPrepared = true;
             await discover(signal);
             if (process.env.PINLOOM_PTY_DEBUG)
               console.error('[pty] seeded turn discovered sid=%s', sessionId);
@@ -380,10 +385,18 @@ export function createNodeClaudeSessionFactory(
               ? `${prompt.text} ${imagePaths.map((p) => `@${p}`).join(' ')}`
               : prompt.text;
 
+          // First time we inject — either a fresh-but-unseeded launch or a
+          // resumed session whose TUI just started — wait for the TUI to settle
+          // and clear any trust dialog before typing. Later turns reuse the
+          // already-settled TUI and skip this.
+          if (!tuiPrepared) {
+            await waitForTuiReady(signal);
+            tuiPrepared = true;
+          }
+
           if (sessionFile === null) {
             // Fresh-but-unseeded (shouldn't normally happen): submit first, then
             // discover + arm completion.
-            await waitForTuiReady(signal);
             await submitToTui(child, text);
             await discover(signal);
             await server.awaitStop(sessionId!, signal);
