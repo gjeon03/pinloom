@@ -127,9 +127,9 @@ function buildArgs(
   if (spec.reasoningEffort) args.push('--effort', spec.reasoningEffort);
   if (mcpPath) args.push('--mcp-config', mcpPath);
   if (spec.resume) args.push('--resume', spec.resume);
-  // Positional [prompt]: seeds turn 1 so the interactive session auto-runs it,
-  // instead of us typing into the freshly-launched TUI. Skipped when resuming.
-  if (!spec.resume && initialText && initialText.length > 0) {
+  // Positional [prompt]: seeds the first turn so the (fresh OR resumed) session
+  // auto-runs it, instead of us typing into the freshly-launched TUI.
+  if (initialText && initialText.length > 0) {
     args.push(initialText);
   }
   return args;
@@ -207,17 +207,20 @@ export function createNodeClaudeSessionFactory(
 
       const before = spec.resume ? new Set<string>() : listSessionFiles(spec.cwd, home);
 
-      // Seed turn 1 via the positional [prompt] arg (robust vs typing into the
-      // freshly-launched TUI). Materialize any turn-1 images up front and
-      // reference them by @path in the seed text. Skipped when resuming.
-      const seedImages = spec.resume
-        ? []
-        : materializeImages(spec.initialPrompt.images, tmp, 0);
-      const initialText = spec.resume
-        ? null
-        : seedImages.length > 0
+      // Seed the first turn via the positional [prompt] arg — for BOTH fresh and
+      // resumed sessions (`claude --resume <id> "prompt"` auto-runs the prompt on
+      // the resumed session; verified). This avoids typing into a freshly-launched
+      // TUI, which is unreliable. Materialize turn-1 images up front and reference
+      // them by @path. For a resumed session, snapshot the transcript's existing
+      // uuids now so the seeded turn's new lines can be diffed out after.
+      const seedImages = materializeImages(spec.initialPrompt.images, tmp, 0);
+      const initialText =
+        seedImages.length > 0
           ? `${spec.initialPrompt.text} ${seedImages.map((p) => `@${p}`).join(' ')}`
           : spec.initialPrompt.text;
+      const seedSeen: ReadonlySet<string> = spec.resume
+        ? collectUuids(readLines(sessionFilePath(spec.cwd, spec.resume, home)))
+        : new Set<string>();
 
       // When a home override is set (tests), point the child at it too so it
       // writes transcripts where we read them. In production `home` is undefined
@@ -253,11 +256,11 @@ export function createNodeClaudeSessionFactory(
       let disposeP: Promise<void> | null = null;
       // Turn 1's images (if any) used index 0 via the seed; injected turns start at 1.
       let turnSeq = spec.resume ? 0 : 1;
-      // The first prompt was seeded as the positional arg — the first runTurn
-      // reads it back rather than injecting it. Only when there's actually seed
-      // text: an empty initial prompt isn't passed as a positional, so claude
-      // would sit idle — fall through to the inject path instead.
-      let firstTurnSeeded = !spec.resume && !!initialText;
+      // The first prompt was seeded as the positional arg (fresh or resumed) —
+      // the first runTurn reads it back rather than injecting it. Only when there
+      // IS seed text: an empty initial prompt isn't passed as a positional, so
+      // claude would sit idle — fall through to the inject path instead.
+      let firstTurnSeeded = !!initialText;
       // Whether the TUI has been waited-for-ready + trust-cleared at least once.
       let tuiPrepared = false;
 
@@ -299,15 +302,20 @@ export function createNodeClaudeSessionFactory(
           console.error('[pty] tui ready (trustAccepted=%s)', trustAccepted);
       }
 
-      // Poll briefly to catch + accept the trust dialog (a pre-trusted dir shows
-      // none). Returns once accepted, once a transcript appears (turn 1 started),
-      // or after a short cap.
+      // Poll briefly to catch + accept the trust dialog. Returns once the dialog
+      // is accepted, or once the TUI has produced output and settled (no dialog —
+      // e.g. a pre-trusted dir or a resumed session), or after a short cap.
       async function clearStartupDialogs(signal: AbortSignal): Promise<void> {
         const cap = Date.now() + 10_000;
         while (!signal.aborted && Date.now() < cap) {
           maybeAcceptTrustDialog();
           if (trustAccepted) return;
-          if (listSessionFiles(spec.cwd, home).size > before.size) return;
+          // A resumed session is in an already-trusted cwd (no dialog); a fresh
+          // session's turn having started (its transcript appeared) also means
+          // the dialog is past. Either way, stop waiting.
+          if (spec.resume || listSessionFiles(spec.cwd, home).size > before.size) return;
+          // Fallback for a real TUI that settled without a recognizable signal.
+          if (tail.length > 0 && Date.now() - lastDataAt > 800) return;
           await sleep(150);
         }
       }
@@ -364,19 +372,19 @@ export function createNodeClaudeSessionFactory(
         async runTurn(prompt: UserPrompt, signal: AbortSignal): Promise<JsonlLine[]> {
           if (firstTurnSeeded) {
             // claude was launched with this prompt as its positional arg; once we
-            // clear the trust dialog it auto-runs turn 1. Don't inject — just
-            // discover the transcript it creates and await the Stop hook (the
-            // server buffers a hook that fires before we arm, via firedAhead).
+            // clear the trust dialog it auto-runs the turn. Don't inject — await
+            // the Stop hook (the server buffers a hook that fires before we arm,
+            // via firedAhead) and read the new lines back.
             firstTurnSeeded = false;
             await clearStartupDialogs(signal);
             tuiPrepared = true;
-            await discover(signal);
+            // Fresh session writes a brand-new transcript → discover it. A resumed
+            // session already has a known file (set at start).
+            if (sessionFile === null) await discover(signal);
             if (process.env.PINLOOM_PTY_DEBUG)
-              console.error('[pty] seeded turn discovered sid=%s', sessionId);
-            // Fresh session — nothing pre-existed, so the whole transcript is
-            // this turn.
+              console.error('[pty] seeded turn sid=%s resume=%s', sessionId, !!spec.resume);
             await server.awaitStop(sessionId!, signal);
-            return readTurnSettled(new Set<string>());
+            return readTurnSettled(seedSeen);
           }
 
           const imagePaths = materializeImages(prompt.images, tmp, turnSeq++);

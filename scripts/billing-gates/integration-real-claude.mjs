@@ -54,31 +54,66 @@ const { claudePtyAdapter, shutdownClaudePty } = mod;
 // macOS's /var -> /private/var so the slug matches claude's resolved cwd.
 const cwd = realpathSync(mkdtempSync(path.join(tmpdir(), 'pinloom-pty-real-')));
 
-const run = claudePtyAdapter.run({
-  cwd,
-  systemPrompt: '',
-  abortController: new AbortController(),
-  initialPrompt: { text: 'Reply with exactly: OK', images: [] },
-});
-
-// Two turns: turn 1 is seeded via the positional arg, turn 2 is injected as
-// keystrokes into the now-settled TUI — so this validates BOTH input paths.
-console.log(`→ driving real claude for two turns (cwd=${cwd})…\n`);
-const events = [];
-let turns = 0;
-try {
+// Drive one run for N turns. `onComplete(turnIdx)` returns the next prompt to
+// inject, or null to close the run.
+async function driveRun(runArgs, onComplete) {
+  const run = claudePtyAdapter.run(runArgs);
+  const events = [];
+  let turns = 0;
   for await (const ev of run.events) {
     events.push(ev);
     console.log('  ', JSON.stringify(ev));
     if (ev.type === 'turn_complete') {
       turns += 1;
-      if (turns === 1) {
-        console.log('\n→ turn 1 done; injecting turn 2…\n');
-        run.pushMessage({ text: 'Now reply with exactly: TWO', images: [] });
-      } else {
-        run.close();
-      }
+      const next = onComplete(turns);
+      if (next) run.pushMessage(next);
+      else run.close();
     }
+  }
+  return events;
+}
+
+const textsOf = (events) => events.filter((e) => e.type === 'text_delta').map((e) => e.text);
+const sidOf = (events) => events.find((e) => e.type === 'session_id')?.id;
+
+let allOk = true;
+try {
+  // PHASE 1 — fresh session: turn 1 seeded via positional arg, turn 2 injected
+  // as keystrokes into the now-settled TUI. Validates both input paths.
+  console.log(`→ phase 1: fresh session, two turns (cwd=${cwd})…\n`);
+  const ev1 = await driveRun(
+    {
+      cwd,
+      systemPrompt: '',
+      abortController: new AbortController(),
+      initialPrompt: { text: 'Reply with exactly: OK', images: [] },
+    },
+    (turn) => (turn === 1 ? { text: 'Now reply with exactly: TWO', images: [] } : null),
+  );
+  const sid = sidOf(ev1);
+  const t1 = textsOf(ev1);
+  const phase1Ok = t1.length >= 2 && !!sid;
+  allOk = allOk && phase1Ok;
+  console.log(`\n[phase 1] sid=${sid} texts=${JSON.stringify(t1)} → ${phase1Ok ? '✓' : '✗'}\n`);
+
+  // PHASE 2 — resume that session in a SEPARATE run (as pinloom does after a run
+  // ends / on reopen). The prompt is seeded via `claude --resume <id> "prompt"`.
+  if (sid) {
+    console.log(`→ phase 2: resume ${sid} with a new prompt…\n`);
+    const ev2 = await driveRun(
+      {
+        cwd,
+        systemPrompt: '',
+        resume: sid,
+        abortController: new AbortController(),
+        initialPrompt: { text: 'Reply with exactly: THREE', images: [] },
+      },
+      () => null,
+    );
+    const t2 = textsOf(ev2);
+    const phase2Ok = t2.length >= 1;
+    allOk = allOk && phase2Ok;
+    console.log(`\n[phase 2 resume] texts=${JSON.stringify(t2)} → ${phase2Ok ? '✓' : '✗'}`);
   }
 } finally {
   await shutdownClaudePty?.();
@@ -89,11 +124,5 @@ try {
   }
 }
 
-const texts = events.filter((e) => e.type === 'text_delta').map((e) => e.text);
-const completes = events.filter((e) => e.type === 'turn_complete').length;
-const ok = texts.length >= 2 && completes >= 2;
-console.log(
-  `\n[result] turns=${completes} texts=${JSON.stringify(texts)} → ` +
-    (ok ? 'MULTI-TURN MECHANISM WORKS ✓' : 'turn 1 ok, turn 2 (injection) needs tuning ✗'),
-);
-process.exit(ok ? 0 : 1);
+console.log(`\n[result] → ${allOk ? 'FRESH + RESUME MECHANISM WORKS ✓' : 'NEEDS TUNING ✗'}`);
+process.exit(allOk ? 0 : 1);
