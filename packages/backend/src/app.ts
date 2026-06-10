@@ -22,6 +22,7 @@ import {
   MAX_TERMINALS,
 } from './services/terminal.js';
 import { checkAgentClis } from './services/cli-check.js';
+import { claudeTransport } from './services/agents/index.js';
 import { shutdownClaudePty } from './services/claude-pty/index.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
@@ -90,6 +91,13 @@ export async function createApp() {
       status: 'ok' as const,
       agents,
     };
+  });
+
+  // Server-side config the frontend needs at boot. `claudeTransport` decides
+  // which pane a claude session renders (chat vs terminal) — it's a backend env,
+  // so the frontend fetches it once. See docs/terminal-chat-mode-plan.md.
+  app.get('/api/config', async () => {
+    return { claudeTransport: claudeTransport() };
   });
 
   await app.register(projectRoutes);

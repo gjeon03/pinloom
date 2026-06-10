@@ -1,8 +1,26 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { getAgentAdapter, claudeTransportIsPty } from './index.js';
+import { getAgentAdapter, claudeTransport, claudeTransportIsPty } from './index.js';
 import { claudeAdapter } from './claude-adapter.js';
 import { codexAdapter } from './codex-adapter.js';
 import { claudePtyAdapter } from '../claude-pty/index.js';
+
+describe('claudeTransport', () => {
+  afterEach(() => {
+    delete process.env.PINLOOM_CLAUDE_TRANSPORT;
+  });
+
+  it('defaults to sdk and maps pty/terminal, ignoring unknown values', () => {
+    expect(claudeTransport()).toBe('sdk');
+    process.env.PINLOOM_CLAUDE_TRANSPORT = 'pty';
+    expect(claudeTransport()).toBe('pty');
+    expect(claudeTransportIsPty()).toBe(true);
+    process.env.PINLOOM_CLAUDE_TRANSPORT = 'terminal';
+    expect(claudeTransport()).toBe('terminal');
+    expect(claudeTransportIsPty()).toBe(false);
+    process.env.PINLOOM_CLAUDE_TRANSPORT = 'nonsense';
+    expect(claudeTransport()).toBe('sdk');
+  });
+});
 
 describe('getAgentAdapter', () => {
   afterEach(() => {

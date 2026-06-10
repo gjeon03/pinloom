@@ -4,16 +4,26 @@ import { codexAdapter } from './codex-adapter.js';
 import { claudePtyAdapter } from '../claude-pty/index.js';
 import type { AgentAdapter } from './types.js';
 
+export type ClaudeTransport = 'sdk' | 'pty' | 'terminal';
+
 /**
- * Opt-in: when PINLOOM_CLAUDE_TRANSPORT=pty, `claude` sessions are driven through
- * an interactive `claude` REPL over a PTY so their usage bills the interactive
- * (weekly) bucket instead of the separate Agent-SDK credit bucket (2026-06-15
- * billing split). The default stays the SDK adapter — zero regression. Read per
- * call so it can be flipped via env without code changes. See
- * docs/billing/dual-bucket-plan.md.
+ * The configured claude transport (PINLOOM_CLAUDE_TRANSPORT env), default 'sdk':
+ *  - 'sdk':      Agent SDK (streaming, structured chat). Default, zero regression.
+ *  - 'pty':      PTY-driven interactive `claude` as a structured adapter
+ *                (interactive bucket, non-streaming). See docs/billing/.
+ *  - 'terminal': interactive `claude` rendered live in an xterm.js terminal
+ *                (interactive bucket, streaming). See docs/terminal-chat-mode-plan.md.
+ * This is the global DEFAULT; a session pins the value it was created under in
+ * sessions.transport so flipping the env mid-life doesn't strand a session.
+ * Read per call so it can be flipped via env without a rebuild.
  */
+export function claudeTransport(): ClaudeTransport {
+  const v = process.env.PINLOOM_CLAUDE_TRANSPORT;
+  return v === 'pty' || v === 'terminal' ? v : 'sdk';
+}
+
 export function claudeTransportIsPty(): boolean {
-  return process.env.PINLOOM_CLAUDE_TRANSPORT === 'pty';
+  return claudeTransport() === 'pty';
 }
 
 export function getAgentAdapter(agent: AgentKind): AgentAdapter {
