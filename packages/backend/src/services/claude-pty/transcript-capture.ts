@@ -85,11 +85,158 @@ function blocksOf(line: { message?: { content?: unknown } }): JsonlContentBlock[
   return Array.isArray(c) ? (c as JsonlContentBlock[]) : [];
 }
 
+/**
+ * Persist every not-yet-seen user/assistant/tool line and advance the cursor.
+ * Idempotent via `state.seen` (a re-scan only writes lines that flushed since the
+ * last pass). Returns whether anything was written and — crucially — whether
+ * assistant *text* landed this pass, the signal that the turn's reply is now in.
+ */
+function persistNewLines(
+  pinloomSessionId: string,
+  state: CaptureState,
+  transcriptPath: string,
+): { persistedAny: boolean; sawAssistantText: boolean } {
+  const db = getDb();
+  const turn = selectTurnLines(readLines(transcriptPath), state.seen);
+  let model: string | null = null;
+  let persistedAny = false;
+  let sawAssistantText = false;
+
+  for (const line of turn) {
+    if (line.uuid) state.seen.add(line.uuid);
+    if (line.type === 'user') {
+      const c = line.message?.content;
+      if (typeof c === 'string' && c.trim().length > 0) {
+        persistMessage({
+          sessionId: pinloomSessionId,
+          planItemId: null,
+          role: 'user',
+          content: c,
+          transcriptUuid: line.uuid ?? null,
+        });
+        persistedAny = true;
+      }
+    } else if (line.type === 'assistant') {
+      const m = line.message?.model;
+      if (m && m !== SYNTHETIC_MODEL) model = m;
+      for (const block of blocksOf(line)) {
+        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+          persistMessage({
+            sessionId: pinloomSessionId,
+            planItemId: null,
+            role: 'assistant',
+            content: block.text,
+            model,
+            transcriptUuid: line.uuid ?? null,
+          });
+          persistedAny = true;
+          sawAssistantText = true;
+        } else if (block.type === 'tool_use') {
+          const name = typeof block.name === 'string' ? block.name : 'tool';
+          const input = (block.input ?? {}) as Record<string, unknown>;
+          persistMessage({
+            sessionId: pinloomSessionId,
+            planItemId: null,
+            role: 'tool',
+            content: summarizeToolCall(name, input),
+            toolUse: { name, input },
+            transcriptUuid: line.uuid ?? null,
+          });
+          persistedAny = true;
+        }
+      }
+    }
+  }
+
+  const lastUuid = turn.length > 0 ? turn[turn.length - 1].uuid : undefined;
+  if (lastUuid) {
+    state.cursor = lastUuid;
+    db.prepare('UPDATE sessions SET last_captured_transcript_uuid = ? WHERE id = ?').run(
+      lastUuid,
+      pinloomSessionId,
+    );
+  }
+
+  return { persistedAny, sawAssistantText };
+}
+
+/** Notification + team_wait wake: this session's turn is complete. */
+function signalTurnComplete(pinloomSessionId: string): void {
+  emitRunStatus(pinloomSessionId, 'finished');
+  notifySessionIdle(pinloomSessionId);
+}
+
+// Tail re-scan for the case where the Stop hook fired but the assistant reply
+// hadn't flushed to the transcript yet. Without this the latest reply would only
+// get captured on the NEXT turn's Stop — i.e. it'd be missing from history/pins
+// until the user sent another message (the symptom we saw: panel stopped at the
+// user line). Re-reads on a short interval until the assistant text lands.
+// In-handler fast-path wait for the assistant flush (covers the common sub-second
+// case). Kept short so we don't hold the per-session drain lock for long; the
+// rescan tail below is the robust catcher for slower flushes.
+const FLUSH_POLL_ATTEMPTS = 10; // ~1.2s
+const RESCAN_INTERVAL_MS = 250;
+const RESCAN_MAX_ATTEMPTS = 40; // ~10s tail beyond the in-handler poll
+
+function scheduleAssistantRescan(
+  pinloomSessionId: string,
+  transcriptPath: string,
+  attempt: number,
+): void {
+  setTimeout(() => {
+    void runAssistantRescan(pinloomSessionId, transcriptPath, attempt);
+  }, RESCAN_INTERVAL_MS);
+}
+
+async function runAssistantRescan(
+  pinloomSessionId: string,
+  transcriptPath: string,
+  attempt: number,
+): Promise<void> {
+  const state = captures.get(pinloomSessionId);
+  if (!state) return; // session torn down — drop the tail
+  // A real Stop for the next turn may be mid-drain; retry the same attempt soon.
+  if (state.running) {
+    scheduleAssistantRescan(pinloomSessionId, transcriptPath, attempt);
+    return;
+  }
+  state.running = true;
+  let sawAssistantText = false;
+  try {
+    const res = persistNewLines(pinloomSessionId, state, transcriptPath);
+    sawAssistantText = res.sawAssistantText;
+  } catch (err) {
+    console.warn('[claude-pty] late assistant re-scan failed for %s:', pinloomSessionId, err);
+  } finally {
+    state.running = false;
+  }
+  if (sawAssistantText) {
+    signalTurnComplete(pinloomSessionId);
+    return;
+  }
+  if (attempt + 1 >= RESCAN_MAX_ATTEMPTS) {
+    // Reply never flushed (aborted turn, or claude exited). Signal anyway so the
+    // turn isn't left hanging for team_wait / notifications.
+    signalTurnComplete(pinloomSessionId);
+    return;
+  }
+  scheduleAssistantRescan(pinloomSessionId, transcriptPath, attempt + 1);
+}
+
 async function onStop(pinloomSessionId: string, payload: StopHookPayload): Promise<void> {
   const state = captures.get(pinloomSessionId);
   if (!state || !payload.transcriptPath) return;
   if (state.running) return;
   state.running = true;
+
+  // The Stop hook carries the just-completed reply text, so a non-empty value is
+  // a definitive "a reply is coming" signal: we should wait for / re-scan for the
+  // assistant line rather than treat its absence as an empty turn.
+  const expectAssistant =
+    !!payload.lastAssistantMessage && payload.lastAssistantMessage.trim().length > 0;
+  let persistedAny = false;
+  let sawAssistantText = false;
+
   try {
     const db = getDb();
 
@@ -114,80 +261,32 @@ async function onStop(pinloomSessionId: string, payload: StopHookPayload): Promi
     }
 
     // claude flushes the completed assistant message to the transcript a beat
-    // AFTER firing the Stop hook (measured), so a single read here would catch
-    // the user line but miss the reply. Poll until the new turn carries assistant
-    // content (or we exhaust the window — an empty/aborted turn).
-    let turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
-    for (let i = 0; i < 25 && !turnHasAssistantContent(turn); i++) {
-      await sleep(120);
-      turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
-    }
-    let model: string | null = null;
-    let persistedAny = false;
-
-    for (const line of turn) {
-      if (line.uuid) state.seen.add(line.uuid);
-      if (line.type === 'user') {
-        const c = line.message?.content;
-        if (typeof c === 'string' && c.trim().length > 0) {
-          persistMessage({
-            sessionId: pinloomSessionId,
-            planItemId: null,
-            role: 'user',
-            content: c,
-            transcriptUuid: line.uuid ?? null,
-          });
-          persistedAny = true;
-        }
-      } else if (line.type === 'assistant') {
-        const m = line.message?.model;
-        if (m && m !== SYNTHETIC_MODEL) model = m;
-        for (const block of blocksOf(line)) {
-          if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
-            persistMessage({
-              sessionId: pinloomSessionId,
-              planItemId: null,
-              role: 'assistant',
-              content: block.text,
-              model,
-              transcriptUuid: line.uuid ?? null,
-            });
-            persistedAny = true;
-          } else if (block.type === 'tool_use') {
-            const name = typeof block.name === 'string' ? block.name : 'tool';
-            const input = (block.input ?? {}) as Record<string, unknown>;
-            persistMessage({
-              sessionId: pinloomSessionId,
-              planItemId: null,
-              role: 'tool',
-              content: summarizeToolCall(name, input),
-              toolUse: { name, input },
-              transcriptUuid: line.uuid ?? null,
-            });
-            persistedAny = true;
-          }
-        }
+    // AFTER firing the Stop hook (measured). When we know a reply is coming, poll
+    // briefly for it; the rescan tail below covers a flush slower than this window.
+    // No reply expected → don't wait (empty/aborted turn).
+    if (expectAssistant) {
+      let turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
+      for (let i = 0; i < FLUSH_POLL_ATTEMPTS && !turnHasAssistantContent(turn); i++) {
+        await sleep(120);
+        turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
       }
     }
 
-    const lastUuid = turn.length > 0 ? turn[turn.length - 1].uuid : undefined;
-    if (lastUuid) {
-      state.cursor = lastUuid;
-      db.prepare(
-        'UPDATE sessions SET last_captured_transcript_uuid = ? WHERE id = ?',
-      ).run(lastUuid, pinloomSessionId);
-    }
-
-    // Only signal turn-complete (notification + team_wait wake) when this Stop
-    // actually produced new content — avoids spurious notifications for a Stop we
-    // already captured.
-    if (persistedAny) {
-      emitRunStatus(pinloomSessionId, 'finished');
-      notifySessionIdle(pinloomSessionId);
-    }
+    const res = persistNewLines(pinloomSessionId, state, payload.transcriptPath);
+    persistedAny = res.persistedAny;
+    sawAssistantText = res.sawAssistantText;
   } catch (err) {
     console.warn('[claude-pty] transcript capture failed for %s:', pinloomSessionId, err);
   } finally {
     state.running = false;
+  }
+
+  // Signal completion once the reply is in (or none was expected). If a reply was
+  // expected but hasn't flushed, hand off to the rescan tail so the "finished"
+  // signal reflects the captured reply instead of firing early on the user line.
+  if (sawAssistantText || (!expectAssistant && persistedAny)) {
+    signalTurnComplete(pinloomSessionId);
+  } else if (expectAssistant) {
+    scheduleAssistantRescan(pinloomSessionId, payload.transcriptPath, 0);
   }
 }
