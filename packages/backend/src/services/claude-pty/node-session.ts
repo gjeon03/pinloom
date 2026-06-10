@@ -134,123 +134,123 @@ export function createNodeClaudeSessionFactory(
     async start(spec: ClaudeSessionSpec): Promise<ClaudeSession> {
       const server = await getStopHookServer();
 
-    const tmp = mkdtempSync(path.join(tmpdir(), 'pinloom-claude-pty-'));
-    const forwarderPath = path.join(tmp, 'stop-forward.mjs');
-    writeFileSync(forwarderPath, FORWARDER_SRC, 'utf8');
+      const tmp = mkdtempSync(path.join(tmpdir(), 'pinloom-claude-pty-'));
+      const forwarderPath = path.join(tmp, 'stop-forward.mjs');
+      writeFileSync(forwarderPath, FORWARDER_SRC, 'utf8');
 
-    const settingsPath = path.join(tmp, 'settings.json');
-    writeFileSync(
-      settingsPath,
-      JSON.stringify(
-        {
-          hooks: {
-            Stop: [
-              {
-                hooks: [
-                  {
-                    type: 'command',
-                    command: `node ${JSON.stringify(forwarderPath)} ${JSON.stringify(server.url())}`,
-                  },
-                ],
-              },
-            ],
+      const settingsPath = path.join(tmp, 'settings.json');
+      writeFileSync(
+        settingsPath,
+        JSON.stringify(
+          {
+            hooks: {
+              Stop: [
+                {
+                  hooks: [
+                    {
+                      type: 'command',
+                      command: `node ${JSON.stringify(forwarderPath)} ${JSON.stringify(server.url())}`,
+                    },
+                  ],
+                },
+              ],
+            },
           },
-        },
-        null,
-        2,
-      ),
-      'utf8',
-    );
+          null,
+          2,
+        ),
+        'utf8',
+      );
 
-    let mcpPath: string | null = null;
-    if (spec.mcpServers && Object.keys(spec.mcpServers).length > 0) {
-      mcpPath = path.join(tmp, 'mcp.json');
-      writeFileSync(mcpPath, JSON.stringify({ mcpServers: spec.mcpServers }, null, 2), 'utf8');
-    }
-
-    const before = spec.resume ? new Set<string>() : listSessionFiles(spec.cwd, home);
-
-    // When a home override is set (tests), point the child at it too so it
-    // writes transcripts where we read them. In production `home` is undefined
-    // and the child inherits the real $HOME.
-    const childEnv = cleanEnv();
-    if (home) childEnv.HOME = home;
-
-    const child = pty.spawn(bin, buildArgs(spec, settingsPath, mcpPath), {
-      name: 'xterm-color',
-      cols: 120,
-      rows: 40,
-      cwd: spec.cwd,
-      env: childEnv,
-    });
-
-    // Keep a small tail of TUI output for diagnostics; we don't parse it.
-    let tail = '';
-    child.onData((d) => {
-      tail = (tail + d).slice(-4096);
-    });
-
-    let sessionId: string;
-    try {
-      sessionId = spec.resume
-        ? spec.resume
-        : sessionIdOf(await discoverNewSessionFile(spec.cwd, before, { home }));
-    } catch (err) {
-      await killGroup(child);
-      try {
-        rmSync(tmp, { recursive: true, force: true });
-      } catch {
-        // best-effort
+      let mcpPath: string | null = null;
+      if (spec.mcpServers && Object.keys(spec.mcpServers).length > 0) {
+        mcpPath = path.join(tmp, 'mcp.json');
+        writeFileSync(mcpPath, JSON.stringify({ mcpServers: spec.mcpServers }, null, 2), 'utf8');
       }
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`${msg}\nlast TUI output:\n${tail.slice(-500)}`);
-    }
 
-    const sessionFile = sessionFilePath(spec.cwd, sessionId, home);
-    let disposeP: Promise<void> | null = null;
-    let turnSeq = 0;
+      const before = spec.resume ? new Set<string>() : listSessionFiles(spec.cwd, home);
 
-    return {
-      sessionId(): string {
-        return sessionId;
-      },
+      // When a home override is set (tests), point the child at it too so it
+      // writes transcripts where we read them. In production `home` is undefined
+      // and the child inherits the real $HOME.
+      const childEnv = cleanEnv();
+      if (home) childEnv.HOME = home;
 
-      async runTurn(prompt: UserPrompt, signal: AbortSignal): Promise<JsonlLine[]> {
-        const checkpoint = readCheckpoint(sessionFile);
+      const child = pty.spawn(bin, buildArgs(spec, settingsPath, mcpPath), {
+        name: 'xterm-color',
+        cols: 120,
+        rows: 40,
+        cwd: spec.cwd,
+        env: childEnv,
+      });
 
-        // Arm the completion waiter BEFORE injecting so a fast turn can't fire
-        // the Stop hook before we're listening.
-        const stopped = server.awaitStop(sessionId, signal);
+      // Keep a small tail of TUI output for diagnostics; we don't parse it.
+      let tail = '';
+      child.onData((d) => {
+        tail = (tail + d).slice(-4096);
+      });
 
-        const imagePaths = materializeImages(prompt.images, tmp, turnSeq++);
-        const text =
-          imagePaths.length > 0
-            ? `${prompt.text} ${imagePaths.map((p) => `@${p}`).join(' ')}`
-            : prompt.text;
-        submitToTui(child, text);
+      let sessionId: string;
+      try {
+        sessionId = spec.resume
+          ? spec.resume
+          : sessionIdOf(await discoverNewSessionFile(spec.cwd, before, { home }));
+      } catch (err) {
+        await killGroup(child);
+        try {
+          rmSync(tmp, { recursive: true, force: true });
+        } catch {
+          // best-effort
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`${msg}\nlast TUI output:\n${tail.slice(-500)}`);
+      }
 
-        await stopped;
+      const sessionFile = sessionFilePath(spec.cwd, sessionId, home);
+      let disposeP: Promise<void> | null = null;
+      let turnSeq = 0;
 
-        return extractTurnLines(readLines(sessionFile), checkpoint);
-      },
+      return {
+        sessionId(): string {
+          return sessionId;
+        },
 
-      dispose(): Promise<void> {
-        // Memoize the in-flight teardown so a concurrent caller (abort listener
-        // + events() finally both fire dispose) actually awaits completion
-        // instead of returning before killGroup's grace period elapses.
-        if (disposeP) return disposeP;
-        disposeP = (async () => {
-          server.release(sessionId);
-          await killGroup(child);
-          try {
-            rmSync(tmp, { recursive: true, force: true });
-          } catch {
-            // best-effort
-          }
-        })();
-        return disposeP;
-      },
-    };
+        async runTurn(prompt: UserPrompt, signal: AbortSignal): Promise<JsonlLine[]> {
+          const checkpoint = readCheckpoint(sessionFile);
+
+          // Arm the completion waiter BEFORE injecting so a fast turn can't fire
+          // the Stop hook before we're listening.
+          const stopped = server.awaitStop(sessionId, signal);
+
+          const imagePaths = materializeImages(prompt.images, tmp, turnSeq++);
+          const text =
+            imagePaths.length > 0
+              ? `${prompt.text} ${imagePaths.map((p) => `@${p}`).join(' ')}`
+              : prompt.text;
+          submitToTui(child, text);
+
+          await stopped;
+
+          return extractTurnLines(readLines(sessionFile), checkpoint);
+        },
+
+        dispose(): Promise<void> {
+          // Memoize the in-flight teardown so a concurrent caller (abort listener
+          // + events() finally both fire dispose) actually awaits completion
+          // instead of returning before killGroup's grace period elapses.
+          if (disposeP) return disposeP;
+          disposeP = (async () => {
+            server.release(sessionId);
+            await killGroup(child);
+            try {
+              rmSync(tmp, { recursive: true, force: true });
+            } catch {
+              // best-effort
+            }
+          })();
+          return disposeP;
+        },
+      };
     },
   };
 }
