@@ -384,6 +384,23 @@ async function waitTurnIdle(
   return false;
 }
 
+// After the prior turn's Stop fires, the worker's TUI is still redrawing its
+// input box; keystrokes injected into that window get DROPPED (the prompt never
+// submits and the turn silently does nothing — the terminal-team bug where a
+// worker answered the cold-start turn but ignored every later dispatch). Wait for
+// the pty output to go quiet first, mirroring node-session's pre-inject readiness
+// wait (`lastDataAt` is bumped on every chunk in spawnAgentTerminal).
+const TUI_QUIET_MS = 400;
+const TUI_QUIET_CAP_MS = 5_000;
+async function waitTuiQuiescent(session: AgentTerminalSession, signal: AbortSignal): Promise<void> {
+  const start = Date.now();
+  while (!signal.aborted) {
+    if (Date.now() - session.lastDataAt >= TUI_QUIET_MS) return;
+    if (Date.now() - start >= TUI_QUIET_CAP_MS) return; // proceed anyway at the cap
+    await sleep(80);
+  }
+}
+
 export type DispatchResult = { ok: true; reply: string } | { ok: false; error: string };
 
 /**
@@ -425,6 +442,9 @@ export function dispatchToWorker(
       try {
         const idle = await waitTurnIdle(existing, signal, timeoutMs);
         if (!idle) return { ok: false, error: 'worker busy: prior turn did not finish in time' };
+        // Let the TUI settle (redraw its input box) before injecting, or the
+        // keystrokes are dropped and the prompt never submits.
+        await waitTuiQuiescent(existing, signal);
         const stop = awaitNextStop(sessionId, signal, timeoutMs);
         existing.turnInFlight = true;
         await submitToTui(existing.pty, text);

@@ -33,7 +33,7 @@ describe.runIf(RUN)('agent-terminal dispatch — REAL claude', () => {
     for (const d of cleanups) rmSync(d, { recursive: true, force: true });
   });
 
-  it('cold-starts a real claude worker, seeds the prompt, returns the reply', async () => {
+  it('cold-starts a worker, then dispatches a SECOND turn into the settled TUI', async () => {
     const cwd = realpathSync(mkdtempSync(path.join(tmpdir(), 'agt-real-')));
     preTrust(cwd);
     cleanups.push(cwd, projectDir(cwd));
@@ -69,8 +69,32 @@ describe.runIf(RUN)('agent-terminal dispatch — REAL claude', () => {
       await new Promise((r) => setTimeout(r, 100));
     }
     const msgs = msgsOf();
-    killAgentTerminal('s-real');
     console.log('[real-claude dispatch] captured rows =', JSON.stringify(msgs));
     expect(msgs.some((m) => m.role === 'assistant')).toBe(true);
-  }, 100_000);
+
+    // SECOND dispatch to the now-settled worker. This is the regression that
+    // matters: the prior turn's Stop fired but the TUI is still redrawing, so
+    // injecting immediately dropped the keystrokes and the prompt never ran (the
+    // worker answered the cold-start turn but ignored every later dispatch). With
+    // the pre-inject quiescence wait, PING must actually reach claude.
+    const ac2 = new AbortController();
+    const result2 = await dispatchToWorker('s-real', 'Reply with exactly: PING', ac2.signal, 90_000);
+    console.log('[real-claude dispatch] result2 =', JSON.stringify(result2));
+    expect(result2.ok).toBe(true);
+    if (result2.ok) expect(result2.reply.toUpperCase()).toContain('PING');
+
+    // The second prompt must land as a captured user turn (proof it submitted).
+    for (
+      let i = 0;
+      i < 60 && !msgsOf().some((m) => m.role === 'user' && m.content.includes('PING'));
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const msgs2 = msgsOf();
+    killAgentTerminal('s-real');
+    console.log('[real-claude dispatch] rows after 2nd =', JSON.stringify(msgs2));
+    expect(msgs2.some((m) => m.role === 'user' && m.content.includes('PING'))).toBe(true);
+    expect(msgs2.filter((m) => m.role === 'assistant').length).toBeGreaterThanOrEqual(2);
+  }, 180_000);
 });
