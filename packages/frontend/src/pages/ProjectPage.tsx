@@ -396,6 +396,26 @@ export function ProjectPage({
     setPins((prev) => applyPinChange(prev, updated));
   }
 
+  // The user clicked "탭 닫기" on a terminal session's exit overlay (its claude
+  // TUI quit). Closing the tab means deleting the session — same as the X button.
+  // The overlay is the confirm (we don't auto-delete on exit). Durable knowledge
+  // lives in the wiki, so a finished session is meant to be cleared.
+  function closeTerminalSession(id: string) {
+    void api.deleteSession(id).catch(() => {
+      // best-effort: the pty already exited; a failed delete just leaves the row.
+    });
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      if (activeSession?.id === id) setActiveSession(next[0] ?? null);
+      return next;
+    });
+    setTabOrder((prev) => {
+      const next = prev.filter((r) => !(r.kind === 'session' && r.id === id));
+      persistTabOrder(project.id, next);
+      return next;
+    });
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3">
@@ -631,7 +651,11 @@ export function ProjectPage({
               // sessions).
               <div className="flex h-full w-full min-h-0">
                 <div className="min-w-0 flex-1">
-                  <AgentTerminal key={activeSession.id} sessionId={activeSession.id} />
+                  <AgentTerminal
+                    key={activeSession.id}
+                    sessionId={activeSession.id}
+                    onCleanExit={() => closeTerminalSession(activeSession.id)}
+                  />
                 </div>
                 <TerminalSidePanel key={`panel-${activeSession.id}`} sessionId={activeSession.id} />
               </div>

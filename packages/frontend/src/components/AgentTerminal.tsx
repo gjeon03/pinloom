@@ -15,7 +15,18 @@ import { useWebSocket } from '../hooks/useWebSocket.js';
 
 type Status = 'open' | 'exited' | 'disconnected';
 
-export function AgentTerminal({ sessionId }: { sessionId: string }) {
+export function AgentTerminal({
+  sessionId,
+  onCleanExit,
+}: {
+  sessionId: string;
+  /**
+   * Close this tab (= delete the session, same as the X button). Offered as the
+   * "탭 닫기" action on the exit overlay — we don't auto-delete on exit, since
+   * `exit` is easy to fire by reflex; the human confirms by clicking.
+   */
+  onCleanExit?: () => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>('open');
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -146,6 +157,16 @@ export function AgentTerminal({ sessionId }: { sessionId: string }) {
     };
   }, [sessionId, connKey]);
 
+  const restart = () => {
+    setStatus('open');
+    setExitCode(null);
+    setBlockedMsg(null);
+    setConnKey((k) => k + 1);
+  };
+
+  const btnClass =
+    'rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)]';
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#1a1b26]">
       <div ref={containerRef} className="h-full w-full" />
@@ -155,24 +176,43 @@ export function AgentTerminal({ sessionId }: { sessionId: string }) {
         </div>
       )}
       {status !== 'open' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 px-4 text-center">
-          {blockedMsg && <p className="text-xs text-[#c0caf5]">{blockedMsg}</p>}
-          <button
-            type="button"
-            onClick={() => {
-              setStatus('open');
-              setExitCode(null);
-              setBlockedMsg(null);
-              setConnKey((k) => k + 1);
-            }}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)]"
-          >
-            {status === 'exited'
-              ? `agent exited${exitCode != null ? ` (code ${exitCode})` : ''} — restart`
-              : blockedMsg
-                ? 'retry'
-                : 'disconnected — reconnect'}
-          </button>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60 px-4 text-center">
+          {status === 'exited' ? (
+            <>
+              <div className="max-w-xs space-y-1">
+                <p className="text-xs text-[#c0caf5]">
+                  {exitCode === 0
+                    ? '세션이 종료되었습니다.'
+                    : `에이전트가 비정상 종료되었습니다 (code ${exitCode}).`}
+                </p>
+                <p className="text-[11px] leading-relaxed text-[#c0caf5]/60">
+                  다시 시작하면 이전 대화와 핀이 그대로 이어집니다. 탭을 닫으면 이 세션이
+                  삭제됩니다 (대화·핀 포함).
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={restart} className={btnClass}>
+                  다시 시작
+                </button>
+                {onCleanExit && (
+                  <button
+                    type="button"
+                    onClick={onCleanExit}
+                    className="rounded border border-[#f7768e]/50 bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[#f7768e] hover:border-[#f7768e]"
+                  >
+                    탭 닫기 (세션 삭제)
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              {blockedMsg && <p className="text-xs text-[#c0caf5]">{blockedMsg}</p>}
+              <button type="button" onClick={restart} className={btnClass}>
+                {blockedMsg ? 'retry' : 'disconnected — reconnect'}
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
