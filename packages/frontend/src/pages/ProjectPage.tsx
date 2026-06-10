@@ -612,7 +612,13 @@ export function ProjectPage({
           minLeft={320}
           minRight={420}
           left={
-            activeNotepadId === null && pins.length > 0 && activeSession ? (
+            // Hidden for terminal-claude sessions — their pins live in the right
+            // rail's Pins tab (TerminalSidePanel) instead, so we don't show two
+            // pin panels. Structured sessions keep the left rail unchanged.
+            activeNotepadId === null &&
+            pins.length > 0 &&
+            activeSession &&
+            !(activeSession.transport === 'terminal' && activeSession.agent === 'claude') ? (
               <PinnedPanel
                 key={activeSession.id}
                 pins={pins}
@@ -657,7 +663,18 @@ export function ProjectPage({
                     onCleanExit={() => closeTerminalSession(activeSession.id)}
                   />
                 </div>
-                <TerminalSidePanel key={`panel-${activeSession.id}`} sessionId={activeSession.id} />
+                <TerminalSidePanel
+                  key={`panel-${activeSession.id}`}
+                  sessionId={activeSession.id}
+                  pins={pins}
+                  onPinChange={handlePinsChange}
+                  projectName={project.name}
+                  onHandoff={(newSession) => {
+                    setSessions((prev) => [...prev, newSession]);
+                    setActiveSession(newSession);
+                  }}
+                  onSendPin={(pin) => setSendingPin(pin)}
+                />
               </div>
             ) : activeSession ? (
               // Force a fresh component instance per session so per-session
