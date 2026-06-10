@@ -12,19 +12,31 @@ async function post(url: string, payload: unknown): Promise<void> {
 }
 
 describe('startStopHookServer', () => {
-  it('resolves awaitStop when a matching Stop payload arrives', async () => {
+  it('resolves awaitStop with the parsed payload when a matching Stop arrives', async () => {
     server = await startStopHookServer();
     const ac = new AbortController();
     const waited = server.awaitStop('sess-A', ac.signal);
-    await post(server.url(), { session_id: 'sess-A', hook_event_name: 'Stop' });
-    await expect(waited).resolves.toBeUndefined();
+    await post(server.url(), {
+      session_id: 'sess-A',
+      hook_event_name: 'Stop',
+      transcript_path: '/t/sess-A.jsonl',
+      last_assistant_message: 'the reply',
+      effort: { level: 'high' },
+    });
+    const payload = await waited;
+    expect(payload.sessionId).toBe('sess-A');
+    expect(payload.transcriptPath).toBe('/t/sess-A.jsonl');
+    expect(payload.lastAssistantMessage).toBe('the reply');
+    expect(payload.effortLevel).toBe('high');
   });
 
-  it('resolves immediately if the hook fired before arming (race)', async () => {
+  it('resolves immediately with the buffered payload if the hook fired before arming', async () => {
     server = await startStopHookServer();
-    await post(server.url(), { session_id: 'sess-B' });
+    await post(server.url(), { session_id: 'sess-B', last_assistant_message: 'early' });
     // arm AFTER the hook already fired
-    await expect(server.awaitStop('sess-B', new AbortController().signal)).resolves.toBeUndefined();
+    const payload = await server.awaitStop('sess-B', new AbortController().signal);
+    expect(payload.sessionId).toBe('sess-B');
+    expect(payload.lastAssistantMessage).toBe('early');
   });
 
   it('does not resolve for a different session', async () => {
