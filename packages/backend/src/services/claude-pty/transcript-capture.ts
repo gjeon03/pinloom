@@ -22,6 +22,17 @@ import { getStopHookServer } from './shared-server.js';
 import type { StopHookPayload } from './stop-hook-server.js';
 import { persistMessage, emitRunStatus, notifySessionIdle } from '../runner.js';
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function turnHasAssistantContent(turn: { type: string; message?: { content?: unknown } }[]): boolean {
+  return turn.some(
+    (l) =>
+      l.type === 'assistant' &&
+      Array.isArray(l.message?.content) &&
+      (l.message?.content as unknown[]).length > 0,
+  );
+}
+
 interface CaptureState {
   unregister: () => void;
   seen: Set<string>;
@@ -90,21 +101,27 @@ async function onStop(pinloomSessionId: string, payload: StopHookPayload): Promi
       ).run(payload.sessionId, payload.sessionId, new Date().toISOString(), pinloomSessionId);
     }
 
-    const lines = readLines(payload.transcriptPath);
-
     // Seed `seen` from the persisted cursor on the first turn after a restart so
     // we don't re-capture already-folded history.
     if (!state.seeded) {
       state.seeded = true;
       if (state.cursor) {
-        for (const l of lines) {
+        for (const l of readLines(payload.transcriptPath)) {
           if (l.uuid) state.seen.add(l.uuid);
           if (l.uuid === state.cursor) break;
         }
       }
     }
 
-    const turn = selectTurnLines(lines, state.seen);
+    // claude flushes the completed assistant message to the transcript a beat
+    // AFTER firing the Stop hook (measured), so a single read here would catch
+    // the user line but miss the reply. Poll until the new turn carries assistant
+    // content (or we exhaust the window — an empty/aborted turn).
+    let turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
+    for (let i = 0; i < 25 && !turnHasAssistantContent(turn); i++) {
+      await sleep(120);
+      turn = selectTurnLines(readLines(payload.transcriptPath), state.seen);
+    }
     let model: string | null = null;
     let persistedAny = false;
 
