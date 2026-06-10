@@ -105,11 +105,15 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
   const db = getDb();
 
   // A 'terminal' worker has no runner driving it — dispatch injects into its TUI
-  // (dispatchToWorker) instead of the enqueue/waitForIdle path.
-  const isTerminalWorker = (sessionId: string): boolean =>
-    (db.prepare('SELECT transport FROM sessions WHERE id = ?').get(sessionId) as
-      | { transport: string | null }
-      | undefined)?.transport === 'terminal';
+  // (dispatchToWorker) instead of the enqueue/waitForIdle path. Terminal mode is
+  // claude-only, so a codex worker (even if transport='terminal') stays on the
+  // runner path.
+  const isTerminalWorker = (sessionId: string): boolean => {
+    const row = db
+      .prepare('SELECT transport, agent FROM sessions WHERE id = ?')
+      .get(sessionId) as { transport: string | null; agent: string | null } | undefined;
+    return row?.transport === 'terminal' && row.agent === 'claude';
+  };
 
   // Backfill endpoint for the descriptive canvas: returns the in-memory
   // ring buffer of recent dispatch events for this team. Open to the

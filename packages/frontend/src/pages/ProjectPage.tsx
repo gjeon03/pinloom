@@ -618,10 +618,13 @@ export function ProjectPage({
               // teamId from the URL via useParams, so we route inline by
               // overriding the `teamId` segment via a key + path.
               <InlineCanvasView teamId={activeCanvasTeamId} />
-            ) : activeSession && activeSession.transport === 'terminal' ? (
+            ) : activeSession &&
+              activeSession.transport === 'terminal' &&
+              activeSession.agent === 'claude' ? (
               // Terminal-chat mode: render the session's live claude TUI instead
               // of the structured chat. Pinned per-session (sessions.transport),
-              // so flipping the env only affects newly-created sessions.
+              // so flipping the env only affects newly-created sessions. Terminal
+              // mode is claude-only — codex sessions stay on the structured path.
               <AgentTerminal key={activeSession.id} sessionId={activeSession.id} />
             ) : activeSession ? (
               // Force a fresh component instance per session so per-session
