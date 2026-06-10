@@ -190,7 +190,7 @@ export function TerminalSidePanel({ sessionId }: { sessionId: string }) {
                   }}
                   className="text-[10px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
                 >
-                  이전 메시지 더 보기 ({rows.length - limit})
+                  Show older ({rows.length - limit})
                 </button>
               </li>
             )}

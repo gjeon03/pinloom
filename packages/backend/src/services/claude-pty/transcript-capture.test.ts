@@ -162,7 +162,7 @@ describe('transcript capture', () => {
       type: 'user',
       uuid: 'lu1',
       parentUuid: null,
-      message: { role: 'user', content: '메롱' },
+      message: { role: 'user', content: 'hey there' },
     };
     writeTranscript(tfile, [userLine]);
 
@@ -187,7 +187,7 @@ describe('transcript capture', () => {
         message: {
           role: 'assistant',
           model: 'claude-opus-4-8',
-          content: [{ type: 'text', text: '😝 메롱이라니 ㅎㅎ' }],
+          content: [{ type: 'text', text: 'hey back, friend' }],
         },
       },
     ]);
@@ -195,7 +195,7 @@ describe('transcript capture', () => {
     // Rescan tail catches it without any further Stop / user turn.
     await until(() => rows(sid).some((x) => x.role === 'assistant'));
     const r = rows(sid);
-    expect(r.map((x) => x.content)).toEqual(['메롱', '😝 메롱이라니 ㅎㅎ']);
+    expect(r.map((x) => x.content)).toEqual(['hey there', 'hey back, friend']);
     expect(r.find((x) => x.role === 'assistant')?.transcript_uuid).toBe('la1');
 
     // Cursor advanced to the assistant line so a later Stop won't re-capture it.

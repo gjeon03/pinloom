@@ -22,7 +22,7 @@ export function AgentTerminal({
   sessionId: string;
   /**
    * Close this tab (= delete the session, same as the X button). Offered as the
-   * "탭 닫기" action on the exit overlay — we don't auto-delete on exit, since
+   * "Close tab" action on the exit overlay — we don't auto-delete on exit, since
    * `exit` is easy to fire by reflex; the human confirms by clicking.
    */
   onCleanExit?: () => void;
@@ -172,7 +172,7 @@ export function AgentTerminal({
       <div ref={containerRef} className="h-full w-full" />
       {dispatchLocked && status === 'open' && (
         <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-[var(--color-accent)] px-3 py-1 text-[10px] font-medium text-black shadow">
-          오케스트레이터 구동 중 — 입력 잠금
+          orchestrator running — input locked
         </div>
       )}
       {status !== 'open' && (
@@ -182,17 +182,17 @@ export function AgentTerminal({
               <div className="max-w-xs space-y-1">
                 <p className="text-xs text-[#c0caf5]">
                   {exitCode === 0
-                    ? '세션이 종료되었습니다.'
-                    : `에이전트가 비정상 종료되었습니다 (code ${exitCode}).`}
+                    ? 'Session ended.'
+                    : `Agent exited abnormally (code ${exitCode}).`}
                 </p>
                 <p className="text-[11px] leading-relaxed text-[#c0caf5]/60">
-                  다시 시작하면 이전 대화와 핀이 그대로 이어집니다. 탭을 닫으면 이 세션이
-                  삭제됩니다 (대화·핀 포함).
+                  Restart keeps the conversation and pins. Closing the tab deletes
+                  this session (conversation and pins included).
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" onClick={restart} className={btnClass}>
-                  다시 시작
+                  Restart
                 </button>
                 {onCleanExit && (
                   <button
@@ -200,7 +200,7 @@ export function AgentTerminal({
                     onClick={onCleanExit}
                     className="rounded border border-[#f7768e]/50 bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[#f7768e] hover:border-[#f7768e]"
                   >
-                    탭 닫기 (세션 삭제)
+                    Close tab (delete session)
                   </button>
                 )}
               </div>

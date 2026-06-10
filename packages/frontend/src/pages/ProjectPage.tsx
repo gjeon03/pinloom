@@ -396,7 +396,7 @@ export function ProjectPage({
     setPins((prev) => applyPinChange(prev, updated));
   }
 
-  // The user clicked "탭 닫기" on a terminal session's exit overlay (its claude
+  // The user clicked "Close tab" on a terminal session's exit overlay (its claude
   // TUI quit). Closing the tab means deleting the session — same as the X button.
   // The overlay is the confirm (we don't auto-delete on exit). Durable knowledge
   // lives in the wiki, so a finished session is meant to be cleared.
