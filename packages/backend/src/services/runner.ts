@@ -1048,6 +1048,52 @@ function buildOrchestratorMcpConfig(
   };
 }
 
+export interface SessionLaunchInput {
+  cwd: string;
+  /** Full system prompt, static+dynamic concatenated (the TUI has no cache split). */
+  systemPrompt: string;
+  model: string | null;
+  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+  /** Resume token (prior agent session id), or null for a fresh session. */
+  resume: string | null;
+  mcpServers?: Record<string, McpStdioServerConfig>;
+}
+
+/**
+ * Build everything needed to launch an interactive `claude` for a session in
+ * terminal mode — the SAME system prompt (framework + wiki + env + plan + team +
+ * worker instructions + pins), MCP wiring, model, effort, and resume token the
+ * SDK/PTY adapter path uses. Concatenates the static + dynamic system-prompt
+ * halves since the TUI has no prompt-cache split. Mints a fresh team MCP token
+ * for orchestrator sessions (M5). Returns null if the session doesn't exist.
+ *
+ * This is the read-only "what to launch" seam — it does NOT touch the streaming/
+ * queue/activeRuns state, so the terminal transport can reuse it without pulling
+ * in the runner's turn loop.
+ */
+export function buildSessionLaunchInput(sessionId: string): SessionLaunchInput | null {
+  const ctx = loadSession(sessionId);
+  if (!ctx) return null;
+  const planItems = loadPlanItems(ctx.planId);
+  const pinsContext = buildPinsContext(ctx.id);
+  const systemPrompt =
+    SYSTEM_PROMPT +
+    buildWikiContext(ctx.projectId) +
+    buildEnvVarsContext() +
+    buildPlanContext(planItems) +
+    buildTeamContext(ctx.id) +
+    buildWorkerInstructionsContext(ctx.id) +
+    (pinsContext ? `\n\n${pinsContext}` : '');
+  return {
+    cwd: ctx.cwd,
+    systemPrompt,
+    model: ctx.model,
+    reasoningEffort: ctx.reasoningEffort,
+    resume: ctx.claudeSessionId,
+    mcpServers: buildOrchestratorMcpConfig(ctx.id),
+  };
+}
+
 async function runAttempt(
   ctx: SessionContext,
   prompt: string,
