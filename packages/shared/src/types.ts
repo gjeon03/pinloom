@@ -273,4 +273,7 @@ export type WsEvent =
       phase: 'started' | 'finished' | 'error';
     }
   // Live dispatch event for the team canvas. Channel: `team:${teamId}`.
-  | { type: 'team_dispatch_event'; event: TeamDispatchEvent };
+  | { type: 'team_dispatch_event'; event: TeamDispatchEvent }
+  // Terminal-mode worker: orchestrator dispatch is driving the TUI, so the
+  // human's keystrokes are locked out. The AgentTerminal shows an overlay.
+  | { type: 'terminal_lock'; sessionId: string; locked: boolean };

@@ -18,11 +18,15 @@ import { existsSync } from 'node:fs';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { buildSessionLaunchInput } from '../runner.js';
+import { broadcast } from '../../ws/hub.js';
 import { buildClaudeLaunch, type BuiltClaudeLaunch } from './launch-spec.js';
 import { getStopHookServer } from './shared-server.js';
+import { submitToTui } from './tui-input.js';
 import { startCapture, stopCapture } from './transcript-capture.js';
+import type { StopHookPayload } from './stop-hook-server.js';
 
-const CLAUDE_BIN = process.env.PINLOOM_CLAUDE_BIN ?? 'claude';
+// Read per spawn so tests can point it at a mock binary via env.
+const claudeBin = () => process.env.PINLOOM_CLAUDE_BIN ?? 'claude';
 const SCROLLBACK_BYTES = 200 * 1024;
 // Combined with terminal.ts's project shells these share the host's pty/RAM
 // budget; keep the ceiling modest. (Plan m3: ideally one combined cap.)
@@ -40,7 +44,23 @@ interface AgentTerminalSession {
   attachId: number;
   /** null = idle; otherwise the current single driver (see write lock). */
   lockedBy: TerminalDriver | null;
+  /** Last time the TUI produced output — drives the dispatch quiescence wait. */
+  lastDataAt: number;
 }
+
+// Serializes dispatches per worker so two orchestrator asks can't interleave.
+const dispatchChains = new Map<string, Promise<unknown>>();
+function withDispatchLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = dispatchChains.get(sessionId) ?? Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  dispatchChains.set(
+    sessionId,
+    next.catch(() => {}),
+  );
+  return next;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const sessions = new Map<string, AgentTerminalSession>();
 // In-flight spawns, so two near-simultaneous attaches for the same session
@@ -78,6 +98,10 @@ async function spawnAgentTerminal(
   sessionId: string,
   cols: number,
   rows: number,
+  // When a dispatch cold-starts a worker, seed the first turn via the positional
+  // arg (auto-runs) — injecting into a freshly-launched TUI is unreliable. The
+  // human attach path leaves this null and types directly.
+  seedText: string | null = null,
 ): Promise<AgentTerminalSession | { reason: 'no-session' | 'no-cwd' }> {
   const launchInput = buildSessionLaunchInput(sessionId);
   if (!launchInput) return { reason: 'no-session' };
@@ -91,14 +115,13 @@ async function spawnAgentTerminal(
       reasoningEffort: launchInput.reasoningEffort ?? undefined,
       resume: launchInput.resume,
       mcpServers: launchInput.mcpServers,
-      // Human drives the first turn by typing — no positional seed.
-      initialText: null,
+      initialText: seedText,
     },
     server.url(),
     { pinloomSessionId: sessionId },
   );
 
-  const child = pty.spawn(CLAUDE_BIN, launch.args, {
+  const child = pty.spawn(claudeBin(), launch.args, {
     name: 'xterm-color',
     cols,
     rows,
@@ -114,9 +137,11 @@ async function spawnAgentTerminal(
     onExit: null,
     attachId: 0,
     lockedBy: null,
+    lastDataAt: Date.now(),
   };
   child.onData((d) => {
     created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
+    created.lastDataAt = Date.now();
     created.onData?.(d);
   });
   child.onExit(({ exitCode }) => {
@@ -255,4 +280,111 @@ export async function killAllAgentTerminals(): Promise<void> {
     }
     s.launch.cleanup();
   }
+}
+
+// ─── Orchestrator dispatch into a worker terminal (teams in terminal mode) ───
+
+function setLock(
+  session: AgentTerminalSession,
+  sessionId: string,
+  driver: TerminalDriver | null,
+): void {
+  session.lockedBy = driver;
+  broadcast(`session:${sessionId}`, {
+    type: 'terminal_lock',
+    sessionId,
+    locked: driver === 'dispatch',
+  });
+}
+
+/** Resolve with the payload of the next Stop hook for this pinloom session. */
+async function awaitNextStop(
+  sessionId: string,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<StopHookPayload> {
+  const server = await getStopHookServer();
+  return new Promise<StopHookPayload>((resolve, reject) => {
+    let done = false;
+    const unregister = server.onStop(sessionId, (payload) => {
+      if (done) return;
+      done = true;
+      finish();
+      resolve(payload);
+    });
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      finish();
+      reject(new Error(`dispatch turn timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    const onAbort = () => {
+      if (done) return;
+      done = true;
+      finish();
+      reject(new Error('aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    function finish() {
+      unregister();
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    }
+  });
+}
+
+/** Wait until the TUI output goes quiet (so we don't inject mid-turn). */
+async function waitQuiescent(session: AgentTerminalSession, signal: AbortSignal): Promise<void> {
+  const QUIET_MS = 600;
+  const CAP_MS = 5 * 60_000;
+  const start = Date.now();
+  while (!signal.aborted) {
+    if (Date.now() - session.lastDataAt >= QUIET_MS) return;
+    if (Date.now() - start >= CAP_MS) return;
+    await sleep(100);
+  }
+}
+
+export type DispatchResult = { ok: true; reply: string } | { ok: false; error: string };
+
+/**
+ * Drive a worker session's terminal with an orchestrator prompt and return its
+ * reply. Serialized per worker. If the worker terminal isn't up yet, it's
+ * cold-started with the prompt SEEDED via the positional arg (auto-runs —
+ * injecting into a fresh TUI is unreliable). If it's already settled, the human
+ * is locked out, the TUI is allowed to go quiet, then the prompt is injected.
+ * The reply is the Stop-hook payload's last_assistant_message.
+ */
+export function dispatchToWorker(
+  sessionId: string,
+  text: string,
+  signal: AbortSignal,
+  timeoutMs = 5 * 60_000,
+): Promise<DispatchResult> {
+  return withDispatchLock(sessionId, async () => {
+    try {
+      const existing = sessions.get(sessionId);
+      if (!existing) {
+        // Cold start: arm the Stop waiter, then spawn with the seeded prompt.
+        const stop = awaitNextStop(sessionId, signal, timeoutMs);
+        const spawned = await spawnAgentTerminal(sessionId, 120, 40, text);
+        if ('reason' in spawned) return { ok: false, error: spawned.reason };
+        const payload = await stop;
+        return { ok: true, reply: payload.lastAssistantMessage ?? '' };
+      }
+      // Settled worker: lock out the human, wait for quiet, inject, await Stop.
+      setLock(existing, sessionId, 'dispatch');
+      try {
+        await waitQuiescent(existing, signal);
+        const stop = awaitNextStop(sessionId, signal, timeoutMs);
+        await submitToTui(existing.pty, text);
+        const payload = await stop;
+        return { ok: true, reply: payload.lastAssistantMessage ?? '' };
+      } finally {
+        if (sessions.get(sessionId) === existing) setLock(existing, sessionId, null);
+      }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
 }

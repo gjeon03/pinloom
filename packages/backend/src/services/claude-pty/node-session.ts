@@ -18,6 +18,7 @@ import { collectUuids, selectTurnLines, type JsonlLine } from '../claude-jsonl/i
 import type { ImageInput } from '../runner-types.js';
 import type { UserPrompt } from '../agents/message-stream.js';
 import { buildClaudeLaunch } from './launch-spec.js';
+import { submitToTui } from './tui-input.js';
 import type { ClaudeSession, ClaudeSessionFactory, ClaudeSessionSpec } from './session.js';
 import {
   discoverNewSessionFile,
@@ -63,28 +64,6 @@ function materializeImages(images: ImageInput[], dir: string, turn: number): str
     paths.push(file);
   }
   return paths;
-}
-
-// Submit a prompt to the live TUI: enter the text, pause so the TUI registers
-// it, then CR to send. A multi-line prompt is wrapped in bracketed paste so its
-// internal newlines aren't treated as separate submissions; a single line is
-// typed plainly (some TUIs swallow the CR that immediately follows a paste-end).
-// These millisecond pauses are the most version-fragile spot — the integration
-// test guards them.
-const TUI_SETTLE_BEFORE_ENTER_MS = 120;
-const TUI_SETTLE_AFTER_ENTER_MS = 20;
-async function submitToTui(child: IPty, text: string): Promise<void> {
-  // Strip bracketed-paste markers from the payload so a prompt that literally
-  // contains them can't break out of the paste and drive the TUI as keystrokes.
-  const safe = text.replace(/\x1b\[20[01]~/g, '');
-  if (safe.includes('\n')) {
-    child.write('\x1b[200~' + safe + '\x1b[201~');
-  } else {
-    child.write(safe);
-  }
-  await sleep(TUI_SETTLE_BEFORE_ENTER_MS);
-  child.write('\r');
-  await sleep(TUI_SETTLE_AFTER_ENTER_MS);
 }
 
 async function killGroup(child: IPty): Promise<void> {
