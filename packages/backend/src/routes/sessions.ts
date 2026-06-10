@@ -20,6 +20,7 @@ import {
   SessionNotFoundError,
 } from '../services/message-queue.js';
 import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
+import { claudeTransport } from '../services/agents/index.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
 import { runWikiSync } from '../services/wiki-sync.js';
 
@@ -70,6 +71,7 @@ interface SessionRow {
   last_synced_message_id: string | null;
   model: string | null;
   reasoning_effort: string | null;
+  transport: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -104,6 +106,10 @@ function normalizeEffort(value: string | null): Session['reasoningEffort'] {
   return null;
 }
 
+function normalizeTransport(value: string | null): Session['transport'] {
+  return value === 'pty' || value === 'terminal' || value === 'sdk' ? value : null;
+}
+
 export function toSession(row: SessionRow): Session {
   const agent = row.agent === 'codex' ? 'codex' : 'claude';
   // agent_session_id is the canonical resume token going forward; fall back
@@ -121,6 +127,7 @@ export function toSession(row: SessionRow): Session {
     lastSyncedMessageId: row.last_synced_message_id,
     model: row.model,
     reasoningEffort: normalizeEffort(row.reasoning_effort),
+    transport: normalizeTransport(row.transport),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -200,8 +207,8 @@ export async function sessionRoutes(app: FastifyInstance) {
     const nextOrder = maxRow.max + 1;
     db.prepare(
       `INSERT INTO sessions
-         (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+         (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, transport, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       req.params.projectId,
@@ -209,6 +216,7 @@ export async function sessionRoutes(app: FastifyInstance) {
       agent,
       req.body.title ?? null,
       nextOrder,
+      claudeTransport(),
       now,
       now,
     );
@@ -649,9 +657,9 @@ export async function sessionRoutes(app: FastifyInstance) {
         const fillerId = nanoid();
         db.prepare(
           `INSERT INTO sessions
-             (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, created_at, updated_at)
-           VALUES (?, ?, NULL, 'claude', NULL, NULL, NULL, 0, ?, ?)`,
-        ).run(fillerId, sourceProjectId, now, now);
+             (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, transport, created_at, updated_at)
+           VALUES (?, ?, NULL, 'claude', NULL, NULL, NULL, 0, ?, ?, ?)`,
+        ).run(fillerId, sourceProjectId, claudeTransport(), now, now);
         sourceFiller = db
           .prepare('SELECT * FROM sessions WHERE id = ?')
           .get(fillerId) as SessionRow;

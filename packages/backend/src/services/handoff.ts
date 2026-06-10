@@ -15,6 +15,7 @@ interface SessionRow {
   last_synced_message_id: string | null;
   model: string | null;
   reasoning_effort: string | null;
+  transport: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +62,10 @@ function toSession(row: SessionRow): Session {
     lastSyncedMessageId: row.last_synced_message_id,
     model: row.model,
     reasoningEffort: effort,
+    transport:
+      row.transport === 'pty' || row.transport === 'terminal' || row.transport === 'sdk'
+        ? row.transport
+        : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

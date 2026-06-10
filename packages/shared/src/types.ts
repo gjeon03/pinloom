@@ -87,6 +87,15 @@ export type AgentKind = 'claude' | 'codex';
 // adapter can't honor.
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/**
+ * How a claude session is driven/displayed:
+ *  - 'sdk':      Agent SDK, structured streaming chat (default).
+ *  - 'pty':      PTY-driven claude as a structured adapter (interactive bucket).
+ *  - 'terminal': interactive claude in a live xterm.js terminal.
+ * Pinned per session at creation (sessions.transport) from the backend default.
+ */
+export type ClaudeTransport = 'sdk' | 'pty' | 'terminal';
+
 export interface Session {
   id: string;
   projectId: string;
@@ -100,6 +109,8 @@ export interface Session {
   lastSyncedMessageId: string | null;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
+  /** Transport this session was created under; null = legacy (treat as 'sdk'). */
+  transport: ClaudeTransport | null;
   createdAt: string;
   updatedAt: string;
 }
