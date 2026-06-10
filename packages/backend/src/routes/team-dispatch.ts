@@ -38,6 +38,7 @@ import {
   SessionNotFoundError,
 } from '../services/message-queue.js';
 import { isAiRunning, tryDrainQueue, waitForIdle } from '../services/runner.js';
+import { dispatchToWorker } from '../services/claude-pty/agent-terminal.js';
 import { resolveTeamByToken } from '../services/team-tokens.js';
 import {
   emitDispatchEvent,
@@ -458,6 +459,54 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       typeof requested === 'number' && Number.isFinite(requested)
         ? Math.min(Math.max(Math.floor(requested), 100), MAX_WAIT_MS)
         : MAX_WAIT_MS;
+
+    // Terminal-mode worker: no runner drives it, so enqueue/waitForIdle don't
+    // apply. Inject the prompt into the worker's TUI and read the reply straight
+    // from the Stop-hook payload (capture persists the rows asynchronously).
+    const workerTransport = (
+      db.prepare('SELECT transport FROM sessions WHERE id = ?').get(member.sessionId) as
+        | { transport: string | null }
+        | undefined
+    )?.transport;
+    if (workerTransport === 'terminal') {
+      emitDispatchEvent({
+        type: 'dispatch_send',
+        teamId: req.params.teamId,
+        alias: member.alias,
+        sessionId: member.sessionId,
+        previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+        at: new Date().toISOString(),
+      });
+      const ac = new AbortController();
+      const onClose = () => ac.abort();
+      req.raw.once('close', onClose);
+      let result;
+      try {
+        result = await dispatchToWorker(member.sessionId, text, ac.signal, timeoutMs);
+      } finally {
+        req.raw.off('close', onClose);
+      }
+      if (!result.ok) {
+        return {
+          ok: false,
+          idle: false,
+          alias: member.alias,
+          sessionId: member.sessionId,
+          error: result.error,
+        };
+      }
+      return {
+        ok: true,
+        idle: true,
+        alias: member.alias,
+        sessionId: member.sessionId,
+        message: {
+          id: `terminal:${member.sessionId}`,
+          content: result.reply,
+          createdAt: new Date().toISOString(),
+        },
+      };
+    }
 
     // Snapshot before enqueue so we can disambiguate "new" assistant
     // messages from anything that already existed.
