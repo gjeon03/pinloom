@@ -13,8 +13,10 @@ import { existsSync, rmSync } from 'node:fs';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { buildSessionLaunchInput } from '../runner.js';
+import { broadcast } from '../../ws/hub.js';
+import { submitToTui } from '../claude-pty/tui-input.js';
 import { buildCodexLaunch, codexHomeFor, type BuiltCodexLaunch } from './launch-spec.js';
-import { startCodexCapture, stopCodexCapture } from './transcript-capture.js';
+import { startCodexCapture, stopCodexCapture, awaitCodexTurn } from './transcript-capture.js';
 
 const codexBin = () => process.env.PINLOOM_CODEX_BIN ?? 'codex';
 const SCROLLBACK_BYTES = 200 * 1024;
@@ -28,8 +30,10 @@ interface CodexTerminalSession {
   onExit: ((code: number) => void) | null;
   attachId: number;
   lastDataAt: number;
-  /** A turn is running (set on the human's Enter; used by later dispatch phases). */
+  /** A turn is running (set on the human's Enter). */
   turnInFlight: boolean;
+  /** null = idle; 'dispatch' while an orchestrator drives this worker's TUI. */
+  lockedBy: 'human' | 'dispatch' | null;
 }
 
 export interface CodexAttachResult {
@@ -100,6 +104,7 @@ export async function spawnCodexTerminal(
     attachId: 0,
     lastDataAt: Date.now(),
     turnInFlight: false,
+    lockedBy: null,
   };
   child.onData((d) => {
     created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
@@ -165,7 +170,10 @@ export async function attachCodexTerminal(
   const handle: CodexTerminalHandle = {
     buffer: snapshot,
     write(data: string) {
-      // An Enter submits a turn — flag it (used by later dispatch phases).
+      // While a dispatch drives this worker, human keystrokes are locked out
+      // (the client shows a "busy" overlay via the terminal_lock event).
+      if (bound.lockedBy === 'dispatch') return;
+      // An Enter submits a turn — flag it so a dispatch waits for it.
       if (data.includes('\r') || data.includes('\n')) bound.turnInFlight = true;
       try {
         bound.pty.write(data);
@@ -211,6 +219,105 @@ export function removeCodexHome(sessionId: string): void {
   } catch {
     // best-effort
   }
+}
+
+// ─── Orchestrator dispatch into a codex worker terminal (teams) ───
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export type CodexDispatchResult = { ok: true; reply: string } | { ok: false; error: string };
+
+// Serialize dispatches per worker so two asks can't interleave on one TUI.
+const dispatchChains = new Map<string, Promise<unknown>>();
+function withCodexDispatchLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = dispatchChains.get(sessionId) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tail = next.catch(() => {});
+  dispatchChains.set(sessionId, tail);
+  void tail.finally(() => {
+    if (dispatchChains.get(sessionId) === tail) dispatchChains.delete(sessionId);
+  });
+  return next;
+}
+
+function setCodexLock(
+  session: CodexTerminalSession,
+  sessionId: string,
+  driver: 'human' | 'dispatch' | null,
+): void {
+  session.lockedBy = driver;
+  broadcast(`session:${sessionId}`, {
+    type: 'terminal_lock',
+    sessionId,
+    locked: driver === 'dispatch',
+  });
+}
+
+/** Whether a session has a live codex terminal lock owner (for the UI overlay). */
+export function codexTerminalLock(sessionId: string): 'human' | 'dispatch' | null {
+  return sessions.get(sessionId)?.lockedBy ?? null;
+}
+
+// Wait for the codex TUI output to go quiet before injecting, so keystrokes land
+// in a settled input box rather than mid-redraw (mirrors the claude path).
+const TUI_QUIET_MS = 400;
+const TUI_QUIET_CAP_MS = 5_000;
+async function waitCodexQuiescent(session: CodexTerminalSession, signal: AbortSignal): Promise<void> {
+  const start = Date.now();
+  while (!signal.aborted) {
+    if (Date.now() - session.lastDataAt >= TUI_QUIET_MS) return;
+    if (Date.now() - start >= TUI_QUIET_CAP_MS) return;
+    await sleep(80);
+  }
+}
+
+/**
+ * Drive a codex worker session with an orchestrator prompt and return its reply.
+ * Serialized per worker. Cold-starts with the prompt SEEDED via the positional
+ * arg (codex auto-runs it — reliable); a live worker is injected into after the
+ * TUI settles. The reply is the rollout's task_complete.last_agent_message,
+ * surfaced by awaitCodexTurn.
+ */
+export function dispatchToCodexWorker(
+  sessionId: string,
+  text: string,
+  signal: AbortSignal,
+  timeoutMs = 5 * 60_000,
+): Promise<CodexDispatchResult> {
+  return withCodexDispatchLock(sessionId, async () => {
+    try {
+      const existing = sessions.get(sessionId);
+      if (!existing) {
+        // Cold start: arm the turn waiter AFTER spawn (capture starts in spawn),
+        // then await the seeded turn's completion.
+        const spawned = await spawnCodexTerminal(sessionId, 120, 40, text);
+        if ('reason' in spawned) return { ok: false, error: spawned.reason };
+        setCodexLock(spawned, sessionId, 'dispatch');
+        spawned.turnInFlight = true;
+        try {
+          const reply = await awaitCodexTurn(sessionId, signal, timeoutMs);
+          return { ok: true, reply };
+        } finally {
+          if (sessions.get(sessionId) === spawned) setCodexLock(spawned, sessionId, null);
+        }
+      }
+      // Settled worker: lock out the human, wait for the TUI to settle, arm the
+      // turn waiter, then inject so the next completed turn is ours.
+      setCodexLock(existing, sessionId, 'dispatch');
+      try {
+        await waitCodexQuiescent(existing, signal);
+        const turn = awaitCodexTurn(sessionId, signal, timeoutMs);
+        existing.turnInFlight = true;
+        await submitToTui(existing.pty, text);
+        const reply = await turn;
+        return { ok: true, reply };
+      } finally {
+        if (sessions.get(sessionId) === existing) setCodexLock(existing, sessionId, null);
+      }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
 }
 
 export async function killAllCodexTerminals(): Promise<void> {

@@ -44,6 +44,7 @@ import {
 } from '../services/message-queue.js';
 import { isAiRunning, tryDrainQueue, waitForIdle } from '../services/runner.js';
 import { dispatchToWorker } from '../services/claude-pty/agent-terminal.js';
+import { dispatchToCodexWorker } from '../services/codex-pty/agent-terminal.js';
 import { resolveTeamByToken } from '../services/team-tokens.js';
 import {
   emitDispatchEvent,
@@ -109,15 +110,28 @@ function memberStatus(sessionId: string): DispatchMember['status'] {
 export async function teamDispatchRoutes(app: FastifyInstance) {
   const db = getDb();
 
-  // A 'terminal' worker has no runner driving it — dispatch injects into its TUI
-  // (dispatchToWorker) instead of the enqueue/waitForIdle path. Terminal mode is
-  // claude-only, so a codex worker (even if transport='terminal') stays on the
-  // runner path.
+  // A 'terminal' worker has no runner driving it — dispatch injects into its live
+  // TUI (claude or codex) instead of the enqueue/waitForIdle path.
   const isTerminalWorker = (sessionId: string): boolean => {
     const row = db
       .prepare('SELECT transport, agent FROM sessions WHERE id = ?')
       .get(sessionId) as { transport: string | null; agent: string | null } | undefined;
-    return row?.transport === 'terminal' && row.agent === 'claude';
+    return row?.transport === 'terminal' && (row.agent === 'claude' || row.agent === 'codex');
+  };
+
+  // Route a terminal-worker dispatch to the codex or claude TUI driver.
+  const dispatchTerminalWorker = (
+    sessionId: string,
+    text: string,
+    signal: AbortSignal,
+    timeoutMs?: number,
+  ) => {
+    const row = db.prepare('SELECT agent FROM sessions WHERE id = ?').get(sessionId) as
+      | { agent: string | null }
+      | undefined;
+    return row?.agent === 'codex'
+      ? dispatchToCodexWorker(sessionId, text, signal, timeoutMs)
+      : dispatchToWorker(sessionId, text, signal, timeoutMs);
   };
 
   // Backfill endpoint for the descriptive canvas: returns the in-memory
@@ -310,7 +324,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     if (isTerminalWorker(member.sessionId)) {
       // Fire-and-forget: don't await, but surface a failed dispatch instead of
       // silently dropping the DispatchResult.
-      void dispatchToWorker(member.sessionId, text, new AbortController().signal).then((r) => {
+      void dispatchTerminalWorker(member.sessionId, text, new AbortController().signal).then((r) => {
         if (!r.ok) {
           console.warn(`[team-dispatch] /send to @${member.alias} failed: ${r.error}`);
         }
@@ -623,7 +637,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       req.raw.once('close', onClose);
       let result;
       try {
-        result = await dispatchToWorker(member.sessionId, text, ac.signal, timeoutMs);
+        result = await dispatchTerminalWorker(member.sessionId, text, ac.signal, timeoutMs);
       } finally {
         req.raw.off('close', onClose);
       }
@@ -805,7 +819,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
               previewText,
               at: dispatchedAt,
             });
-            const result = await dispatchToWorker(member.sessionId, text, ac.signal, timeoutMs);
+            const result = await dispatchTerminalWorker(member.sessionId, text, ac.signal, timeoutMs);
             if (result.ok) {
               replies.push({
                 alias: member.alias,
