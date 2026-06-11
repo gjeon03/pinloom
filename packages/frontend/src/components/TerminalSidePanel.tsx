@@ -338,7 +338,7 @@ export function TerminalSidePanel({
             onChange={onPinChange}
             sessionId={sessionId}
             projectName={projectName}
-            showPopOut={false}
+            showPopOut
             onHandoff={onHandoff}
             onSendPin={onSendPin}
           />
