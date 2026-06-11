@@ -20,21 +20,29 @@ import {
 } from '../services/teams.js';
 import { getDb } from '../db/connection.js';
 import { hasAgentTerminal, killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
+import { hasCodexTerminal, killCodexTerminal } from '../services/codex-pty/agent-terminal.js';
 import { broadcast } from '../ws/hub.js';
 
 // A live terminal session that just became a team's orchestrator was launched
 // WITHOUT the pinloom MCP config (it's only added for orchestrators, at launch).
-// Kill its claude so AgentTerminal re-attaches and respawns WITH the MCP server —
+// Kill its agent so AgentTerminal re-attaches and respawns WITH the MCP server —
 // otherwise the team_* tools don't appear until a manual session/server restart.
-// No-op for sdk/structured sessions and for sessions with no live terminal (their
-// next launch already picks up the orchestrator config).
+// Handles both terminal agents (claude + codex) so an already-live codex
+// orchestrator picks up its MCP tools exactly like claude. No-op for
+// sdk/structured sessions and for sessions with no live terminal (their next
+// launch already picks up the orchestrator config).
 function relaunchOrchestratorTerminal(sessionId: string): void {
   const row = getDb()
     .prepare('SELECT transport, agent FROM sessions WHERE id = ?')
     .get(sessionId) as { transport: string | null; agent: string | null } | undefined;
-  if (row?.transport !== 'terminal' || row.agent !== 'claude') return;
-  if (!hasAgentTerminal(sessionId)) return;
-  killAgentTerminal(sessionId);
+  if (row?.transport !== 'terminal') return;
+  if (row.agent === 'codex') {
+    if (!hasCodexTerminal(sessionId)) return;
+    killCodexTerminal(sessionId);
+  } else {
+    if (!hasAgentTerminal(sessionId)) return;
+    killAgentTerminal(sessionId);
+  }
   broadcast(`session:${sessionId}`, { type: 'terminal_relaunch', sessionId });
 }
 
