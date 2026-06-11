@@ -27,6 +27,13 @@ import { SessionPickerModal } from '../components/SessionPickerModal.js';
 import { TeamCanvasPage } from './TeamCanvasPage.js';
 import { applyPinChange } from '../utils/pins.js';
 
+// A session that renders as a live terminal (claude OR codex) instead of the
+// structured ChatView. Structured sessions (transport !== 'terminal') of either
+// agent still use ChatView.
+function isTerminalAgentSession(s: Session): boolean {
+  return s.transport === 'terminal' && (s.agent === 'claude' || s.agent === 'codex');
+}
+
 export function ProjectPage({
   project,
   onRenamed,
@@ -618,7 +625,7 @@ export function ProjectPage({
             activeNotepadId === null &&
             pins.length > 0 &&
             activeSession &&
-            !(activeSession.transport === 'terminal' && activeSession.agent === 'claude') ? (
+            !isTerminalAgentSession(activeSession) ? (
               <PinnedPanel
                 key={activeSession.id}
                 pins={pins}
@@ -645,9 +652,7 @@ export function ProjectPage({
               // teamId from the URL via useParams, so we route inline by
               // overriding the `teamId` segment via a key + path.
               <InlineCanvasView teamId={activeCanvasTeamId} />
-            ) : activeSession &&
-              activeSession.transport === 'terminal' &&
-              activeSession.agent === 'claude' ? (
+            ) : activeSession && isTerminalAgentSession(activeSession) ? (
               // Terminal-chat mode: render the session's live claude TUI instead
               // of the structured chat. Pinned per-session (sessions.transport),
               // so flipping the env only affects newly-created sessions. Terminal

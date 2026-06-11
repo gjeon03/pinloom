@@ -28,6 +28,10 @@ import {
   attachAgentTerminal,
   killAllAgentTerminals,
 } from './services/claude-pty/agent-terminal.js';
+import {
+  attachCodexTerminal,
+  killAllCodexTerminals,
+} from './services/codex-pty/agent-terminal.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
 import { startEventLoopMonitor } from './services/event-loop-monitor.js';
@@ -75,6 +79,7 @@ export async function createApp() {
   app.addHook('onClose', async () => {
     await killAllTerminals();
     await killAllAgentTerminals();
+    await killAllCodexTerminals();
     await shutdownClaudePty();
   });
 
@@ -214,7 +219,12 @@ export async function createApp() {
       const send = (msg: unknown) => {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
       };
-      const result = await attachAgentTerminal(
+      // Route to the codex or claude terminal lifecycle by the session's agent.
+      const agentRow = getDb()
+        .prepare('SELECT agent FROM sessions WHERE id = ?')
+        .get(sessionId) as { agent: string | null } | undefined;
+      const attach = agentRow?.agent === 'codex' ? attachCodexTerminal : attachAgentTerminal;
+      const result = await attach(
         sessionId,
         120,
         40,
