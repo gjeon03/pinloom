@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App.js';
 import { NotificationProvider } from './stores/notifications.js';
 import { applyTheme, getStoredPreference, watchSystem } from './theme.js';
+import 'dockview-react/dist/styles/dockview.css';
 import './styles/index.css';
 
 // Apply persisted (or system) theme before React mounts to avoid a flash.
