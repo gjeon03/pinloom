@@ -7,6 +7,7 @@ import type {
   Session,
 } from '@pinloom/shared';
 import { api, projectNotepadApi } from '../api/client.js';
+import { useWebSocket } from '../hooks/useWebSocket.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import { setActiveSessionId } from '../stores/activeSession.js';
 import { useNotifications } from '../stores/notifications.js';
@@ -64,6 +65,26 @@ export function ProjectPage({
   // array only governs the strip order.
   const [tabOrder, setTabOrder] = useState<TabRef[]>([]);
   const { markSessionRead } = useNotifications();
+
+  // Live-append sessions created out-of-band for this project (e.g. an
+  // orchestrator spawning a worker via MCP). Without this the new tab only
+  // surfaces after a manual refresh. We append but DON'T switch to it — the
+  // user didn't open it, so don't yank their active view.
+  useWebSocket(`project:${project.id}`, (ev) => {
+    if (ev.type !== 'session_created' || ev.projectId !== project.id) return;
+    const incoming = ev.session;
+    setSessions((prev) =>
+      prev.some((s) => s.id === incoming.id) ? prev : [...prev, incoming],
+    );
+    setTabOrder((prev) => {
+      if (prev.some((r) => r.kind === 'session' && r.id === incoming.id)) {
+        return prev;
+      }
+      const next: TabRef[] = [...prev, { kind: 'session', id: incoming.id }];
+      persistTabOrder(project.id, next);
+      return next;
+    });
+  });
 
   function persistCanvasTabs(projectId: string, tabs: InlineCanvasTab[]) {
     try {

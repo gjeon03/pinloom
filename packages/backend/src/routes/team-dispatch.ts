@@ -35,6 +35,7 @@ import {
   updateMember,
 } from '../services/teams.js';
 import { getProjectWikiSlugByProjectId } from '../services/wiki-sync.js';
+import { toSession } from './sessions.js';
 import { broadcast } from '../ws/hub.js';
 import {
   enqueueMessage,
@@ -272,6 +273,21 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         `[team-dispatch] orchestrator created worker @${worker.alias} in project "${worker.projectName}" (${worker.transport})`,
       );
       broadcast(`team:${teamId}`, { type: 'team_members_changed', teamId });
+      // Push the new session onto the worker's project tab strip so it appears
+      // live (the canvas already refreshes off team_members_changed, but the
+      // ProjectPage tab strip has no other signal — without this the new tab
+      // only shows after a manual refresh / navigation).
+      const sessionRow = db
+        .prepare('SELECT * FROM sessions WHERE id = ?')
+        .get(worker.sessionId) as Parameters<typeof toSession>[0] | undefined;
+      if (sessionRow) {
+        const session = toSession(sessionRow);
+        broadcast(`project:${session.projectId}`, {
+          type: 'session_created',
+          projectId: session.projectId,
+          session,
+        });
+      }
       return { ok: true as const, worker };
     } catch (err) {
       if (err instanceof TeamNotFoundError || err instanceof ProjectNotFoundError) {

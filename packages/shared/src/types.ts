@@ -284,4 +284,9 @@ export type WsEvent =
   // A terminal session's launch config changed (e.g. it just became a team's
   // orchestrator, so it now needs the pinloom MCP server). The backend killed
   // its claude; AgentTerminal re-attaches, respawning with the new config.
-  | { type: 'terminal_relaunch'; sessionId: string };
+  | { type: 'terminal_relaunch'; sessionId: string }
+  // A session was created out-of-band (e.g. an orchestrator spawned a worker via
+  // MCP). Channel: `project:${projectId}`. ProjectPage appends it to the tab strip
+  // so it shows up live without a refresh. Carries the full Session so the
+  // listener doesn't need to re-fetch.
+  | { type: 'session_created'; projectId: string; session: Session };
