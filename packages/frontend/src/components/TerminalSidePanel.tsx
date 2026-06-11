@@ -42,6 +42,12 @@ function projectSlug(cwd: string): string {
 // render the newest WINDOW and page older history in on scroll-up.
 const WINDOW = 60;
 
+// Drag-to-resize: one width preference shared across terminal sessions.
+const WIDTH_KEY = 'pinloom:termpanel:width';
+const MIN_W = 240;
+const MAX_W = 720;
+const DEFAULT_W = 320;
+
 function preview(content: string, max = 600): string {
   const t = content.trim();
   return t.length > max ? `${t.slice(0, max)}…` : t;
@@ -81,6 +87,14 @@ export function TerminalSidePanel({
   const [limit, setLimit] = useState(WINDOW);
   // Per-message "show full content" toggles (history rows truncate by default).
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // Drag-resizable width (clamped, persisted globally).
+  const [width, setWidth] = useState(() => {
+    const v = Number(localStorage.getItem(WIDTH_KEY));
+    return Number.isFinite(v) && v >= MIN_W && v <= MAX_W ? v : DEFAULT_W;
+  });
+  const [dragging, setDragging] = useState(false);
+  const asideRef = useRef<HTMLElement>(null);
+  const dragRightRef = useRef(0); // panel's right edge (fixed during a drag)
   const scrollRef = useRef<HTMLDivElement>(null);
   // Sticky-bottom: true while the user is parked at the latest turn. Opening the
   // panel and new live turns scroll to the bottom; once the user scrolls up to
@@ -119,6 +133,32 @@ export function TerminalSidePanel({
     [sessionId],
   );
   useWebSocket(`session:${sessionId}`, onWsEvent);
+
+  // Drag-to-resize. The panel is flush-right, so its width is the distance from
+  // the cursor to its (drag-fixed) right edge. Mirrors HSplitter's body cursor /
+  // user-select handling. AgentTerminal's container ResizeObserver re-fits the
+  // xterm automatically as the panel grows/shrinks.
+  useEffect(() => {
+    if (!dragging) return;
+    function onMove(e: MouseEvent) {
+      const next = Math.max(MIN_W, Math.min(MAX_W, dragRightRef.current - e.clientX));
+      setWidth(next);
+      localStorage.setItem(WIDTH_KEY, String(next));
+    }
+    function onUp() {
+      setDragging(false);
+    }
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging]);
 
   // Quick pin/unpin from the history list. Updates this panel's own copy AND the
   // shared pins state so the Pins tab / left rail reflect it immediately (the
@@ -224,7 +264,30 @@ export function TerminalSidePanel({
   );
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)]">
+    <aside
+      ref={asideRef}
+      style={{ width }}
+      className="relative flex h-full shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)]"
+    >
+      {/* Drag handle on the left edge — resize the panel (and the terminal). */}
+      <div
+        onMouseDown={(e) => {
+          e.preventDefault();
+          const r = asideRef.current?.getBoundingClientRect();
+          if (r) dragRightRef.current = r.right;
+          setDragging(true);
+        }}
+        title="Drag to resize"
+        className={`group absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize ${
+          dragging ? 'bg-[var(--color-accent)]' : ''
+        }`}
+      >
+        <div
+          className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 ${
+            dragging ? 'bg-[var(--color-accent)]' : 'group-hover:bg-[var(--color-accent)]/50'
+          }`}
+        />
+      </div>
       <header className="flex items-center justify-between border-b border-[var(--color-border)] pr-1">
         <div className="flex items-center">
           {tabBtn('history', 'History')}
