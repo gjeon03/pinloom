@@ -108,4 +108,33 @@ the **rollout file gives a cleaner signal anyway**:
 - R6 duplication (agent-terminal/buildCodexHome) → accept for MVP, dedupe later.
 
 ## Status
-- [ ] Phase 0  - [ ] Phase 1  - [ ] Phase 2  - [ ] Phase 3  - [ ] Phase 4
+- [x] Phase 0  - [x] Phase 1  - [x] Phase 2  - [x] Phase 3  - [x] Phase 4
+
+## Shipped (supersedes the hook-based design above)
+
+Phase 0 disproved the Stop-hook path: codex's hook-trust dialog blocks the
+headless TUI, and `--dangerously-bypass-hook-trust` does NOT skip it. **Pivoted
+to rollout-tail** — no hooks, no forwarder, no localhost server. Final shape:
+
+- **launch-spec.ts** — stable per-session `CODEX_HOME` (`~/.pinloom/codex-homes/<id>`,
+  0700) so `codex resume` works; `config.toml` pre-trusts the cwd
+  (`[projects."<cwd>"] trust_level="trusted"`) + declares MCP servers (TOML); AGENTS.md
+  = system prompt; auth.json copied in. argv: `--dangerously-bypass-approvals-and-sandbox
+  -C <cwd> [--model …] [-c model_reasoning_effort=…] [resume <id>] [seed]`.
+- **codex-rollout/parse.ts** + **codex-pty/rollout.ts** + **transcript-capture.ts** —
+  poll the session's rollout JSONL; fold each turn into `messages` at its
+  `task_complete` boundary (line-count cursor in `last_captured_transcript_uuid`;
+  turnsSeen rehydrated from the cursor prefix since resume APPENDS to the same file).
+- **codex-pty/agent-terminal.ts** — PTY lifecycle + `dispatchToCodexWorker`
+  (serialized per worker; cold-start seeds via the positional arg, live worker
+  injected via `submitToTui`; reply = `task_complete.last_agent_message`).
+- Wiring: `app.ts` routes `/ws/agent-terminal` to the codex driver by agent;
+  `routes/sessions.ts` DELETE kills + removes the home; `team-dispatch.ts` routes
+  terminal dispatch to codex vs claude; `ProjectPage.tsx` renders codex terminal.
+
+Verified live (codex-cli 0.133.0, isolated test DB): cold-start capture
+`[user, assistant]`; dispatch returns `{ok:true, reply}`; kill+resume returns the
+resumed turn's answer (not a stale reply) with both turns' rows intact. Multi-agent
+review: gating PASS (codex-adapter / claude-pty / ChatView untouched), security LOW
+(auth dir → 0700, fixed), correctness BLOCKERs (resume baseline, fixed). Backend
+suite: 232 passed.
