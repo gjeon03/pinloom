@@ -21,6 +21,21 @@ import {
   type CodexRolloutLine,
 } from '../codex-rollout/parse.js';
 
+/**
+ * Count the completed turns already folded into messages, from the persisted
+ * line cursor. codex `resume` APPENDS to the SAME rollout file (verified on
+ * 0.133.0), so the prefix `lines[0..cursor)` is exactly what we captured before
+ * — its `task_complete` count is the turns-seen baseline. Rehydrating this is
+ * what stops a resumed session's first poll from firing the dispatch waiter on
+ * an ALREADY-captured turn (returning a stale reply) and from re-folding rows.
+ */
+function rehydrateTurnsSeen(codexHome: string, cursor: number): number {
+  if (cursor <= 0) return 0;
+  const path = findRollout(codexHome);
+  if (!path) return 0;
+  return countTaskComplete(readRolloutLines(path).slice(0, cursor));
+}
+
 const POLL_MS = 500;
 
 interface CaptureState {
@@ -52,11 +67,15 @@ export function startCodexCapture(
     .get(pinloomSessionId) as { c: string | null } | undefined;
   const cursor = cursorRow?.c ? Number.parseInt(cursorRow.c, 10) : 0;
 
+  const safeCursor = Number.isFinite(cursor) ? cursor : 0;
   const state: CaptureState = {
     codexHome,
     rolloutPath: null,
-    cursor: Number.isFinite(cursor) ? cursor : 0,
-    turnsSeen: 0,
+    cursor: safeCursor,
+    // On a resumed session the rollout already holds prior turns; baseline
+    // turnsSeen to them so the next completed turn (not a captured one) is what
+    // wakes dispatch waiters and gets folded.
+    turnsSeen: rehydrateTurnsSeen(codexHome, safeCursor),
     codexSessionId: resumeSessionId,
     timer: null,
     running: false,

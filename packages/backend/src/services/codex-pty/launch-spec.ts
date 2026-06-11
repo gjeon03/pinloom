@@ -16,7 +16,7 @@
 // NEVER touches the user's real ~/.codex — we point CODEX_HOME at our own dir and
 // only copy auth.json over so the spawned codex stays logged in.
 
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { McpStdioServerConfig } from '../agents/types.js';
@@ -78,7 +78,14 @@ export function codexHomeFor(sessionId: string): string {
  */
 export function buildCodexLaunch(input: CodexLaunchInput): BuiltCodexLaunch {
   const codexHome = codexHomeFor(input.sessionId);
-  mkdirSync(codexHome, { recursive: true });
+  // 0700: this dir holds a copy of the user's auth.json (token at rest). Mirror
+  // codex-adapter's mkdtemp (owner-only) — don't leave it umask-default (0755).
+  mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(codexHome, 0o700); // tighten a pre-existing dir (recursive mkdir skips mode on those)
+  } catch {
+    // best-effort
+  }
 
   // Keep the spawned codex logged in by copying the user's auth (refresh each spawn).
   const sourceHome = process.env.CODEX_HOME ?? path.join(homedir(), '.codex');
