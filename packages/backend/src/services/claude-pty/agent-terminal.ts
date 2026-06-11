@@ -17,7 +17,7 @@
 import { existsSync } from 'node:fs';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
-import { buildSessionLaunchInput } from '../runner.js';
+import { buildSessionLaunchInput, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
 import { buildClaudeLaunch, type BuiltClaudeLaunch } from './launch-spec.js';
 import { getStopHookServer } from './shared-server.js';
@@ -418,6 +418,9 @@ export function dispatchToWorker(
   timeoutMs = 5 * 60_000,
 ): Promise<DispatchResult> {
   return withDispatchLock(sessionId, async () => {
+    // Paint the canvas edge yellow for the duration of the dispatched turn —
+    // terminal workers bypass the runner, so isAiRunning never sees them.
+    emitWorkerStatusIfMember(sessionId, true);
     try {
       const existing = sessions.get(sessionId);
       if (!existing) {
@@ -455,6 +458,8 @@ export function dispatchToWorker(
       }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      emitWorkerStatusIfMember(sessionId, false);
     }
   });
 }

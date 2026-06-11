@@ -12,7 +12,7 @@
 import { existsSync, rmSync } from 'node:fs';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
-import { buildSessionLaunchInput } from '../runner.js';
+import { buildSessionLaunchInput, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
 import { submitToTui } from '../claude-pty/tui-input.js';
 import { buildCodexLaunch, codexHomeFor, type BuiltCodexLaunch } from './launch-spec.js';
@@ -285,6 +285,9 @@ export function dispatchToCodexWorker(
   timeoutMs = 5 * 60_000,
 ): Promise<CodexDispatchResult> {
   return withCodexDispatchLock(sessionId, async () => {
+    // Paint the canvas edge yellow for the duration of the dispatched turn —
+    // terminal workers bypass the runner, so isAiRunning never sees them.
+    emitWorkerStatusIfMember(sessionId, true);
     try {
       const existing = sessions.get(sessionId);
       if (!existing) {
@@ -316,6 +319,8 @@ export function dispatchToCodexWorker(
       }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      emitWorkerStatusIfMember(sessionId, false);
     }
   });
 }

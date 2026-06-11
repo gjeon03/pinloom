@@ -657,7 +657,15 @@ setTeamWorkerQueueHook((sessionId: string) => {
 // Emits a `worker_status` dispatch event if this session is a worker in
 // some team. Drives the descriptive canvas's node pulse (PR3). Lookup
 // is one SQLite hit; safe to call frequently.
-function emitWorkerStatusIfMember(sessionId: string): void {
+//
+// `runningOverride`: terminal-mode workers aren't driven by the runner, so
+// `isAiRunning` (the SDK activeRuns map) is always false for them. The terminal
+// dispatch path passes an explicit running flag at turn start/end so the canvas
+// edge still turns yellow while a dispatched worker is busy.
+export function emitWorkerStatusIfMember(
+  sessionId: string,
+  runningOverride?: boolean,
+): void {
   const row = getDb()
     .prepare(
       `SELECT t.id AS team_id, m.alias AS alias
@@ -672,7 +680,7 @@ function emitWorkerStatusIfMember(sessionId: string): void {
     teamId: row.team_id,
     alias: row.alias,
     sessionId,
-    running: isAiRunning(sessionId),
+    running: runningOverride ?? isAiRunning(sessionId),
     queued: listQueueItems(sessionId).length,
     at: new Date().toISOString(),
   });
