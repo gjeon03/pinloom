@@ -21,16 +21,21 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getDb } from '../db/connection.js';
 import {
   AliasTakenError,
+  createWorker,
   getMemberByAlias,
   getTeam,
   InstructionsTooLongError,
   InvalidAliasError,
   InvalidTagError,
   listMembersByTag,
+  ProjectNotFoundError,
   TeamNotFoundError,
   TooManyTagsError,
+  TooManyWorkersError,
   updateMember,
 } from '../services/teams.js';
+import { getProjectWikiSlugByProjectId } from '../services/wiki-sync.js';
+import { broadcast } from '../ws/hub.js';
 import {
   enqueueMessage,
   InvalidQueueContentError,
@@ -169,6 +174,116 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       return result;
     },
   );
+
+  // List the projects an orchestrator can place a worker in (name, slug, cwd,
+  // session count). The orchestrator calls this before `create-worker` to pick
+  // a cross-project target by slug/name.
+  app.get<{ Params: { teamId: string } }>(
+    '/api/teams/:teamId/dispatch/projects',
+    async (req, reply) => {
+      if (!authorize(req, reply)) return;
+      const rows = db
+        .prepare('SELECT id, name, cwd FROM projects ORDER BY order_index ASC, created_at DESC')
+        .all() as { id: string; name: string; cwd: string }[];
+      return rows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        slug: getProjectWikiSlugByProjectId(p.id),
+        cwd: p.cwd,
+        sessionCount: (
+          db
+            .prepare('SELECT COUNT(*) AS n FROM sessions WHERE project_id = ?')
+            .get(p.id) as { n: number }
+        ).n,
+      }));
+    },
+  );
+
+  // Create a new worker session + add it to the team (MCP team_create_worker).
+  // `project` selects the target project by id, slug, or name (default: the
+  // orchestrator's project). Reuses createWorker (same validation as the UI),
+  // then nudges the canvas to re-fetch members.
+  app.post<{
+    Params: { teamId: string };
+    Body: {
+      alias?: string;
+      instructions?: string | null;
+      tags?: string[];
+      project?: string;
+      agent?: 'claude' | 'codex';
+    };
+  }>('/api/teams/:teamId/dispatch/create-worker', async (req, reply) => {
+    if (!authorize(req, reply)) return;
+    const teamId = req.params.teamId;
+    const alias = req.body?.alias?.trim();
+    if (!alias) {
+      reply.code(400);
+      return { error: 'alias is required' };
+    }
+    if (req.body?.agent && req.body.agent !== 'claude' && req.body.agent !== 'codex') {
+      reply.code(400);
+      return { error: `unknown agent: ${req.body.agent}` };
+    }
+    // Resolve the optional project selector (id | slug | name) to a project id.
+    let projectId: string | undefined;
+    const sel = req.body?.project?.trim();
+    if (sel) {
+      const projects = db
+        .prepare('SELECT id, name, cwd FROM projects')
+        .all() as { id: string; name: string; cwd: string }[];
+      const match =
+        projects.find((p) => p.id === sel) ??
+        projects.find((p) => getProjectWikiSlugByProjectId(p.id) === sel) ??
+        projects.find((p) => p.name === sel);
+      if (!match) {
+        reply.code(404);
+        return {
+          error: `no project matching "${sel}". Available: ${projects
+            .map((p) => getProjectWikiSlugByProjectId(p.id))
+            .join(', ')}`,
+        };
+      }
+      projectId = match.id;
+    }
+    try {
+      const worker = createWorker({
+        teamId,
+        alias,
+        instructions: req.body?.instructions ?? null,
+        tags: req.body?.tags,
+        projectId,
+        agent: req.body?.agent,
+      });
+      console.warn(
+        `[team-dispatch] orchestrator created worker @${worker.alias} in project "${worker.projectName}" (${worker.transport})`,
+      );
+      broadcast(`team:${teamId}`, { type: 'team_members_changed', teamId });
+      return { ok: true as const, worker };
+    } catch (err) {
+      if (err instanceof TeamNotFoundError || err instanceof ProjectNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
+      }
+      if (err instanceof AliasTakenError) {
+        reply.code(409);
+        return { error: err.message };
+      }
+      if (err instanceof TooManyWorkersError) {
+        reply.code(409);
+        return { error: err.message };
+      }
+      if (
+        err instanceof InvalidAliasError ||
+        err instanceof InvalidTagError ||
+        err instanceof TooManyTagsError ||
+        err instanceof InstructionsTooLongError
+      ) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
 
   app.post<{
     Params: { teamId: string };

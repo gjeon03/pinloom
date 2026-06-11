@@ -105,6 +105,25 @@ interface MemberSpec {
   tags: string[];
 }
 
+interface ProjectInfo {
+  id: string;
+  name: string;
+  slug: string;
+  cwd: string;
+  sessionCount: number;
+}
+
+interface CreatedWorker {
+  sessionId: string;
+  alias: string;
+  instructions: string | null;
+  tags: string[];
+  projectId: string;
+  projectName: string;
+  transport: string | null;
+  agent: 'claude' | 'codex';
+}
+
 const server = new McpServer({
   name: 'pinloom',
   version: '0.0.1',
@@ -138,6 +157,79 @@ server.registerTool(
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
     };
+  },
+);
+
+server.registerTool(
+  'team_list_projects',
+  {
+    description:
+      'List the projects you can place a worker in (slug, name, cwd, session count). Call this before team_create_worker when you want a worker in a DIFFERENT project than your own — teams exist for cross-project collaboration, so pick the target project by its slug.',
+    inputSchema: {},
+  },
+  async () => {
+    const projects = await call<ProjectInfo[]>('GET', teamUrl('/projects'));
+    if (projects.length === 0) {
+      return { content: [{ type: 'text', text: 'No projects.' }] };
+    }
+    const lines = projects.map(
+      (p) => `${p.slug}\t${p.name}\t${p.cwd}\t(${p.sessionCount} sessions)`,
+    );
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
+  },
+);
+
+server.registerTool(
+  'team_create_worker',
+  {
+    description:
+      "Create a NEW worker session in this team, give it a persona, then collaborate via team_ask. Use this to spin up a teammate on demand (e.g. the user says \"make a security-review worker and work with it\"). `instructions` is the worker's persona / system-prompt — its identity, do's & don'ts, and output conventions; craft a sharp one (≤ 4000 chars). `project` places the worker in ANOTHER project by slug/name/id — teams are for cross-project work, so put e.g. a backend collaborator in the backend project (call team_list_projects first to get slugs); omit it to use your own project. The new worker is a real, visible session the user can open and talk to directly. After it's created, call team_ask(alias, …) to start working together. (To refine an EXISTING worker's persona instead, use team_update_member.)",
+    inputSchema: {
+      alias: z
+        .string()
+        .describe('Worker alias — lowercase, no leading @ (e.g. "sec", "be").'),
+      instructions: z
+        .string()
+        .describe("The worker's persona / system-prompt guidance (≤ 4000 chars)."),
+      project: z
+        .string()
+        .optional()
+        .describe(
+          'Target project by slug, name, or id. Omit for your own project. Use team_list_projects to discover slugs.',
+        ),
+      tags: z
+        .array(z.string())
+        .optional()
+        .describe('Optional lowercase tags for broadcast grouping (team_ask_tag / team_send_tag).'),
+      agent: z
+        .enum(['claude', 'codex'])
+        .optional()
+        .describe('Worker agent; defaults to claude.'),
+    },
+  },
+  async (args) => {
+    const body: Record<string, unknown> = {
+      alias: args.alias,
+      instructions: args.instructions,
+    };
+    if (args.project !== undefined) body.project = args.project;
+    if (args.tags !== undefined) body.tags = args.tags;
+    if (args.agent !== undefined) body.agent = args.agent;
+
+    const result = await call<{ ok: true; worker: CreatedWorker }>(
+      'POST',
+      teamUrl('/create-worker'),
+      body,
+    );
+    const w = result.worker;
+    const lines = [
+      `Created worker @${w.alias} (${w.agent}) in project "${w.projectName}".`,
+      `Persona set (${w.instructions ? w.instructions.length : 0} chars)${
+        w.tags.length > 0 ? `, tags: ${w.tags.map((t) => `#${t}`).join(' ')}` : ''
+      }.`,
+      `Now call team_ask("${w.alias}", …) to collaborate; the user can also open this worker's session directly.`,
+    ];
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
   },
 );
 

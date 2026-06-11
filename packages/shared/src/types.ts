@@ -274,6 +274,10 @@ export type WsEvent =
     }
   // Live dispatch event for the team canvas. Channel: `team:${teamId}`.
   | { type: 'team_dispatch_event'; event: TeamDispatchEvent }
+  // The team's membership changed (e.g. the orchestrator created a worker via
+  // MCP). Channel: `team:${teamId}`. Listeners re-fetch the team to pick up the
+  // new member. Carries no payload beyond the id — keep it a pure refresh nudge.
+  | { type: 'team_members_changed'; teamId: string }
   // Terminal-mode worker: orchestrator dispatch is driving the TUI, so the
   // human's keystrokes are locked out. The AgentTerminal shows an overlay.
   | { type: 'terminal_lock'; sessionId: string; locked: boolean };

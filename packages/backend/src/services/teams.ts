@@ -19,6 +19,7 @@ import type { Team, TeamMember } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { clearTeamToken } from './team-tokens.js';
 import { clearTeamEvents } from './team-events.js';
+import { claudeTransport } from './agents/index.js';
 
 const ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 // Tags reuse the alias-style restriction for predictability and to keep
@@ -101,6 +102,25 @@ export class InstructionsTooLongError extends Error {
     this.name = 'InstructionsTooLongError';
   }
 }
+
+export class ProjectNotFoundError extends Error {
+  constructor(projectId: string) {
+    super(`project not found: ${projectId}`);
+    this.name = 'ProjectNotFoundError';
+  }
+}
+
+export class TooManyWorkersError extends Error {
+  constructor(limit: number) {
+    super(`team already has the maximum of ${limit} workers`);
+    this.name = 'TooManyWorkersError';
+  }
+}
+
+// Cap on workers an orchestrator can spin up via MCP, so a runaway loop can't
+// flood the team/canvas. Generous for real fan-out; the human can still add
+// more in the UI.
+const MAX_WORKERS_PER_TEAM = 16;
 
 interface TeamRow {
   id: string;
@@ -367,6 +387,109 @@ export function addMember(args: AddMemberArgs): TeamMember {
     instructions,
     tags,
     createdAt: now,
+  };
+}
+
+export interface CreateWorkerArgs {
+  teamId: string;
+  alias: string;
+  instructions?: string | null;
+  tags?: string[];
+  /** Target project; defaults to the orchestrator's own project. */
+  projectId?: string;
+  agent?: 'claude' | 'codex';
+}
+
+export interface CreatedWorker {
+  sessionId: string;
+  alias: string;
+  instructions: string | null;
+  tags: string[];
+  projectId: string;
+  projectName: string;
+  transport: string | null;
+  agent: 'claude' | 'codex';
+}
+
+/**
+ * Create a brand-new worker session and add it to the team in one transaction —
+ * the MCP `team_create_worker` path. The session is created in `projectId`
+ * (default: the orchestrator's project) so a cross-project worker lives under,
+ * and is visible in, the right project; it inherits the orchestrator's transport
+ * so it's dispatchable the same way. Reuses the same validation as addMember;
+ * doing the session INSERT + member INSERT atomically means a rejected alias
+ * can't orphan a session. Lazy like a UI-created session: NO agent spawns here —
+ * the worker's claude/codex process starts on its first dispatch.
+ */
+export function createWorker(args: CreateWorkerArgs): CreatedWorker {
+  if (!ALIAS_PATTERN.test(args.alias)) throw new InvalidAliasError(args.alias);
+  const instructions = validateInstructions(args.instructions);
+  const tags = normalizeTags(args.tags);
+  validateTags(tags);
+  const agent: 'claude' | 'codex' = args.agent === 'codex' ? 'codex' : 'claude';
+
+  const db = getDb();
+  const team = getTeam(args.teamId);
+  if (!team) throw new TeamNotFoundError(args.teamId);
+  if (team.members.length >= MAX_WORKERS_PER_TEAM) {
+    throw new TooManyWorkersError(MAX_WORKERS_PER_TEAM);
+  }
+
+  const orch = db
+    .prepare('SELECT project_id, transport FROM sessions WHERE id = ?')
+    .get(team.orchestratorSessionId) as
+    | { project_id: string; transport: string | null }
+    | undefined;
+  if (!orch) throw new SessionNotFoundError(team.orchestratorSessionId);
+
+  const projectId = args.projectId ?? orch.project_id;
+  const project = db
+    .prepare('SELECT id, name FROM projects WHERE id = ?')
+    .get(projectId) as { id: string; name: string } | undefined;
+  if (!project) throw new ProjectNotFoundError(projectId);
+
+  // Inherit the orchestrator's transport (terminal team → terminal worker), so
+  // dispatch routes the same way; fall back to the env default for legacy rows.
+  const transport = orch.transport ?? claudeTransport();
+  const sessionId = nanoid();
+  const now = new Date().toISOString();
+
+  const tx = db.transaction(() => {
+    assertAliasFree(args.teamId, args.alias);
+    const maxRow = db
+      .prepare(
+        'SELECT COALESCE(MAX(order_index), -1) AS max FROM sessions WHERE project_id = ?',
+      )
+      .get(projectId) as { max: number };
+    db.prepare(
+      `INSERT INTO sessions
+         (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, transport, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+    ).run(sessionId, projectId, agent, `@${args.alias}`, maxRow.max + 1, transport, now, now);
+    db.prepare(
+      `INSERT INTO team_members (team_id, session_id, alias, instructions, tags, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      args.teamId,
+      sessionId,
+      args.alias,
+      instructions,
+      tags.length > 0 ? JSON.stringify(tags) : null,
+      now,
+    );
+    touchTeam(args.teamId);
+  });
+  tx();
+
+  return {
+    sessionId,
+    alias: args.alias,
+    instructions,
+    tags,
+    projectId,
+    projectName: project.name,
+    transport,
+    agent,
   };
 }
 

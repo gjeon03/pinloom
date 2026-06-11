@@ -4,7 +4,10 @@ import {
   addMember,
   AliasTakenError,
   createTeam,
+  createWorker,
   deleteTeam,
+  ProjectNotFoundError,
+  TooManyWorkersError,
   getMemberBySessionId,
   getTeam,
   InvalidAliasError,
@@ -697,5 +700,143 @@ describe('listMembersByTag', () => {
     expect(listMembersByTag(t.id, 'back')).toEqual([]);
     expect(listMembersByTag(t.id, 'backend-x')).toEqual([]);
     expect(listMembersByTag(t.id, 'backend')).toHaveLength(1);
+  });
+});
+
+function seedSessionWithTransport(id: string, projectId: string, transport: string) {
+  const now = new Date().toISOString();
+  const db = getDb();
+  db.prepare(
+    'INSERT OR IGNORE INTO projects (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(projectId, 'Test', '/tmp/t', now, now);
+  db.prepare(
+    'INSERT INTO sessions (id, project_id, transport, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(id, projectId, transport, now, now);
+}
+
+function sessionCount(): number {
+  return (getDb().prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }).n;
+}
+
+describe('createWorker', () => {
+  it("creates a worker in the orchestrator's project by default + adds it to the team", () => {
+    seedSession('s-orch', 'p1');
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    const w = createWorker({
+      teamId: team.id,
+      alias: 'be',
+      instructions: 'You are the backend specialist.',
+    });
+    expect(w.alias).toBe('be');
+    expect(w.projectId).toBe('p1');
+    expect(w.instructions).toBe('You are the backend specialist.');
+    const sess = getDb()
+      .prepare('SELECT project_id, title FROM sessions WHERE id = ?')
+      .get(w.sessionId) as { project_id: string; title: string };
+    expect(sess.project_id).toBe('p1');
+    expect(sess.title).toBe('@be');
+    expect(getTeam(team.id)!.members.map((m) => m.alias)).toContain('be');
+  });
+
+  it('creates a worker in a DIFFERENT project (cross-project)', () => {
+    seedSession('s-orch', 'p1');
+    const now = new Date().toISOString();
+    getDb()
+      .prepare('INSERT INTO projects (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run('p2', 'Backend', '/tmp/backend', now, now);
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    const w = createWorker({ teamId: team.id, alias: 'be', instructions: 'be', projectId: 'p2' });
+    expect(w.projectId).toBe('p2');
+    const sess = getDb()
+      .prepare('SELECT project_id FROM sessions WHERE id = ?')
+      .get(w.sessionId) as { project_id: string };
+    expect(sess.project_id).toBe('p2');
+  });
+
+  it("inherits the orchestrator's transport", () => {
+    seedSessionWithTransport('s-orch', 'p1', 'terminal');
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    const w = createWorker({ teamId: team.id, alias: 'be', instructions: 'be' });
+    expect(w.transport).toBe('terminal');
+    const sess = getDb()
+      .prepare('SELECT transport FROM sessions WHERE id = ?')
+      .get(w.sessionId) as { transport: string };
+    expect(sess.transport).toBe('terminal');
+  });
+
+  it('rejects an unknown project', () => {
+    seedSession('s-orch');
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    expect(() =>
+      createWorker({ teamId: team.id, alias: 'be', instructions: 'be', projectId: 'ghost' }),
+    ).toThrow(ProjectNotFoundError);
+  });
+
+  it('rejects a duplicate alias without orphaning a session (atomic)', () => {
+    seedSession('s-orch');
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    createWorker({ teamId: team.id, alias: 'be', instructions: 'be' });
+    const before = sessionCount();
+    expect(() => createWorker({ teamId: team.id, alias: 'be', instructions: 'be2' })).toThrow(
+      AliasTakenError,
+    );
+    expect(sessionCount()).toBe(before); // no orphan session left behind
+  });
+
+  it('rejects an invalid alias', () => {
+    seedSession('s-orch');
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    expect(() => createWorker({ teamId: team.id, alias: 'Bad Alias', instructions: 'x' })).toThrow(
+      InvalidAliasError,
+    );
+  });
+
+  it('rejects an unknown team', () => {
+    expect(() => createWorker({ teamId: 'ghost', alias: 'be', instructions: 'x' })).toThrow(
+      TeamNotFoundError,
+    );
+  });
+
+  it('falls back to the env transport for a null-transport orchestrator', () => {
+    seedSession('s-orch', 'p1'); // seedSession inserts no transport → NULL
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    const w = createWorker({ teamId: team.id, alias: 'be', instructions: 'be' });
+    // Test env sets no PINLOOM_CLAUDE_TRANSPORT, so claudeTransport() = 'sdk'.
+    expect(w.transport).toBe('sdk');
+    const sess = getDb()
+      .prepare('SELECT transport FROM sessions WHERE id = ?')
+      .get(w.sessionId) as { transport: string };
+    expect(sess.transport).toBe('sdk');
+  });
+
+  it('round-trips tags and a codex agent', () => {
+    seedSession('s-orch');
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    const w = createWorker({
+      teamId: team.id,
+      alias: 'rev',
+      instructions: 'reviewer',
+      tags: ['security', 'review'],
+      agent: 'codex',
+    });
+    expect(w.agent).toBe('codex');
+    expect(w.tags).toEqual(['security', 'review']);
+    const member = getMemberBySessionId(w.sessionId)!;
+    expect(member.tags).toEqual(['security', 'review']);
+    const sess = getDb()
+      .prepare('SELECT agent FROM sessions WHERE id = ?')
+      .get(w.sessionId) as { agent: string };
+    expect(sess.agent).toBe('codex');
+  });
+
+  it('enforces the per-team worker cap', () => {
+    seedSession('s-orch');
+    const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
+    for (let i = 0; i < 16; i++) {
+      createWorker({ teamId: team.id, alias: `w${i}`, instructions: 'x' });
+    }
+    expect(() => createWorker({ teamId: team.id, alias: 'w16', instructions: 'x' })).toThrow(
+      TooManyWorkersError,
+    );
   });
 });
