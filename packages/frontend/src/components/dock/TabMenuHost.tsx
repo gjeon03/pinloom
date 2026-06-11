@@ -8,10 +8,12 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import useSWR, { mutate as globalMutate } from 'swr';
 import {
+  Columns2,
   ExternalLink,
   FolderInput,
   Network,
   Pencil,
+  Rows2,
   Trash2,
   UserMinus,
   UserPlus,
@@ -40,6 +42,9 @@ interface Props {
   /** Local-only removal after a session moved to another project — the move
    *  already re-homed the row server-side, so NO delete API call here. */
   onSessionMovedAway: (sessionId: string) => void;
+  /** Move the session's panel into a split next to its current group —
+   *  the non-drag path to a VSCode-style side-by-side. */
+  onSplit: (sessionId: string, direction: 'right' | 'down') => void;
   /** Open (or focus) a canvas tab for this team. */
   onOpenCanvasTab: (tab: InlineCanvasTab) => void;
   onError: (message: string) => void;
@@ -52,6 +57,7 @@ export function TabMenuHost({
   onCloseMenu,
   onDeleteSession,
   onSessionMovedAway,
+  onSplit,
   onOpenCanvasTab,
   onError,
 }: Props) {
@@ -144,6 +150,28 @@ export function TabMenuHost({
                 <ExternalLink size={12} />
                 <span className="flex-1">Open chat in browser tab</span>
               </a>
+              <button
+                type="button"
+                onClick={() => {
+                  onSplit(menu.sessionId, 'right');
+                  onCloseMenu();
+                }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
+              >
+                <Columns2 size={12} />
+                <span className="flex-1">Split right</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onSplit(menu.sessionId, 'down');
+                  onCloseMenu();
+                }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
+              >
+                <Rows2 size={12} />
+                <span className="flex-1">Split down</span>
+              </button>
               <button
                 type="button"
                 onClick={() => {

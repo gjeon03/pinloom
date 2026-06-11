@@ -711,6 +711,19 @@ export function ProjectPage({
     removeSessionLocally(id);
   }
 
+  // Menu "Split right/down" — the non-drag path to a side-by-side. Moves the
+  // session's panel into a new group next to its current one. dockview
+  // collapses the old group automatically if this was its only panel.
+  function splitSessionPanel(sessionId: string, direction: 'right' | 'down') {
+    const dv = dockRef.current;
+    const panel = dv?.getPanel(panelId('session', sessionId));
+    if (!panel) return;
+    panel.api.moveTo({
+      group: panel.group,
+      position: direction === 'right' ? 'right' : 'bottom',
+    });
+  }
+
   function onHandoff(newSession: Session) {
     setSessions((prev) =>
       prev.some((s) => s.id === newSession.id) ? prev : [...prev, newSession],
@@ -851,6 +864,7 @@ export function ProjectPage({
         onCloseMenu={() => setTabMenu(null)}
         onDeleteSession={deleteSessionTab}
         onSessionMovedAway={removeSessionLocally}
+        onSplit={splitSessionPanel}
         onOpenCanvasTab={openCanvasTab}
         onError={setStripError}
       />
