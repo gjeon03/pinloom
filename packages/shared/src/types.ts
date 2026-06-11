@@ -280,4 +280,8 @@ export type WsEvent =
   | { type: 'team_members_changed'; teamId: string }
   // Terminal-mode worker: orchestrator dispatch is driving the TUI, so the
   // human's keystrokes are locked out. The AgentTerminal shows an overlay.
-  | { type: 'terminal_lock'; sessionId: string; locked: boolean };
+  | { type: 'terminal_lock'; sessionId: string; locked: boolean }
+  // A terminal session's launch config changed (e.g. it just became a team's
+  // orchestrator, so it now needs the pinloom MCP server). The backend killed
+  // its claude; AgentTerminal re-attaches, respawning with the new config.
+  | { type: 'terminal_relaunch'; sessionId: string };

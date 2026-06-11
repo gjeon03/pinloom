@@ -28,6 +28,9 @@ export function AgentTerminal({
   onCleanExit?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // True briefly while a relaunch is in flight, so the kill's exit event doesn't
+  // flash the "agent exited" overlay before the auto-reconnect lands.
+  const relaunchingRef = useRef(false);
   const [status, setStatus] = useState<Status>('open');
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [blockedMsg, setBlockedMsg] = useState<string | null>(null);
@@ -40,6 +43,18 @@ export function AgentTerminal({
     (ev: WsEvent) => {
       if (ev.type === 'terminal_lock' && ev.sessionId === sessionId) {
         setDispatchLocked(ev.locked);
+      } else if (ev.type === 'terminal_relaunch' && ev.sessionId === sessionId) {
+        // The backend killed this session's claude because its launch config
+        // changed (it just became a team orchestrator → needs the MCP server).
+        // Re-attach: the terminal is gone, so this respawns with the new config.
+        relaunchingRef.current = true;
+        setTimeout(() => {
+          relaunchingRef.current = false;
+        }, 3000);
+        setStatus('open');
+        setExitCode(null);
+        setBlockedMsg(null);
+        setConnKey((k) => k + 1);
       }
     },
     [sessionId],
@@ -104,6 +119,7 @@ export function AgentTerminal({
     ws.onopen = () => {
       setStatus('open');
       setBlockedMsg(null);
+      relaunchingRef.current = false; // reconnect landed — drop the relaunch guard
       requestAnimationFrame(sendResize);
       term.focus();
     };
@@ -125,6 +141,9 @@ export function AgentTerminal({
         }
       } else if (msg.t === 'x') {
         exited = true;
+        // A relaunch (e.g. became an orchestrator) kills the pty on purpose; the
+        // terminal_relaunch handler is reconnecting, so don't show the overlay.
+        if (relaunchingRef.current) return;
         setExitCode(typeof msg.code === 'number' ? msg.code : 0);
         setStatus('exited');
       }

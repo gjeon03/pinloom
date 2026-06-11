@@ -18,6 +18,25 @@ import {
   updateMember,
   updateTeam,
 } from '../services/teams.js';
+import { getDb } from '../db/connection.js';
+import { hasAgentTerminal, killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
+import { broadcast } from '../ws/hub.js';
+
+// A live terminal session that just became a team's orchestrator was launched
+// WITHOUT the pinloom MCP config (it's only added for orchestrators, at launch).
+// Kill its claude so AgentTerminal re-attaches and respawns WITH the MCP server —
+// otherwise the team_* tools don't appear until a manual session/server restart.
+// No-op for sdk/structured sessions and for sessions with no live terminal (their
+// next launch already picks up the orchestrator config).
+function relaunchOrchestratorTerminal(sessionId: string): void {
+  const row = getDb()
+    .prepare('SELECT transport, agent FROM sessions WHERE id = ?')
+    .get(sessionId) as { transport: string | null; agent: string | null } | undefined;
+  if (row?.transport !== 'terminal' || row.agent !== 'claude') return;
+  if (!hasAgentTerminal(sessionId)) return;
+  killAgentTerminal(sessionId);
+  broadcast(`session:${sessionId}`, { type: 'terminal_relaunch', sessionId });
+}
 
 // Maps service-layer typed errors to HTTP status codes the frontend can
 // branch on. Anything else falls through to 500 via re-throw.
@@ -76,11 +95,13 @@ export async function teamRoutes(app: FastifyInstance) {
       return { error: 'orchestratorSessionId is required' };
     }
     try {
-      return createTeam({
+      const team = createTeam({
         name,
         orchestratorSessionId,
         instructions: req.body?.instructions ?? null,
       });
+      relaunchOrchestratorTerminal(orchestratorSessionId);
+      return team;
     } catch (err) {
       return replyForError(reply, err);
     }
@@ -111,14 +132,22 @@ export async function teamRoutes(app: FastifyInstance) {
     // leave alone, pass `null` to clear.
     const body = req.body ?? {};
     const instructionsProvided = 'instructions' in body;
+    const priorOrchestrator = getTeam(req.params.id)?.orchestratorSessionId;
     try {
-      return updateTeam(req.params.id, {
+      const team = updateTeam(req.params.id, {
         name,
         orchestratorSessionId,
         instructions: instructionsProvided
           ? body.instructions ?? null
           : undefined,
       });
+      // Relaunch only if the orchestrator actually CHANGED — a no-op reassign
+      // (e.g. a rename PATCH that resends the same id) shouldn't restart a
+      // working orchestrator or re-mint its token mid-session.
+      if (orchestratorSessionId && orchestratorSessionId !== priorOrchestrator) {
+        relaunchOrchestratorTerminal(orchestratorSessionId);
+      }
+      return team;
     } catch (err) {
       return replyForError(reply, err);
     }
