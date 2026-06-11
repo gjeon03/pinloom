@@ -14,6 +14,7 @@ import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { buildSessionLaunchInput } from '../runner.js';
 import { buildCodexLaunch, codexHomeFor, type BuiltCodexLaunch } from './launch-spec.js';
+import { startCodexCapture, stopCodexCapture } from './transcript-capture.js';
 
 const codexBin = () => process.env.PINLOOM_CODEX_BIN ?? 'codex';
 const SCROLLBACK_BYTES = 200 * 1024;
@@ -61,7 +62,7 @@ function cleanEnv(): { [key: string]: string } {
   return env;
 }
 
-async function spawnCodexTerminal(
+export async function spawnCodexTerminal(
   sessionId: string,
   cols: number,
   rows: number,
@@ -111,7 +112,9 @@ async function spawnCodexTerminal(
     created.onExit = null;
   });
   sessions.set(sessionId, created);
-  // Phase 2: startCodexCapture(sessionId, launch.codexHome, launchInput.resume).
+  // Persist this session's turns to the messages table in the background by
+  // polling the rollout file (history / pins / notifications / teams).
+  startCodexCapture(sessionId, launch.codexHome, launchInput.resume);
   return created;
 }
 
@@ -119,6 +122,7 @@ async function spawnCodexTerminal(
 function teardownCodexSession(sessionId: string): void {
   const session = sessions.get(sessionId);
   sessions.delete(sessionId);
+  stopCodexCapture(sessionId);
   if (session) session.launch.cleanup();
 }
 
