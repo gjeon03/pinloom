@@ -24,6 +24,10 @@ import { claudeTransport } from '../services/agents/index.js';
 import { killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
 import { killCodexTerminal, removeCodexHome } from '../services/codex-pty/agent-terminal.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
+import {
+  convertSessionTransport,
+  TransportConvertError,
+} from '../services/transport-convert.js';
 import { broadcast } from '../ws/hub.js';
 import { runWikiSync } from '../services/wiki-sync.js';
 
@@ -569,6 +573,34 @@ export async function sessionRoutes(app: FastifyInstance) {
       return { ok: true };
     },
   );
+
+  // Flip a session between the SDK (ChatView) and terminal (live TUI)
+  // transports, carrying the agent conversation across (claude shares its
+  // transcript; codex's rollout file is copied between session stores). 409
+  // while a run is in flight.
+  app.post<{
+    Params: { sessionId: string };
+    Body: { transport?: string };
+  }>('/api/sessions/:sessionId/transport', async (req, reply) => {
+    const to = req.body?.transport;
+    if (to !== 'sdk' && to !== 'terminal') {
+      reply.code(400);
+      return { error: "transport must be 'sdk' or 'terminal'" };
+    }
+    try {
+      convertSessionTransport(req.params.sessionId, to);
+    } catch (err) {
+      if (err instanceof TransportConvertError) {
+        reply.code(err.status);
+        return { error: err.message };
+      }
+      throw err;
+    }
+    const row = db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(req.params.sessionId) as SessionRow;
+    return toSession(row);
+  });
 
   app.patch<{
     Params: { sessionId: string };

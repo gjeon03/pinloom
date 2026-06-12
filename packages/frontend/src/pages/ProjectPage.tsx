@@ -171,6 +171,18 @@ export function ProjectPage({
 
   // ─── dock panel helpers ───
 
+  // A captured groupId can go stale before an (async) addPanel runs — e.g.
+  // the group collapsed when its last panel was removed, or closed during an
+  // awaited session create. dockview THROWS on an unknown referenceGroup, so
+  // validate and fall back to "no anchor" (active group) instead.
+  function liveGroupId(
+    dv: DockviewApi,
+    groupId: string | null | undefined,
+  ): string | null {
+    if (!groupId) return null;
+    return dv.groups.some((g) => g.id === groupId) ? groupId : null;
+  }
+
   function addSessionPanel(
     s: Session,
     opts?: { inactive?: boolean; groupId?: string | null },
@@ -190,8 +202,8 @@ export function ProjectPage({
       component: isTerminalAgentSession(s) ? 'terminal' : 'chat',
       params: { kind: 'session', sessionId: s.id },
       inactive: opts?.inactive ?? false,
-      ...(opts?.groupId
-        ? { position: { referenceGroup: opts.groupId } }
+      ...(liveGroupId(dv, opts?.groupId)
+        ? { position: { referenceGroup: liveGroupId(dv, opts?.groupId)! } }
         : {}),
     });
   }
@@ -213,8 +225,8 @@ export function ProjectPage({
       component: 'canvas',
       params: { kind: 'canvas', teamId },
       inactive: opts?.inactive ?? false,
-      ...(opts?.groupId
-        ? { position: { referenceGroup: opts.groupId } }
+      ...(liveGroupId(dv, opts?.groupId)
+        ? { position: { referenceGroup: liveGroupId(dv, opts?.groupId)! } }
         : {}),
     });
   }
@@ -236,8 +248,8 @@ export function ProjectPage({
       component: 'notepad',
       params: { kind: 'notepad', notepadId },
       inactive: opts?.inactive ?? false,
-      ...(opts?.groupId
-        ? { position: { referenceGroup: opts.groupId } }
+      ...(liveGroupId(dv, opts?.groupId)
+        ? { position: { referenceGroup: liveGroupId(dv, opts?.groupId)! } }
         : {}),
     });
   }
@@ -774,6 +786,21 @@ export function ProjectPage({
     removeSessionLocally(id);
   }
 
+  // Menu "Switch to terminal/chat mode" — flips the transport server-side
+  // (conversation carries via the resume token), then swaps the panel: the
+  // dockview component (chat vs terminal) is fixed at addPanel time, so the
+  // panel is re-created in place with the new component.
+  async function convertTransport(sessionId: string, to: 'sdk' | 'terminal') {
+    const updated = await api.convertSessionTransport(sessionId, to);
+    onSessionUpdate(updated);
+    const dv = dockRef.current;
+    const panel = dv?.getPanel(panelId('session', sessionId));
+    // Recreate next to where it lived so the layout doesn't jump.
+    const groupId = panel?.group.id ?? null;
+    if (dv && panel) dv.removePanel(panel);
+    addSessionPanel(updated, { groupId });
+  }
+
   // Menu "Split right/down" — the non-drag path to a side-by-side. Moves the
   // session's panel into a new group next to its current one. dockview
   // collapses the old group automatically if this was its only panel.
@@ -936,6 +963,7 @@ export function ProjectPage({
         onDeleteSession={deleteSessionTab}
         onSessionMovedAway={removeSessionLocally}
         onSplit={splitSessionPanel}
+        onConvertTransport={convertTransport}
         onOpenCanvasTab={openCanvasTab}
         onError={setStripError}
       />

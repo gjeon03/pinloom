@@ -11,9 +11,11 @@ import {
   Columns2,
   ExternalLink,
   FolderInput,
+  MessageSquare,
   Network,
   Pencil,
   Rows2,
+  SquareTerminal,
   Trash2,
   UserMinus,
   UserPlus,
@@ -45,6 +47,12 @@ interface Props {
   /** Move the session's panel into a split next to its current group —
    *  the non-drag path to a VSCode-style side-by-side. */
   onSplit: (sessionId: string, direction: 'right' | 'down') => void;
+  /** Flip the session between SDK (chat) and terminal transports, keeping
+   *  the conversation (resume token carries across). */
+  onConvertTransport: (
+    sessionId: string,
+    to: 'sdk' | 'terminal',
+  ) => Promise<void>;
   /** Open (or focus) a canvas tab for this team. */
   onOpenCanvasTab: (tab: InlineCanvasTab) => void;
   onError: (message: string) => void;
@@ -58,6 +66,7 @@ export function TabMenuHost({
   onDeleteSession,
   onSessionMovedAway,
   onSplit,
+  onConvertTransport,
   onOpenCanvasTab,
   onError,
 }: Props) {
@@ -172,6 +181,41 @@ export function TabMenuHost({
                 <Rows2 size={12} />
                 <span className="flex-1">Split down</span>
               </button>
+              {session &&
+                (() => {
+                  const isTerminal = session.transport === 'terminal';
+                  const target = isTerminal ? 'sdk' : 'terminal';
+                  const label = isTerminal
+                    ? 'Switch to chat mode'
+                    : 'Switch to terminal mode';
+                  const Icon = isTerminal ? MessageSquare : SquareTerminal;
+                  return (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        onCloseMenu();
+                        if (
+                          !confirm(
+                            `${label}? The conversation continues — the session just changes how it renders and runs.`,
+                          )
+                        ) {
+                          return;
+                        }
+                        try {
+                          await onConvertTransport(session.id, target);
+                        } catch (err) {
+                          onError(
+                            err instanceof Error ? err.message : String(err),
+                          );
+                        }
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-surface-3)] text-left text-[var(--color-ink)]"
+                    >
+                      <Icon size={12} />
+                      <span className="flex-1">{label}</span>
+                    </button>
+                  );
+                })()}
               <button
                 type="button"
                 onClick={() => {

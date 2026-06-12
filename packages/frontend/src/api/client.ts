@@ -218,6 +218,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ids }),
     }),
+  convertSessionTransport: (sessionId: string, transport: 'sdk' | 'terminal') =>
+    request<Session>(`/api/sessions/${sessionId}/transport`, {
+      method: 'POST',
+      body: JSON.stringify({ transport }),
+    }),
 
   listPins: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/pins`),
