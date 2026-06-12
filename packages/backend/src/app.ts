@@ -22,6 +22,7 @@ import {
   MAX_TERMINALS,
 } from './services/terminal.js';
 import { checkAgentClis } from './services/cli-check.js';
+import { shutdownClaudePty } from './services/claude-pty/index.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
 import { startEventLoopMonitor } from './services/event-loop-monitor.js';
@@ -68,6 +69,7 @@ export async function createApp() {
   // app.close() (within its 3s force-exit budget).
   app.addHook('onClose', async () => {
     await killAllTerminals();
+    await shutdownClaudePty();
   });
 
   // Mirror user-managed env vars into process.env so the very first agent
