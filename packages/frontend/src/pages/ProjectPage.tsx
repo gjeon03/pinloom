@@ -348,6 +348,10 @@ export function ProjectPage({
   useEffect(() => {
     const dv = dock;
     if (!dv || !dataReady || builtRef.current) return;
+    // Never build against a stale/disposed dock (StrictMode's simulated
+    // remount disposes the first instance; dockRef tracks the live one —
+    // the effect re-runs when `dock` state catches up).
+    if (dockRef.current !== dv) return;
 
     const sessionIds = sessionsRef.current.map((s) => s.id);
     const canvasIds = canvasesRef.current.map((c) => c.teamId);
@@ -485,21 +489,29 @@ export function ProjectPage({
       if (!builtRef.current) return;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => {
+        // A late timer from a dock that's been replaced (project switch
+        // remounts DockviewReact) must not run — toJSON on a disposed dock
+        // can serialize an EMPTY grid and clobber the old project's saved
+        // layout. dockRef always points at the live dock.
+        if (dockRef.current !== event.api) return;
         try {
           saveLayout(project.id, event.api.toJSON());
         } catch {
-          // dock disposed mid-debounce (project switch) — drop the save
+          // dock disposed mid-debounce — drop the save
         }
         syncSessionOrder(event.api);
       }, 300);
     });
   }
 
+  // Clear any pending debounced save when the project changes (ProjectPage
+  // does NOT unmount on a project switch — only the keyed DockviewReact
+  // does) and on unmount.
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, []);
+  }, [project.id]);
 
   // ─── single-active chokepoints (unchanged semantics) ───
 
@@ -549,12 +561,20 @@ export function ProjectPage({
 
   function handlePinsChange(updated: Message) {
     // Mutate the per-session SWR key — every consumer (left rail, terminal
-    // side panels, pop-out pins page) reads through it.
+    // side panels, pop-out pins page) reads through it. On a cache MISS
+    // (pin event for a session whose pins were never fetched) follow up
+    // with a revalidation so the rail doesn't flash a one-pin partial list.
+    let hadCache = true;
     void globalMutate(
       cacheKeys.sessionPins(updated.sessionId),
-      (prev: Message[] | undefined) => applyPinChange(prev ?? [], updated),
+      (prev: Message[] | undefined) => {
+        hadCache = prev !== undefined;
+        return applyPinChange(prev ?? [], updated);
+      },
       { revalidate: false },
-    );
+    ).then(() => {
+      if (!hadCache) void globalMutate(cacheKeys.sessionPins(updated.sessionId));
+    });
   }
 
   // ─── out-of-band session arrivals ───
@@ -563,8 +583,14 @@ export function ProjectPage({
   // orchestrator spawning a worker via MCP). We append but DON'T switch to
   // it — the user didn't open it, so don't yank their active view.
   useWebSocket(`project:${project.id}`, (ev) => {
-    if (ev.type !== 'session_created' || ev.projectId !== project.id) return;
-    spliceInSession(ev.session);
+    if (ev.type === 'session_created' && ev.projectId === project.id) {
+      spliceInSession(ev.session);
+    } else if (ev.type === 'session_deleted' && ev.projectId === project.id) {
+      // Deleted from another window (or the backend) — drop the tab live.
+      // Idempotent for the window that initiated the delete (filter no-ops,
+      // panel already gone).
+      removeSessionLocally(ev.sessionId);
+    }
   });
 
   // A session created via an inline modal (e.g. the AddWorker form's
@@ -801,7 +827,12 @@ export function ProjectPage({
     teams,
     sessionCount: sessions.length,
     codexAvailable,
-    openTabMenu: setTabMenu,
+    // Re-clicking the open menu's own trigger toggles it closed (parity with
+    // the legacy strip).
+    openTabMenu: (req) =>
+      setTabMenu((prev) =>
+        prev && prev.sessionId === req.sessionId ? null : req,
+      ),
     renameSession,
     renameNotepad,
     closeCanvas,

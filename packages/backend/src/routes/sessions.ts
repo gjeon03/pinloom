@@ -24,6 +24,7 @@ import { claudeTransport } from '../services/agents/index.js';
 import { killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
 import { killCodexTerminal, removeCodexHome } from '../services/codex-pty/agent-terminal.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
+import { broadcast } from '../ws/hub.js';
 import { runWikiSync } from '../services/wiki-sync.js';
 
 const ALLOWED_IMAGE_MIME: ReadonlySet<ImageMediaType> = new Set<ImageMediaType>([
@@ -552,7 +553,19 @@ export async function sessionRoutes(app: FastifyInstance) {
       killAgentTerminal(sessionId);
       killCodexTerminal(sessionId);
       removeCodexHome(sessionId);
+      const row = db
+        .prepare('SELECT project_id FROM sessions WHERE id = ?')
+        .get(sessionId) as { project_id: string } | undefined;
       db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+      // Mirror of session_created: tell other windows on this project to drop
+      // the tab live instead of waiting for their next mount's reconcile.
+      if (row) {
+        broadcast(`project:${row.project_id}`, {
+          type: 'session_deleted',
+          projectId: row.project_id,
+          sessionId,
+        });
+      }
       return { ok: true };
     },
   );
