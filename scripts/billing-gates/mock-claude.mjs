@@ -60,6 +60,7 @@ const settingsPath = argValue('--settings');
 
 let seq = 0;
 let lastUuid = `boot-${sessionId}`;
+let lastAssistant = '';
 
 function appendLine(obj) {
   appendFileSync(transcriptPath, JSON.stringify(obj) + '\n', 'utf8');
@@ -86,6 +87,7 @@ function fireStopHook() {
     session_id: sessionId,
     transcript_path: transcriptPath,
     hook_event_name: 'Stop',
+    last_assistant_message: lastAssistant,
     cwd,
   });
   const child = spawn('sh', ['-c', command], { stdio: ['pipe', 'ignore', 'ignore'] });
@@ -121,6 +123,7 @@ function handlePrompt(text) {
     },
   });
   lastUuid = a;
+  lastAssistant = `echo: ${text}`;
   // Let the file write settle, then signal turn completion.
   setTimeout(fireStopHook, 10);
 }

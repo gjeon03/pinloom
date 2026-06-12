@@ -22,7 +22,16 @@ import {
   MAX_TERMINALS,
 } from './services/terminal.js';
 import { checkAgentClis } from './services/cli-check.js';
+import { claudeTransport } from './services/agents/index.js';
 import { shutdownClaudePty } from './services/claude-pty/index.js';
+import {
+  attachAgentTerminal,
+  killAllAgentTerminals,
+} from './services/claude-pty/agent-terminal.js';
+import {
+  attachCodexTerminal,
+  killAllCodexTerminals,
+} from './services/codex-pty/agent-terminal.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
 import { startEventLoopMonitor } from './services/event-loop-monitor.js';
@@ -69,6 +78,8 @@ export async function createApp() {
   // app.close() (within its 3s force-exit budget).
   app.addHook('onClose', async () => {
     await killAllTerminals();
+    await killAllAgentTerminals();
+    await killAllCodexTerminals();
     await shutdownClaudePty();
   });
 
@@ -90,6 +101,13 @@ export async function createApp() {
       status: 'ok' as const,
       agents,
     };
+  });
+
+  // Server-side config the frontend needs at boot. `claudeTransport` decides
+  // which pane a claude session renders (chat vs terminal) — it's a backend env,
+  // so the frontend fetches it once. See docs/terminal-chat-mode-plan.md.
+  app.get('/api/config', async () => {
+    return { claudeTransport: claudeTransport() };
   });
 
   await app.register(projectRoutes);
@@ -179,6 +197,60 @@ export async function createApp() {
           typeof msg.c === 'number' &&
           typeof msg.r === 'number'
         ) {
+          handle.resize(msg.c, msg.r);
+        }
+      });
+      socket.on('close', () => handle.detach());
+    });
+
+    // Per-session agent terminal — runs the real `claude` TUI for one session
+    // (terminal-chat mode). Same wire protocol as /ws/terminal; keyed by session.
+    fastify.get('/ws/agent-terminal', { websocket: true }, async (socket, request) => {
+      if (!isAllowedWsOrigin(request.headers.origin)) {
+        socket.close(4403, 'forbidden origin');
+        return;
+      }
+      const q = request.query as { session?: string };
+      const sessionId = q.session;
+      if (!sessionId) {
+        socket.close(4000, 'session query parameter required');
+        return;
+      }
+      const send = (msg: unknown) => {
+        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
+      };
+      // Route to the codex or claude terminal lifecycle by the session's agent.
+      const agentRow = getDb()
+        .prepare('SELECT agent FROM sessions WHERE id = ?')
+        .get(sessionId) as { agent: string | null } | undefined;
+      const attach = agentRow?.agent === 'codex' ? attachCodexTerminal : attachAgentTerminal;
+      const result = await attach(
+        sessionId,
+        120,
+        40,
+        (data) => send({ t: 'o', d: data }),
+        (code) => send({ t: 'x', code }),
+      );
+      if (!result.ok) {
+        if (result.reason === 'capped') {
+          socket.close(4002, `agent terminal limit reached — close another and retry`);
+        } else {
+          socket.close(4001, 'session not found or project directory missing');
+        }
+        return;
+      }
+      const handle = result.handle;
+      if (handle.buffer) send({ t: 'o', d: handle.buffer, replay: true });
+      socket.on('message', (raw: Buffer) => {
+        let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown };
+        try {
+          msg = JSON.parse(raw.toString());
+        } catch {
+          return;
+        }
+        if (msg.t === 'i' && typeof msg.d === 'string') {
+          handle.write(msg.d);
+        } else if (msg.t === 'r' && typeof msg.c === 'number' && typeof msg.r === 'number') {
           handle.resize(msg.c, msg.r);
         }
       });

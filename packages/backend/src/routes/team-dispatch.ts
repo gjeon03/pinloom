@@ -21,16 +21,22 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getDb } from '../db/connection.js';
 import {
   AliasTakenError,
+  createWorker,
   getMemberByAlias,
   getTeam,
   InstructionsTooLongError,
   InvalidAliasError,
   InvalidTagError,
   listMembersByTag,
+  ProjectNotFoundError,
   TeamNotFoundError,
   TooManyTagsError,
+  TooManyWorkersError,
   updateMember,
 } from '../services/teams.js';
+import { getProjectWikiSlugByProjectId } from '../services/wiki-sync.js';
+import { toSession } from './sessions.js';
+import { broadcast } from '../ws/hub.js';
 import {
   enqueueMessage,
   InvalidQueueContentError,
@@ -38,6 +44,8 @@ import {
   SessionNotFoundError,
 } from '../services/message-queue.js';
 import { isAiRunning, tryDrainQueue, waitForIdle } from '../services/runner.js';
+import { dispatchToWorker } from '../services/claude-pty/agent-terminal.js';
+import { dispatchToCodexWorker } from '../services/codex-pty/agent-terminal.js';
 import { resolveTeamByToken } from '../services/team-tokens.js';
 import {
   emitDispatchEvent,
@@ -103,6 +111,30 @@ function memberStatus(sessionId: string): DispatchMember['status'] {
 export async function teamDispatchRoutes(app: FastifyInstance) {
   const db = getDb();
 
+  // A 'terminal' worker has no runner driving it — dispatch injects into its live
+  // TUI (claude or codex) instead of the enqueue/waitForIdle path.
+  const isTerminalWorker = (sessionId: string): boolean => {
+    const row = db
+      .prepare('SELECT transport, agent FROM sessions WHERE id = ?')
+      .get(sessionId) as { transport: string | null; agent: string | null } | undefined;
+    return row?.transport === 'terminal' && (row.agent === 'claude' || row.agent === 'codex');
+  };
+
+  // Route a terminal-worker dispatch to the codex or claude TUI driver.
+  const dispatchTerminalWorker = (
+    sessionId: string,
+    text: string,
+    signal: AbortSignal,
+    timeoutMs?: number,
+  ) => {
+    const row = db.prepare('SELECT agent FROM sessions WHERE id = ?').get(sessionId) as
+      | { agent: string | null }
+      | undefined;
+    return row?.agent === 'codex'
+      ? dispatchToCodexWorker(sessionId, text, signal, timeoutMs)
+      : dispatchToWorker(sessionId, text, signal, timeoutMs);
+  };
+
   // Backfill endpoint for the descriptive canvas: returns the in-memory
   // ring buffer of recent dispatch events for this team. Open to the
   // browser (no MCP token required) since the canvas is just observing
@@ -158,6 +190,131 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     },
   );
 
+  // List the projects an orchestrator can place a worker in (name, slug, cwd,
+  // session count). The orchestrator calls this before `create-worker` to pick
+  // a cross-project target by slug/name.
+  app.get<{ Params: { teamId: string } }>(
+    '/api/teams/:teamId/dispatch/projects',
+    async (req, reply) => {
+      if (!authorize(req, reply)) return;
+      const rows = db
+        .prepare('SELECT id, name, cwd FROM projects ORDER BY order_index ASC, created_at DESC')
+        .all() as { id: string; name: string; cwd: string }[];
+      return rows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        slug: getProjectWikiSlugByProjectId(p.id),
+        cwd: p.cwd,
+        sessionCount: (
+          db
+            .prepare('SELECT COUNT(*) AS n FROM sessions WHERE project_id = ?')
+            .get(p.id) as { n: number }
+        ).n,
+      }));
+    },
+  );
+
+  // Create a new worker session + add it to the team (MCP team_create_worker).
+  // `project` selects the target project by id, slug, or name (default: the
+  // orchestrator's project). Reuses createWorker (same validation as the UI),
+  // then nudges the canvas to re-fetch members.
+  app.post<{
+    Params: { teamId: string };
+    Body: {
+      alias?: string;
+      instructions?: string | null;
+      tags?: string[];
+      project?: string;
+      agent?: 'claude' | 'codex';
+    };
+  }>('/api/teams/:teamId/dispatch/create-worker', async (req, reply) => {
+    if (!authorize(req, reply)) return;
+    const teamId = req.params.teamId;
+    const alias = req.body?.alias?.trim();
+    if (!alias) {
+      reply.code(400);
+      return { error: 'alias is required' };
+    }
+    if (req.body?.agent && req.body.agent !== 'claude' && req.body.agent !== 'codex') {
+      reply.code(400);
+      return { error: `unknown agent: ${req.body.agent}` };
+    }
+    // Resolve the optional project selector (id | slug | name) to a project id.
+    let projectId: string | undefined;
+    const sel = req.body?.project?.trim();
+    if (sel) {
+      const projects = db
+        .prepare('SELECT id, name, cwd FROM projects')
+        .all() as { id: string; name: string; cwd: string }[];
+      const match =
+        projects.find((p) => p.id === sel) ??
+        projects.find((p) => getProjectWikiSlugByProjectId(p.id) === sel) ??
+        projects.find((p) => p.name === sel);
+      if (!match) {
+        reply.code(404);
+        return {
+          error: `no project matching "${sel}". Available: ${projects
+            .map((p) => getProjectWikiSlugByProjectId(p.id))
+            .join(', ')}`,
+        };
+      }
+      projectId = match.id;
+    }
+    try {
+      const worker = createWorker({
+        teamId,
+        alias,
+        instructions: req.body?.instructions ?? null,
+        tags: req.body?.tags,
+        projectId,
+        agent: req.body?.agent,
+      });
+      console.warn(
+        `[team-dispatch] orchestrator created worker @${worker.alias} in project "${worker.projectName}" (${worker.transport})`,
+      );
+      broadcast(`team:${teamId}`, { type: 'team_members_changed', teamId });
+      // Push the new session onto the worker's project tab strip so it appears
+      // live (the canvas already refreshes off team_members_changed, but the
+      // ProjectPage tab strip has no other signal — without this the new tab
+      // only shows after a manual refresh / navigation).
+      const sessionRow = db
+        .prepare('SELECT * FROM sessions WHERE id = ?')
+        .get(worker.sessionId) as Parameters<typeof toSession>[0] | undefined;
+      if (sessionRow) {
+        const session = toSession(sessionRow);
+        broadcast(`project:${session.projectId}`, {
+          type: 'session_created',
+          projectId: session.projectId,
+          session,
+        });
+      }
+      return { ok: true as const, worker };
+    } catch (err) {
+      if (err instanceof TeamNotFoundError || err instanceof ProjectNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
+      }
+      if (err instanceof AliasTakenError) {
+        reply.code(409);
+        return { error: err.message };
+      }
+      if (err instanceof TooManyWorkersError) {
+        reply.code(409);
+        return { error: err.message };
+      }
+      if (
+        err instanceof InvalidAliasError ||
+        err instanceof InvalidTagError ||
+        err instanceof TooManyTagsError ||
+        err instanceof InstructionsTooLongError
+      ) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
   app.post<{
     Params: { teamId: string };
     Body: { alias?: string; text?: string };
@@ -177,6 +334,26 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     if (!member) {
       reply.code(404);
       return { error: `no worker with alias "${alias}" in this team` };
+    }
+    // Terminal worker: fire-and-forget inject into its TUI (the reply lands in
+    // the terminal + capture; the orchestrator doesn't wait on /send).
+    if (isTerminalWorker(member.sessionId)) {
+      // Fire-and-forget: don't await, but surface a failed dispatch instead of
+      // silently dropping the DispatchResult.
+      void dispatchTerminalWorker(member.sessionId, text, new AbortController().signal).then((r) => {
+        if (!r.ok) {
+          console.warn(`[team-dispatch] /send to @${member.alias} failed: ${r.error}`);
+        }
+      });
+      emitDispatchEvent({
+        type: 'dispatch_send',
+        teamId: req.params.teamId,
+        alias: member.alias,
+        sessionId: member.sessionId,
+        previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+        at: new Date().toISOString(),
+      });
+      return { ok: true, queueItemId: `terminal:${member.sessionId}` };
     }
     try {
       const item = enqueueMessage({ sessionId: member.sessionId, content: text });
@@ -459,6 +636,49 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         ? Math.min(Math.max(Math.floor(requested), 100), MAX_WAIT_MS)
         : MAX_WAIT_MS;
 
+    // Terminal-mode worker: no runner drives it, so enqueue/waitForIdle don't
+    // apply. Inject the prompt into the worker's TUI and read the reply straight
+    // from the Stop-hook payload (capture persists the rows asynchronously).
+    if (isTerminalWorker(member.sessionId)) {
+      emitDispatchEvent({
+        type: 'dispatch_send',
+        teamId: req.params.teamId,
+        alias: member.alias,
+        sessionId: member.sessionId,
+        previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+        at: new Date().toISOString(),
+      });
+      const ac = new AbortController();
+      const onClose = () => ac.abort();
+      req.raw.once('close', onClose);
+      let result;
+      try {
+        result = await dispatchTerminalWorker(member.sessionId, text, ac.signal, timeoutMs);
+      } finally {
+        req.raw.off('close', onClose);
+      }
+      if (!result.ok) {
+        return {
+          ok: false,
+          idle: false,
+          alias: member.alias,
+          sessionId: member.sessionId,
+          error: result.error,
+        };
+      }
+      return {
+        ok: true,
+        idle: true,
+        alias: member.alias,
+        sessionId: member.sessionId,
+        message: {
+          id: `terminal:${member.sessionId}`,
+          content: result.reply,
+          createdAt: new Date().toISOString(),
+        },
+      };
+    }
+
     // Snapshot before enqueue so we can disambiguate "new" assistant
     // messages from anything that already existed.
     const before = new Date().toISOString();
@@ -605,6 +825,33 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     try {
       await Promise.all(
         recipients.map(async (member) => {
+          // Terminal worker: inject into its TUI, reply from the Stop payload.
+          if (isTerminalWorker(member.sessionId)) {
+            emitDispatchEvent({
+              type: 'dispatch_send',
+              teamId: req.params.teamId,
+              alias: member.alias,
+              sessionId: member.sessionId,
+              previewText,
+              at: dispatchedAt,
+            });
+            const result = await dispatchTerminalWorker(member.sessionId, text, ac.signal, timeoutMs);
+            if (result.ok) {
+              replies.push({
+                alias: member.alias,
+                sessionId: member.sessionId,
+                queueItemId: `terminal:${member.sessionId}`,
+                message: {
+                  id: `terminal:${member.sessionId}`,
+                  content: result.reply,
+                  createdAt: new Date().toISOString(),
+                },
+              });
+            } else {
+              failures.push({ alias: member.alias, error: result.error });
+            }
+            return;
+          }
           let queueItemId: string;
           try {
             const item = enqueueMessage({

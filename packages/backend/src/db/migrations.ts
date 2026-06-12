@@ -356,6 +356,26 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         ON project_notepads(project_id, position);
     `,
   },
+  {
+    id: 26,
+    // Terminal-chat mode groundwork (docs/terminal-chat-mode-plan.md).
+    // - messages.transcript_uuid: the Claude transcript line uuid a message was
+    //   captured from. Shared dedupe key between the runner writer and the
+    //   background transcript-capture writer so the two never double-insert a turn.
+    // - sessions.transport: the transport chosen at session creation
+    //   ('sdk' | 'pty' | 'terminal'), pinned per-session so flipping the global
+    //   PINLOOM_CLAUDE_TRANSPORT env mid-life doesn't strand an existing session.
+    // - sessions.last_captured_transcript_uuid: the capture cursor (the last
+    //   transcript uuid folded into messages). DISTINCT from last_synced_message_id,
+    //   which is the wiki-sync cursor — do not conflate.
+    sql: `
+      ALTER TABLE messages ADD COLUMN transcript_uuid TEXT;
+      ALTER TABLE sessions ADD COLUMN transport TEXT;
+      ALTER TABLE sessions ADD COLUMN last_captured_transcript_uuid TEXT;
+      CREATE INDEX IF NOT EXISTS idx_messages_transcript_uuid
+        ON messages(transcript_uuid);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

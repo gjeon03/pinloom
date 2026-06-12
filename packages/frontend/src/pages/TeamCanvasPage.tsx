@@ -142,9 +142,16 @@ export function TeamCanvasPage({
     (msg: WsEvent) => {
       if (msg.type === 'team_dispatch_event') {
         handleEvent(msg.event);
+      } else if (msg.type === 'team_members_changed' && msg.teamId === teamId) {
+        // The orchestrator added a worker via MCP — re-fetch the team so the new
+        // node appears on the canvas (members come from `team`, not the event stream).
+        api
+          .getTeam(teamId)
+          .then((t) => setTeam(t))
+          .catch(() => {});
       }
     },
-    [handleEvent],
+    [handleEvent, teamId],
   );
 
   // Don't subscribe until backfill has been applied — that way live

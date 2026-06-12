@@ -137,6 +137,15 @@ describe('runMigrations', () => {
     }
   });
 
+  it('terminal-chat columns exist after migration 26', () => {
+    const db = freshDb();
+    runMigrations(db);
+    expect(tableInfo(db, 'messages')).toContain('transcript_uuid');
+    const sessionCols = tableInfo(db, 'sessions');
+    expect(sessionCols).toContain('transport');
+    expect(sessionCols).toContain('last_captured_transcript_uuid');
+  });
+
   it('team_members has instructions and tags after migrations 17+18', () => {
     const db = freshDb();
     runMigrations(db);

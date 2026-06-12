@@ -7,6 +7,7 @@ import type {
   Session,
 } from '@pinloom/shared';
 import { api, projectNotepadApi } from '../api/client.js';
+import { useWebSocket } from '../hooks/useWebSocket.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import { setActiveSessionId } from '../stores/activeSession.js';
 import { useNotifications } from '../stores/notifications.js';
@@ -16,6 +17,8 @@ import {
   type TabRef,
 } from '../components/SessionTabs.js';
 import { ChatView } from '../components/ChatView.js';
+import { AgentTerminal } from '../components/AgentTerminal.js';
+import { TerminalSidePanel } from '../components/TerminalSidePanel.js';
 import { ProjectNotepadView } from '../components/ProjectNotepadView.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
@@ -24,6 +27,13 @@ import { EditableTitle } from '../components/EditableTitle.js';
 import { SessionPickerModal } from '../components/SessionPickerModal.js';
 import { TeamCanvasPage } from './TeamCanvasPage.js';
 import { applyPinChange } from '../utils/pins.js';
+
+// A session that renders as a live terminal (claude OR codex) instead of the
+// structured ChatView. Structured sessions (transport !== 'terminal') of either
+// agent still use ChatView.
+function isTerminalAgentSession(s: Session): boolean {
+  return s.transport === 'terminal' && (s.agent === 'claude' || s.agent === 'codex');
+}
 
 export function ProjectPage({
   project,
@@ -55,6 +65,26 @@ export function ProjectPage({
   // array only governs the strip order.
   const [tabOrder, setTabOrder] = useState<TabRef[]>([]);
   const { markSessionRead } = useNotifications();
+
+  // Live-append sessions created out-of-band for this project (e.g. an
+  // orchestrator spawning a worker via MCP). Without this the new tab only
+  // surfaces after a manual refresh. We append but DON'T switch to it — the
+  // user didn't open it, so don't yank their active view.
+  useWebSocket(`project:${project.id}`, (ev) => {
+    if (ev.type !== 'session_created' || ev.projectId !== project.id) return;
+    const incoming = ev.session;
+    setSessions((prev) =>
+      prev.some((s) => s.id === incoming.id) ? prev : [...prev, incoming],
+    );
+    setTabOrder((prev) => {
+      if (prev.some((r) => r.kind === 'session' && r.id === incoming.id)) {
+        return prev;
+      }
+      const next: TabRef[] = [...prev, { kind: 'session', id: incoming.id }];
+      persistTabOrder(project.id, next);
+      return next;
+    });
+  });
 
   function persistCanvasTabs(projectId: string, tabs: InlineCanvasTab[]) {
     try {
@@ -394,6 +424,26 @@ export function ProjectPage({
     setPins((prev) => applyPinChange(prev, updated));
   }
 
+  // The user clicked "Close tab" on a terminal session's exit overlay (its claude
+  // TUI quit). Closing the tab means deleting the session — same as the X button.
+  // The overlay is the confirm (we don't auto-delete on exit). Durable knowledge
+  // lives in the wiki, so a finished session is meant to be cleared.
+  function closeTerminalSession(id: string) {
+    void api.deleteSession(id).catch(() => {
+      // best-effort: the pty already exited; a failed delete just leaves the row.
+    });
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      if (activeSession?.id === id) setActiveSession(next[0] ?? null);
+      return next;
+    });
+    setTabOrder((prev) => {
+      const next = prev.filter((r) => !(r.kind === 'session' && r.id === id));
+      persistTabOrder(project.id, next);
+      return next;
+    });
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3">
@@ -590,7 +640,13 @@ export function ProjectPage({
           minLeft={320}
           minRight={420}
           left={
-            activeNotepadId === null && pins.length > 0 && activeSession ? (
+            // Hidden for terminal-claude sessions — their pins live in the right
+            // rail's Pins tab (TerminalSidePanel) instead, so we don't show two
+            // pin panels. Structured sessions keep the left rail unchanged.
+            activeNotepadId === null &&
+            pins.length > 0 &&
+            activeSession &&
+            !isTerminalAgentSession(activeSession) ? (
               <PinnedPanel
                 key={activeSession.id}
                 pins={pins}
@@ -617,6 +673,36 @@ export function ProjectPage({
               // teamId from the URL via useParams, so we route inline by
               // overriding the `teamId` segment via a key + path.
               <InlineCanvasView teamId={activeCanvasTeamId} />
+            ) : activeSession && isTerminalAgentSession(activeSession) ? (
+              // Terminal-chat mode: render the session's live claude TUI instead
+              // of the structured chat. Pinned per-session (sessions.transport),
+              // so flipping the env only affects newly-created sessions. Terminal
+              // mode is claude-only — codex sessions stay on the structured path.
+              // The live TUI fills the pane; the side panel lists captured turns
+              // and lets the human pin them (the pin UI ChatView gives structured
+              // sessions).
+              <div className="flex h-full w-full min-h-0">
+                <div className="min-w-0 flex-1">
+                  <AgentTerminal
+                    key={activeSession.id}
+                    sessionId={activeSession.id}
+                    onCleanExit={() => closeTerminalSession(activeSession.id)}
+                  />
+                </div>
+                <TerminalSidePanel
+                  key={`panel-${activeSession.id}`}
+                  sessionId={activeSession.id}
+                  pins={pins}
+                  onPinChange={handlePinsChange}
+                  projectName={project.name}
+                  projectCwd={project.cwd}
+                  onHandoff={(newSession) => {
+                    setSessions((prev) => [...prev, newSession]);
+                    setActiveSession(newSession);
+                  }}
+                  onSendPin={(pin) => setSendingPin(pin)}
+                />
+              </div>
             ) : activeSession ? (
               // Force a fresh component instance per session so per-session
               // local state (textarea draft, queue, wikiSyncing flag, etc.)

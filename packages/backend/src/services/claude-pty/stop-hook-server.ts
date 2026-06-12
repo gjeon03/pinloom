@@ -14,8 +14,24 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+/**
+ * The fields we read out of Claude Code's Stop-hook JSON payload (verified
+ * against a real hook fire). `lastAssistantMessage` is the just-completed turn's
+ * reply text — the terminal-mode dispatch path returns it directly without
+ * re-reading the transcript. `raw` keeps the full object for forward-compat.
+ */
+export interface StopHookPayload {
+  sessionId: string;
+  /** Our pinloom session id, tagged in by the forwarder (terminal mode). */
+  pinloomSessionId?: string;
+  transcriptPath?: string;
+  lastAssistantMessage?: string;
+  effortLevel?: string;
+  raw: Record<string, unknown>;
+}
+
 interface PendingWaiter {
-  resolve: () => void;
+  resolve: (payload: StopHookPayload) => void;
   reject: (err: Error) => void;
 }
 
@@ -23,14 +39,44 @@ export interface StopHookServer {
   /** POST URL the Stop-hook forwarder should hit (carries the secret token). */
   url(): string;
   /**
-   * Resolve when the next Stop hook for `sessionId` fires. If a hook already
-   * fired since the last consume (race where the turn ended before we armed),
-   * resolves immediately. Rejects on abort or timeout.
+   * Resolve with the Stop-hook payload when the next hook for `sessionId` fires.
+   * If a hook already fired since the last consume (race where the turn ended
+   * before we armed), resolves immediately with the buffered payload. Rejects on
+   * abort or timeout.
    */
-  awaitStop(sessionId: string, signal: AbortSignal, timeoutMs?: number): Promise<void>;
+  awaitStop(sessionId: string, signal: AbortSignal, timeoutMs?: number): Promise<StopHookPayload>;
+  /**
+   * Fire `listener` on EVERY Stop hook for the given pinloom session id (the
+   * forwarder tags it in). Used by terminal-mode transcript capture, which wants
+   * a persistent per-session notification, not a one-shot await. Returns an
+   * unregister fn.
+   */
+  onStop(pinloomSessionId: string, listener: (payload: StopHookPayload) => void): () => void;
   /** Drop a session's bookkeeping (call on dispose) so the maps don't leak. */
   release(sessionId: string): void;
   close(): Promise<void>;
+}
+
+function parsePayload(body: string): StopHookPayload | null {
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(body || '{}') as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const sessionId = typeof raw.session_id === 'string' ? raw.session_id : '';
+  if (!sessionId) return null;
+  const effort = raw.effort as { level?: unknown } | undefined;
+  return {
+    sessionId,
+    pinloomSessionId:
+      typeof raw.pinloom_session_id === 'string' ? raw.pinloom_session_id : undefined,
+    transcriptPath: typeof raw.transcript_path === 'string' ? raw.transcript_path : undefined,
+    lastAssistantMessage:
+      typeof raw.last_assistant_message === 'string' ? raw.last_assistant_message : undefined,
+    effortLevel: effort && typeof effort.level === 'string' ? effort.level : undefined,
+    raw,
+  };
 }
 
 export async function startStopHookServer(): Promise<StopHookServer> {
@@ -40,18 +86,26 @@ export async function startStopHookServer(): Promise<StopHookServer> {
   // Capped at one buffered pre-arm fire per session: a real Stop hook fires at
   // the end of every turn, so an *uncapped* counter would let stale completions
   // accumulate and a later arm would consume turn N-1's signal for turn N.
-  const firedAhead = new Set<string>();
+  const firedAhead = new Map<string, StopHookPayload>();
+  // Persistent per-pinloom-session listeners (terminal-mode capture).
+  const listeners = new Map<string, Set<(p: StopHookPayload) => void>>();
   // Random token; only the spawned claude (via temp settings) learns it.
   const token = randomUUID();
   const stopPath = `/stop/${token}`;
 
-  function deliver(sessionId: string): void {
-    const q = waiters.get(sessionId);
+  function deliver(payload: StopHookPayload): void {
+    // Persistent listeners (capture) fire on every Stop for their pinloom session.
+    if (payload.pinloomSessionId) {
+      const ls = listeners.get(payload.pinloomSessionId);
+      if (ls) for (const l of [...ls]) l(payload);
+    }
+    // One-shot awaiters (PTY adapter / dispatch) key on claude's session_id.
+    const q = waiters.get(payload.sessionId);
     if (q && q.length > 0) {
-      q.shift()!.resolve();
+      q.shift()!.resolve(payload);
       return;
     }
-    firedAhead.add(sessionId);
+    firedAhead.set(payload.sessionId, payload);
   }
 
   const server: Server = createServer((req, res) => {
@@ -71,15 +125,9 @@ export async function startStopHookServer(): Promise<StopHookServer> {
       body += c;
     });
     req.on('end', () => {
-      let sessionId = '';
-      try {
-        const payload = JSON.parse(body || '{}') as { session_id?: string };
-        sessionId = typeof payload.session_id === 'string' ? payload.session_id : '';
-      } catch {
-        // ignore malformed payloads
-      }
-      if (sessionId) {
-        deliver(sessionId);
+      const payload = parsePayload(body);
+      if (payload) {
+        deliver(payload);
       } else {
         // A renamed field in a future CLI would silently time out every turn —
         // surface it once instead of leaving the user staring at a 5-min hang.
@@ -104,15 +152,16 @@ export async function startStopHookServer(): Promise<StopHookServer> {
       return `http://127.0.0.1:${port}${stopPath}`;
     },
 
-    awaitStop(sessionId, signal, timeoutMs = 5 * 60_000): Promise<void> {
+    awaitStop(sessionId, signal, timeoutMs = 5 * 60_000): Promise<StopHookPayload> {
       // Consume a hook that fired before we armed.
-      if (firedAhead.has(sessionId)) {
+      const buffered = firedAhead.get(sessionId);
+      if (buffered) {
         firedAhead.delete(sessionId);
-        return Promise.resolve();
+        return Promise.resolve(buffered);
       }
       if (signal.aborted) return Promise.reject(new Error('aborted'));
 
-      return new Promise<void>((resolve, reject) => {
+      return new Promise<StopHookPayload>((resolve, reject) => {
         const q = waiters.get(sessionId) ?? [];
         const waiter: PendingWaiter = { resolve: done, reject: fail };
         q.push(waiter);
@@ -135,15 +184,28 @@ export async function startStopHookServer(): Promise<StopHookServer> {
             if (list.length === 0) waiters.delete(sessionId);
           }
         }
-        function done() {
+        function done(payload: StopHookPayload) {
           cleanup();
-          resolve();
+          resolve(payload);
         }
         function fail(err: Error) {
           cleanup();
           reject(err);
         }
       });
+    },
+
+    onStop(pinloomSessionId, listener): () => void {
+      const set = listeners.get(pinloomSessionId) ?? new Set();
+      set.add(listener);
+      listeners.set(pinloomSessionId, set);
+      return () => {
+        const s = listeners.get(pinloomSessionId);
+        if (s) {
+          s.delete(listener);
+          if (s.size === 0) listeners.delete(pinloomSessionId);
+        }
+      };
     },
 
     release(sessionId: string): void {

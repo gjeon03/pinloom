@@ -35,7 +35,7 @@ export type { ImageInput, ImageMediaType } from './runner-types.js';
 // open tab) and mirror it onto the global channel enriched with project /
 // title / agent, so one app-wide listener can notify for sessions whose tab
 // isn't open.
-function emitRunStatus(
+export function emitRunStatus(
   sessionId: string,
   status: 'started' | 'finished' | 'error',
   error?: string,
@@ -63,12 +63,16 @@ function emitRunStatus(
   }
 }
 
-interface PersistArgs {
+export interface PersistArgs {
   sessionId: string;
   planItemId: string | null;
   role: MessageRole;
   content: string;
   toolUse?: unknown;
+  /** Model id (set directly by capture; the streaming path uses closeStream). */
+  model?: string | null;
+  /** Source Claude transcript line uuid (terminal capture; dedupe/reference). */
+  transcriptUuid?: string | null;
 }
 
 interface MessageRow {
@@ -207,17 +211,29 @@ When prior knowledge might help:
 Use this sparingly — only when prior context might genuinely help.`;
 }
 
-function persistMessage(args: PersistArgs): Message {
+export function persistMessage(args: PersistArgs): Message {
   const db = getDb();
   const id = nanoid();
   const now = new Date().toISOString();
   const toolUseJson = args.toolUse ? JSON.stringify(args.toolUse) : null;
+  const model = args.model ?? null;
+  const transcriptUuid = args.transcriptUuid ?? null;
 
   db.prepare(
     `INSERT INTO messages
-       (id, session_id, plan_item_id, role, content, tool_use, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, args.sessionId, args.planItemId, args.role, args.content, toolUseJson, now);
+       (id, session_id, plan_item_id, role, content, tool_use, model, transcript_uuid, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    args.sessionId,
+    args.planItemId,
+    args.role,
+    args.content,
+    toolUseJson,
+    model,
+    transcriptUuid,
+    now,
+  );
 
   db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(now, args.sessionId);
 
@@ -232,7 +248,7 @@ function persistMessage(args: PersistArgs): Message {
     pinTitle: null,
     pinnedAt: null,
     sourceMessageId: null,
-    model: null,
+    model,
     createdAt: now,
   };
   broadcast(`session:${args.sessionId}`, { type: 'message', sessionId: args.sessionId, message });
@@ -641,7 +657,15 @@ setTeamWorkerQueueHook((sessionId: string) => {
 // Emits a `worker_status` dispatch event if this session is a worker in
 // some team. Drives the descriptive canvas's node pulse (PR3). Lookup
 // is one SQLite hit; safe to call frequently.
-function emitWorkerStatusIfMember(sessionId: string): void {
+//
+// `runningOverride`: terminal-mode workers aren't driven by the runner, so
+// `isAiRunning` (the SDK activeRuns map) is always false for them. The terminal
+// dispatch path passes an explicit running flag at turn start/end so the canvas
+// edge still turns yellow while a dispatched worker is busy.
+export function emitWorkerStatusIfMember(
+  sessionId: string,
+  runningOverride?: boolean,
+): void {
   const row = getDb()
     .prepare(
       `SELECT t.id AS team_id, m.alias AS alias
@@ -656,13 +680,13 @@ function emitWorkerStatusIfMember(sessionId: string): void {
     teamId: row.team_id,
     alias: row.alias,
     sessionId,
-    running: isAiRunning(sessionId),
+    running: runningOverride ?? isAiRunning(sessionId),
     queued: listQueueItems(sessionId).length,
     at: new Date().toISOString(),
   });
 }
 
-function notifySessionIdle(sessionId: string): void {
+export function notifySessionIdle(sessionId: string): void {
   const set = idleListeners.get(sessionId);
   if (!set) return;
   // Snapshot first — listeners may unsubscribe synchronously inside the
@@ -1045,6 +1069,58 @@ function buildOrchestratorMcpConfig(
           : {}),
       },
     },
+  };
+}
+
+export interface SessionLaunchInput {
+  cwd: string;
+  /** Full system prompt, static+dynamic concatenated (the TUI has no cache split). */
+  systemPrompt: string;
+  model: string | null;
+  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+  /** Resume token (prior agent session id), or null for a fresh session. */
+  resume: string | null;
+  mcpServers?: Record<string, McpStdioServerConfig>;
+}
+
+/**
+ * Build everything needed to launch an interactive `claude` for a session in
+ * terminal mode — the SAME system prompt (framework + wiki + env + plan + team +
+ * worker instructions + pins), MCP wiring, model, effort, and resume token the
+ * SDK/PTY adapter path uses. Concatenates the static + dynamic system-prompt
+ * halves since the TUI has no prompt-cache split. Mints a fresh team MCP token
+ * for orchestrator sessions (M5). Returns null if the session doesn't exist.
+ *
+ * Does NOT touch the streaming/queue/activeRuns state. ONE side effect: for an
+ * orchestrator session it mints a fresh team MCP token (replace-on-mint, same as
+ * the runner). That's safe under the single-writer invariant — a session has ONE
+ * transport (sessions.transport), so a 'terminal' orchestrator is never also
+ * runner-driven, and only one path mints its team's token. Callers MUST honor
+ * that invariant: never build a launch for a session that another driver is
+ * concurrently running, or the live driver's token gets clobbered (→ MCP 403s).
+ * TODO(Phase 5): if mixed transports are ever allowed, give the terminal its own
+ * held token lifecycle instead of re-minting here.
+ */
+export function buildSessionLaunchInput(sessionId: string): SessionLaunchInput | null {
+  const ctx = loadSession(sessionId);
+  if (!ctx) return null;
+  const planItems = loadPlanItems(ctx.planId);
+  const pinsContext = buildPinsContext(ctx.id);
+  const systemPrompt =
+    SYSTEM_PROMPT +
+    buildWikiContext(ctx.projectId) +
+    buildEnvVarsContext() +
+    buildPlanContext(planItems) +
+    buildTeamContext(ctx.id) +
+    buildWorkerInstructionsContext(ctx.id) +
+    (pinsContext ? `\n\n${pinsContext}` : '');
+  return {
+    cwd: ctx.cwd,
+    systemPrompt,
+    model: ctx.model,
+    reasoningEffort: ctx.reasoningEffort,
+    resume: ctx.claudeSessionId,
+    mcpServers: buildOrchestratorMcpConfig(ctx.id),
   };
 }
 

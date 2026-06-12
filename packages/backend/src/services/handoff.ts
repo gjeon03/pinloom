@@ -15,6 +15,7 @@ interface SessionRow {
   last_synced_message_id: string | null;
   model: string | null;
   reasoning_effort: string | null;
+  transport: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +62,10 @@ function toSession(row: SessionRow): Session {
     lastSyncedMessageId: row.last_synced_message_id,
     model: row.model,
     reasoningEffort: effort,
+    transport:
+      row.transport === 'pty' || row.transport === 'terminal' || row.transport === 'sdk'
+        ? row.transport
+        : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -144,8 +149,8 @@ export function handoffFromSession(sourceSessionId: string): Session {
   db.prepare(
     `INSERT INTO sessions
        (id, project_id, plan_id, agent, claude_session_id, agent_session_id,
-        title, order_index, source_session_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+        title, order_index, source_session_id, transport, created_at, updated_at)
+     VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
   ).run(
     newId,
     source.project_id,
@@ -154,6 +159,9 @@ export function handoffFromSession(sourceSessionId: string): Session {
     title,
     nextOrder,
     sourceSessionId,
+    // Inherit the source session's transport so a handed-off session opens the
+    // same way (terminal stays terminal); null source → sdk.
+    (source as SessionRow).transport,
     now,
     now,
   );

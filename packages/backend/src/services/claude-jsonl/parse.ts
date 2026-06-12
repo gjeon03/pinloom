@@ -120,7 +120,7 @@ function toolResultText(content: unknown): string {
 
 // Mirrors summarizeToolCall in claude-adapter.ts so the UI renders PTY tool
 // calls identically to SDK ones.
-function summarizeToolCall(name: string, input: Record<string, unknown>): string {
+export function summarizeToolCall(name: string, input: Record<string, unknown>): string {
   if (typeof input.command === 'string') return `${name}: ${input.command}`;
   if (typeof input.file_path === 'string') {
     const extra =

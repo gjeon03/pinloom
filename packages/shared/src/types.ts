@@ -87,6 +87,15 @@ export type AgentKind = 'claude' | 'codex';
 // adapter can't honor.
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/**
+ * How a claude session is driven/displayed:
+ *  - 'sdk':      Agent SDK, structured streaming chat (default).
+ *  - 'pty':      PTY-driven claude as a structured adapter (interactive bucket).
+ *  - 'terminal': interactive claude in a live xterm.js terminal.
+ * Pinned per session at creation (sessions.transport) from the backend default.
+ */
+export type ClaudeTransport = 'sdk' | 'pty' | 'terminal';
+
 export interface Session {
   id: string;
   projectId: string;
@@ -100,6 +109,8 @@ export interface Session {
   lastSyncedMessageId: string | null;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
+  /** Transport this session was created under; null = legacy (treat as 'sdk'). */
+  transport: ClaudeTransport | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -262,4 +273,20 @@ export type WsEvent =
       phase: 'started' | 'finished' | 'error';
     }
   // Live dispatch event for the team canvas. Channel: `team:${teamId}`.
-  | { type: 'team_dispatch_event'; event: TeamDispatchEvent };
+  | { type: 'team_dispatch_event'; event: TeamDispatchEvent }
+  // The team's membership changed (e.g. the orchestrator created a worker via
+  // MCP). Channel: `team:${teamId}`. Listeners re-fetch the team to pick up the
+  // new member. Carries no payload beyond the id — keep it a pure refresh nudge.
+  | { type: 'team_members_changed'; teamId: string }
+  // Terminal-mode worker: orchestrator dispatch is driving the TUI, so the
+  // human's keystrokes are locked out. The AgentTerminal shows an overlay.
+  | { type: 'terminal_lock'; sessionId: string; locked: boolean }
+  // A terminal session's launch config changed (e.g. it just became a team's
+  // orchestrator, so it now needs the pinloom MCP server). The backend killed
+  // its claude; AgentTerminal re-attaches, respawning with the new config.
+  | { type: 'terminal_relaunch'; sessionId: string }
+  // A session was created out-of-band (e.g. an orchestrator spawned a worker via
+  // MCP). Channel: `project:${projectId}`. ProjectPage appends it to the tab strip
+  // so it shows up live without a refresh. Carries the full Session so the
+  // listener doesn't need to re-fetch.
+  | { type: 'session_created'; projectId: string; session: Session };
