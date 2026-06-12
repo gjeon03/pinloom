@@ -22,7 +22,10 @@ import {
 import { api, projectNotepadApi } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { cacheKeys } from '../api/cacheKeys.js';
-import { setActiveSessionId } from '../stores/activeSession.js';
+import {
+  setActiveSessionId,
+  setVisibleSessionIds,
+} from '../stores/activeSession.js';
 import { useNotifications } from '../stores/notifications.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
@@ -90,6 +93,12 @@ export function ProjectPage({
   // "active view" everything downstream reads (pins rail, bottom panel,
   // notification suppression). Derived from onDidActivePanelChange.
   const [focused, setFocused] = useState<TabRef | null>(null);
+  // Every session visible across the dock's groups (each group's selected
+  // tab). With splits, more than one session can be on screen at once —
+  // all of them count as "being watched" for notifications/read-state.
+  const [visibleSet, setVisibleSet] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [sendingPin, setSendingPin] = useState<{
     pin: Message;
     sessionId: string;
@@ -351,9 +360,11 @@ export function ProjectPage({
       try {
         dv.fromJSON(saved);
         restoredLayout = true;
-      } catch {
+      } catch (err) {
         // Corrupt layout — fall through to the migration builder. Never
-        // leave the dock blank.
+        // leave the dock blank. Logged because a failing restore silently
+        // flattens the user's split arrangement.
+        console.warn('[dock] layout restore failed, rebuilding:', err);
         try {
           dv.clear();
         } catch {
@@ -431,10 +442,11 @@ export function ProjectPage({
     }
 
     builtRef.current = true;
-    // Initial focus sync (the change event may have fired before we were
-    // ready to honor it).
+    // Initial focus + visible-set sync (the change events may have fired
+    // before we were ready to honor them).
     const active = dv.activePanel;
     setFocused(active ? parsePanelId(active.id) : null);
+    refreshVisibleSet(dv);
     // Persist the (possibly migrated) layout right away.
     try {
       saveLayout(project.id, dv.toJSON());
@@ -444,13 +456,32 @@ export function ProjectPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dock, dataReady, project.id]);
 
+  // Recompute the visible-session set from each group's selected tab.
+  // Cheap (groups are few); identity-preserving so downstream effects only
+  // fire on real changes.
+  function refreshVisibleSet(dv: DockviewApi) {
+    const next = new Set<string>();
+    for (const g of dv.groups) {
+      const ref = g.activePanel ? parsePanelId(g.activePanel.id) : null;
+      if (ref?.kind === 'session') next.add(ref.id);
+    }
+    setVisibleSet((prev) => {
+      if (prev.size === next.size && [...next].every((id) => prev.has(id))) {
+        return prev;
+      }
+      return next;
+    });
+  }
+
   function onDockReady(event: DockviewReadyEvent) {
     dockRef.current = event.api;
     setDock(event.api);
     event.api.onDidActivePanelChange((panel) => {
       setFocused(panel ? parsePanelId(panel.id) : null);
+      refreshVisibleSet(event.api);
     });
     event.api.onDidLayoutChange(() => {
+      refreshVisibleSet(event.api);
       if (!builtRef.current) return;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => {
@@ -479,28 +510,34 @@ export function ProjectPage({
     localStorage.setItem(`pinloom:lastSession:${project.id}`, activeSession.id);
   }, [project.id, activeSession?.id]);
 
-  // Publish which session is visible in the foreground so the chat-done
-  // notifier can suppress notifications for the chat you're looking at,
-  // and confirm any pending agent notifications for that session — landing
-  // on the tab is what counts as "I've checked this agent".
+  // Publish the focused session (pins rail / bottom panel scope) and the
+  // full visible set (chat-done suppression + read-state across splits).
+  // Every session the user can SEE counts as checked — a tab landing on
+  // screen is what confirms its agent notifications.
   const visibleSessionId = activeSession?.id ?? null;
   useEffect(() => {
     setActiveSessionId(visibleSessionId);
-    if (visibleSessionId) markSessionRead(visibleSessionId);
     return () => setActiveSessionId(null);
-  }, [visibleSessionId, markSessionRead]);
+  }, [visibleSessionId]);
 
-  // Cover the "session was foreground but window hidden when the agent
-  // finished" case: when the user returns to the window, retroactively
-  // confirm any chat-done items for the session they're already on.
+  useEffect(() => {
+    setVisibleSessionIds(visibleSet);
+    for (const id of visibleSet) markSessionRead(id);
+    return () => setVisibleSessionIds(new Set());
+  }, [visibleSet, markSessionRead]);
+
+  // Cover the "session was on screen but window hidden when the agent
+  // finished" case: the visible-set effect above didn't re-run because the
+  // set never changed. When the user returns to the window, retroactively
+  // confirm chat-done items for every session they can see.
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState !== 'visible') return;
-      if (visibleSessionId) markSessionRead(visibleSessionId);
+      for (const id of visibleSet) markSessionRead(id);
     }
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [visibleSessionId, markSessionRead]);
+  }, [visibleSet, markSessionRead]);
 
   // Per-session pins via SWR — the focused session's pins feed the left
   // rail; terminal panels fetch their own per-panel (see TerminalPanel).
