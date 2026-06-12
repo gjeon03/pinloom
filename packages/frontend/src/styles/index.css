@@ -124,3 +124,12 @@ textarea::placeholder {
 .dockview-theme-dark .dv-tab {
   padding: 0;
 }
+
+/* Header action containers (the '+' picker) should fill the tab bar height
+   so the buttons inside aren't squished against the top edge. */
+.dockview-theme-dark .dv-left-actions-container,
+.dockview-theme-dark .dv-right-actions-container {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}

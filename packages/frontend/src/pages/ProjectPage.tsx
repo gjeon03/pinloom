@@ -907,7 +907,10 @@ export function ProjectPage({
                   onReady={onDockReady}
                   components={DOCK_COMPONENTS}
                   defaultTabComponent={ProjectTab}
-                  rightHeaderActionsComponent={GroupActions}
+                  // left = immediately AFTER the last tab (dockview renders the
+                  // left-actions container between the tabs and the void), which
+                  // is where the legacy strip kept its '+' button.
+                  leftHeaderActionsComponent={GroupActions}
                   watermarkComponent={DockWatermark}
                   theme={themeDark}
                 />

@@ -34,7 +34,10 @@ export function GroupActions(props: IDockviewHeaderActionsProps) {
   }, [open]);
 
   return (
-    <div className="flex items-stretch self-stretch">
+    // h-full: the dockview actions container doesn't stretch its children,
+    // so without an explicit height the button collapses to text height and
+    // renders squished against the top of the tab bar.
+    <div className="flex h-full items-stretch">
       <button
         ref={buttonRef}
         type="button"
@@ -48,7 +51,7 @@ export function GroupActions(props: IDockviewHeaderActionsProps) {
           }
           setOpen((v) => !v);
         }}
-        className="flex items-center gap-0.5 px-2.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+        className="flex h-full items-center gap-0.5 px-2.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
         title="New tab — pick agent"
       >
         <Plus size={14} />
