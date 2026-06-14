@@ -150,7 +150,10 @@ export function AgentTerminal({
     };
     ws.onclose = (ev) => {
       if (exited) return;
-      if (ev.code === 4002 || ev.code === 4001) {
+      // 4001 no-session/no-cwd · 4002 capped · 4003 spawn failed (CLI not on
+      // PATH etc.) — all are terminal conditions the user must act on, so show
+      // the reason instead of silently dropping into a reconnect.
+      if (ev.code === 4001 || ev.code === 4002 || ev.code === 4003) {
         setBlockedMsg(ev.reason || 'agent terminal unavailable');
       }
       setStatus('disconnected');
@@ -204,6 +207,12 @@ export function AgentTerminal({
                     ? 'Session ended.'
                     : `Agent exited abnormally (code ${exitCode}).`}
                 </p>
+                {exitCode !== 0 && (
+                  <p className="text-[11px] leading-relaxed text-[#c0caf5]/70">
+                    If it exited right away, check the agent CLI is installed,
+                    on PATH, and logged in.
+                  </p>
+                )}
                 <p className="text-[11px] leading-relaxed text-[#c0caf5]/60">
                   Restart keeps the conversation and pins. Closing the tab deletes
                   this session (conversation and pins included).

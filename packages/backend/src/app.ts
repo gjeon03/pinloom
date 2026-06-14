@@ -223,14 +223,31 @@ export async function createApp() {
       const agentRow = getDb()
         .prepare('SELECT agent FROM sessions WHERE id = ?')
         .get(sessionId) as { agent: string | null } | undefined;
+      const agentName = agentRow?.agent === 'codex' ? 'codex' : 'claude';
       const attach = agentRow?.agent === 'codex' ? attachCodexTerminal : attachAgentTerminal;
-      const result = await attach(
-        sessionId,
-        120,
-        40,
-        (data) => send({ t: 'o', d: data }),
-        (code) => send({ t: 'x', code }),
-      );
+      let result: Awaited<ReturnType<typeof attach>>;
+      try {
+        result = await attach(
+          sessionId,
+          120,
+          40,
+          (data) => send({ t: 'o', d: data }),
+          (code) => send({ t: 'x', code }),
+        );
+      } catch (err) {
+        // The CLI binary isn't on PATH (or pty.spawn otherwise failed). Without
+        // this the rejection escapes the handler, the socket just drops with no
+        // reason, and the client reconnect-loops forever. Surface it instead.
+        const m = err instanceof Error ? err.message : String(err);
+        const notFound = /ENOENT|not found|no such file/i.test(m);
+        socket.close(
+          4003,
+          notFound
+            ? `${agentName} CLI not found on PATH — install it or fix PATH`
+            : `failed to start ${agentName} terminal: ${m}`.slice(0, 120),
+        );
+        return;
+      }
       if (!result.ok) {
         if (result.reason === 'capped') {
           socket.close(4002, `agent terminal limit reached — close another and retry`);

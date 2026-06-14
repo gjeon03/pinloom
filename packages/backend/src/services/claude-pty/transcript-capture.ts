@@ -137,7 +137,20 @@ function persistNewLines(
     } else if (line.type === 'assistant') {
       const m = line.message?.model;
       if (m && m !== SYNTHETIC_MODEL) model = m;
+      // One transcript line can expand into several rows (assistant text +
+      // N tool_use blocks). They share line.uuid, but the dedupe key
+      // (session_id, transcript_uuid) must be ROW-unique or the 2nd+ rows
+      // get IGNORE'd. Derive a per-block uuid: block 0 keeps the raw uuid
+      // (so the assistant text row's transcript_uuid stays the line uuid),
+      // later blocks get a `#idx` suffix. The block index is by position
+      // (skipped blocks included) so a resume re-scan yields identical keys.
+      let blockIdx = 0;
       for (const block of blocksOf(line)) {
+        const uuid = !line.uuid
+          ? null
+          : blockIdx === 0
+            ? line.uuid
+            : `${line.uuid}#${blockIdx}`;
         if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
           persistMessage({
             sessionId: pinloomSessionId,
@@ -145,7 +158,7 @@ function persistNewLines(
             role: 'assistant',
             content: block.text,
             model,
-            transcriptUuid: line.uuid ?? null,
+            transcriptUuid: uuid,
           });
           persistedAny = true;
         } else if (block.type === 'tool_use') {
@@ -157,10 +170,11 @@ function persistNewLines(
             role: 'tool',
             content: summarizeToolCall(name, input),
             toolUse: { name, input },
-            transcriptUuid: line.uuid ?? null,
+            transcriptUuid: uuid,
           });
           persistedAny = true;
         }
+        blockIdx++;
       }
     }
   }
