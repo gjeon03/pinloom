@@ -226,6 +226,15 @@ export const api = {
         body: JSON.stringify({ transport }),
       },
     ),
+  getDefaultTransport: () =>
+    request<{ setting: 'sdk' | 'terminal' | null; effective: string }>(
+      '/api/settings/default-transport',
+    ),
+  setDefaultTransport: (transport: 'sdk' | 'terminal' | null) =>
+    request<{ setting: 'sdk' | 'terminal' | null; effective: string }>(
+      '/api/settings/default-transport',
+      { method: 'PUT', body: JSON.stringify({ transport }) },
+    ),
 
   listPins: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/pins`),
