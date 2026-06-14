@@ -1,9 +1,38 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Terminal as XTerm } from '@xterm/xterm';
+import { Terminal as XTerm, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import type { WsEvent } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
+
+// xterm palettes for the two app themes. The TUI emits its own ANSI colors;
+// we set the background/foreground/cursor/selection + a light-friendly base
+// 16-color ramp so a light app theme doesn't render the terminal on a dark
+// slab (and bright-white text stays legible on a light background).
+const DARK_XTERM: ITheme = {
+  background: '#1a1b26',
+  foreground: '#c0caf5',
+  cursor: '#c0caf5',
+  cursorAccent: '#1a1b26',
+  selectionBackground: '#33467c',
+};
+const LIGHT_XTERM: ITheme = {
+  background: '#fbfbfc',
+  foreground: '#26272e',
+  cursor: '#26272e',
+  cursorAccent: '#fbfbfc',
+  selectionBackground: '#bcd5fb',
+  // Pull the bright ramp down so a TUI using bold/bright white (common for
+  // emphasis) stays readable on the light background.
+  white: '#3b3d46',
+  brightWhite: '#26272e',
+};
+
+function currentXtermTheme(): ITheme {
+  return document.documentElement.dataset.theme === 'light'
+    ? LIGHT_XTERM
+    : DARK_XTERM;
+}
 
 // Terminal-chat mode: a session's real `claude` TUI rendered live in xterm.js,
 // wired to the backend /ws/agent-terminal pty socket. The human types directly
@@ -70,16 +99,21 @@ export function AgentTerminal({
         '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "Hack Nerd Font", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
       fontSize: 12,
       cursorBlink: true,
-      theme: {
-        background: '#1a1b26',
-        foreground: '#c0caf5',
-        cursor: '#c0caf5',
-        selectionBackground: '#33467c',
-      },
+      theme: currentXtermTheme(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
+
+    // Re-theme live when the app flips light/dark (theme.ts sets
+    // documentElement.dataset.theme). xterm applies options.theme on assignment.
+    const themeObserver = new MutationObserver(() => {
+      term.options.theme = currentXtermTheme();
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
     const safeFit = () => {
       try {
         fit.fit();
@@ -173,6 +207,7 @@ export function AgentTerminal({
       cancelAnimationFrame(rafId);
       if (resizeTimer) clearTimeout(resizeTimer);
       ro.disconnect();
+      themeObserver.disconnect();
       dataSub.dispose();
       ws.close();
       term.dispose();
@@ -190,7 +225,7 @@ export function AgentTerminal({
     'rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)]';
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#1a1b26]">
+    <div className="relative h-full w-full overflow-hidden bg-[var(--terminal-bg)]">
       <div ref={containerRef} className="h-full w-full" />
       {dispatchLocked && status === 'open' && (
         <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-[var(--color-accent)] px-3 py-1 text-[10px] font-medium text-black shadow">

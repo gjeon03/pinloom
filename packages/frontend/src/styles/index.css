@@ -26,8 +26,16 @@
   --color-injected-ink-hover: oklch(0.92 0.10 50);
 }
 
+/* Terminal (xterm) backdrop — matches the AgentTerminal xterm theme so the
+   wrapper + any pre-fit edge isn't a dark slab in light mode. Kept as plain
+   hex to mirror the xterm ITheme colors (xterm needs hex, not oklch). */
+:root {
+  --terminal-bg: #1a1b26;
+}
+
 /* Light theme — applied via `data-theme="light"` on <html>. */
 :root[data-theme='light'] {
+  --terminal-bg: #fbfbfc;
   --color-surface: oklch(0.99 0.003 260);
   --color-surface-2: oklch(0.965 0.004 260);
   --color-surface-3: oklch(0.925 0.005 260);
