@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { Minus, Plus } from 'lucide-react';
 import type { WsEvent } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 
@@ -60,6 +61,19 @@ export function AgentTerminal({
   // True briefly while a relaunch is in flight, so the kill's exit event doesn't
   // flash the "agent exited" overlay before the auto-reconnect lands.
   const relaunchingRef = useRef(false);
+  // Per-terminal font zoom, independent of browser/app zoom. Persisted globally
+  // (a font-size preference, not per-session). Refs let the +/- handlers reach
+  // the live term/fit/ws without re-running the create effect (which would drop
+  // scrollback). fontSizeRef carries the latest value into a reconnect respawn.
+  const TERMINAL_FONT_KEY = 'pinloom:terminalFontSize';
+  const [fontSize, setFontSize] = useState(() => {
+    const v = Number(localStorage.getItem(TERMINAL_FONT_KEY));
+    return v >= 8 && v <= 28 ? v : 12;
+  });
+  const fontSizeRef = useRef(fontSize);
+  const termRef = useRef<XTerm | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<Status>('open');
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [blockedMsg, setBlockedMsg] = useState<string | null>(null);
@@ -97,11 +111,13 @@ export function AgentTerminal({
     const term = new XTerm({
       fontFamily:
         '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "Hack Nerd Font", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-      fontSize: 12,
+      fontSize: fontSizeRef.current,
       cursorBlink: true,
       theme: currentXtermTheme(),
     });
+    termRef.current = term;
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
     term.open(container);
 
@@ -128,6 +144,7 @@ export function AgentTerminal({
     const ws = new WebSocket(
       `${proto}://${location.host}/ws/agent-terminal?session=${encodeURIComponent(sessionId)}`,
     );
+    wsRef.current = ws;
     let exited = false;
 
     // Shift+Enter → newline (not submit). Plain xterm encodes Shift+Enter the
@@ -239,8 +256,39 @@ export function AgentTerminal({
       dataSub.dispose();
       ws.close();
       term.dispose();
+      if (termRef.current === term) termRef.current = null;
+      if (fitRef.current === fit) fitRef.current = null;
+      if (wsRef.current === ws) wsRef.current = null;
     };
   }, [sessionId, connKey]);
+
+  // +/- font zoom for this terminal only (independent of app/browser zoom).
+  // Mutates the live term in place + refits so cols/rows + the pty resize stay
+  // in sync; never re-creates the term, so scrollback survives.
+  function changeFontSize(delta: number) {
+    const next = Math.max(8, Math.min(28, fontSizeRef.current + delta));
+    if (next === fontSizeRef.current) return;
+    fontSizeRef.current = next;
+    setFontSize(next);
+    try {
+      localStorage.setItem(TERMINAL_FONT_KEY, String(next));
+    } catch {
+      // localStorage unavailable; the change still applies for this session
+    }
+    const term = termRef.current;
+    if (term) {
+      term.options.fontSize = next;
+      try {
+        fitRef.current?.fit();
+      } catch {
+        // container not measurable; next ResizeObserver tick refits
+      }
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows }));
+      }
+    }
+  }
 
   const restart = () => {
     setStatus('open');
@@ -253,8 +301,35 @@ export function AgentTerminal({
     'rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)]';
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[var(--terminal-bg)]">
+    <div className="group relative h-full w-full overflow-hidden bg-[var(--terminal-bg)]">
       <div ref={containerRef} className="h-full w-full" />
+      {/* Per-terminal font zoom — appears on hover, top-right. Independent of
+          the app/browser zoom so you can size the TUI on its own. */}
+      {status === 'open' && (
+        <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={() => changeFontSize(-1)}
+            disabled={fontSize <= 8}
+            title="Smaller text"
+            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] disabled:opacity-40"
+          >
+            <Minus size={12} />
+          </button>
+          <span className="w-6 text-center text-[10px] tabular-nums text-[var(--color-ink-muted)]">
+            {fontSize}
+          </span>
+          <button
+            type="button"
+            onClick={() => changeFontSize(1)}
+            disabled={fontSize >= 28}
+            title="Larger text"
+            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] disabled:opacity-40"
+          >
+            <Plus size={12} />
+          </button>
+        </div>
+      )}
       {dispatchLocked && status === 'open' && (
         <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-[var(--color-accent)] px-3 py-1 text-[10px] font-medium text-black shadow">
           orchestrator running — input locked
