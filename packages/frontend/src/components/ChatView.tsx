@@ -938,26 +938,6 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
 
   return (
     <div className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full">
-      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center justify-between">
-        <span className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
-          Chat
-        </span>
-        <div className="flex items-center gap-1">
-          <Tooltip
-            label={wikiSyncing ? 'Syncing to wiki…' : 'Sync this session to wiki'}
-            side="bottom"
-          >
-            <button
-              type="button"
-              onClick={syncWiki}
-              disabled={wikiSyncing}
-              className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)] disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <BookPlus size={14} className={wikiSyncing ? 'animate-pulse' : ''} />
-            </button>
-          </Tooltip>
-        </div>
-      </header>
       <div className="flex-1 min-h-0 relative flex flex-col">
         <Virtuoso
           ref={virtuosoRef}
@@ -1185,6 +1165,19 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
               e.target.value = '';
             }}
           />
+          <Tooltip
+            label={wikiSyncing ? 'Syncing to wiki…' : 'Sync this session to wiki'}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={syncWiki}
+              disabled={wikiSyncing}
+              className="shrink-0 h-9 w-9 flex items-center justify-center rounded border border-[var(--color-border)] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <BookPlus size={14} className={wikiSyncing ? 'animate-pulse' : ''} />
+            </button>
+          </Tooltip>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}

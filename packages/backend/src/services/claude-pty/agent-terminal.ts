@@ -19,7 +19,11 @@ import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { buildSessionLaunchInput, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
-import { buildClaudeLaunch, type BuiltClaudeLaunch } from './launch-spec.js';
+import {
+  buildClaudeLaunch,
+  preTrustClaudeCwd,
+  type BuiltClaudeLaunch,
+} from './launch-spec.js';
 import { getStopHookServer } from './shared-server.js';
 import { submitToTui } from './tui-input.js';
 import { startCapture, stopCapture } from './transcript-capture.js';
@@ -115,6 +119,11 @@ async function spawnAgentTerminal(
   const launchInput = buildSessionLaunchInput(sessionId);
   if (!launchInput) return { reason: 'no-session' };
   if (!existsSync(launchInput.cwd)) return { reason: 'no-cwd' };
+
+  // Accept the folder-trust dialog before launch so a cold-start dispatch (no
+  // human to click through it) doesn't hang, and fresh-project sessions start
+  // clean. No-op once the cwd is already trusted.
+  preTrustClaudeCwd(launchInput.cwd);
 
   const server = await getStopHookServer();
   const launch = buildClaudeLaunch(

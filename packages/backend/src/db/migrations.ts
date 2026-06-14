@@ -376,6 +376,29 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         ON messages(transcript_uuid);
     `,
   },
+  {
+    id: 27,
+    // Make the (session_id, transcript_uuid) dedupe key REAL. Migration 26's
+    // comment claimed the index prevented double-inserts, but a plain index
+    // doesn't — dedupe relied solely on the capture writer's in-memory `seen`
+    // set, which resets every process start, so a resume re-scan could fold an
+    // already-captured turn twice. First collapse any such existing duplicates
+    // (keep the earliest row per key), then enforce uniqueness. Partial on
+    // transcript_uuid IS NOT NULL: SDK/codex/user rows have NULL and must stay
+    // freely insertable. persistMessage now uses INSERT OR IGNORE against this.
+    sql: `
+      DELETE FROM messages
+      WHERE transcript_uuid IS NOT NULL
+        AND rowid NOT IN (
+          SELECT MIN(rowid) FROM messages
+          WHERE transcript_uuid IS NOT NULL
+          GROUP BY session_id, transcript_uuid
+        );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_transcript_uuid
+        ON messages(session_id, transcript_uuid)
+        WHERE transcript_uuid IS NOT NULL;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

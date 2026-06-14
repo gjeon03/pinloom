@@ -26,8 +26,16 @@
   --color-injected-ink-hover: oklch(0.92 0.10 50);
 }
 
+/* Terminal (xterm) backdrop — matches the AgentTerminal xterm theme so the
+   wrapper + any pre-fit edge isn't a dark slab in light mode. Kept as plain
+   hex to mirror the xterm ITheme colors (xterm needs hex, not oklch). */
+:root {
+  --terminal-bg: #1a1b26;
+}
+
 /* Light theme — applied via `data-theme="light"` on <html>. */
 :root[data-theme='light'] {
+  --terminal-bg: #fbfbfc;
   --color-surface: oklch(0.99 0.003 260);
   --color-surface-2: oklch(0.965 0.004 260);
   --color-surface-3: oklch(0.925 0.005 260);
@@ -80,4 +88,56 @@ textarea::placeholder {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ─── dockview (project workspace splits) ───
+   Map dockview's theme variables onto the app palette. We always mount the
+   `dockview-theme-dark` class and override here — since the app tokens flip
+   with [data-theme], the dock follows the light/dark toggle automatically. */
+.dockview-theme-dark {
+  --dv-group-view-background-color: var(--color-surface);
+  --dv-tabs-and-actions-container-background-color: var(--color-surface);
+  --dv-tabs-and-actions-container-height: 34px;
+  --dv-tabs-and-actions-container-font-size: 13px;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--color-surface-2);
+  --dv-activegroup-visiblepanel-tab-color: var(--color-ink);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--color-surface);
+  --dv-activegroup-hiddenpanel-tab-color: var(--color-ink-muted);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-surface-2);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--color-ink-muted);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-surface);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-ink-muted);
+  --dv-tab-divider-color: var(--color-border);
+  --dv-separator-border: var(--color-border);
+  --dv-paneview-header-border-color: var(--color-border);
+  --dv-drag-over-background-color: color-mix(
+    in oklch,
+    var(--color-accent) 18%,
+    transparent
+  );
+  --dv-drag-over-border-color: var(--color-accent);
+  --dv-active-sash-color: var(--color-accent);
+  --dv-icon-hover-background-color: var(--color-surface-3);
+  --dv-scrollbar-background-color: var(--color-border);
+  --dv-context-menu-background-color: var(--color-surface-2);
+  --dv-context-menu-color: var(--color-ink);
+}
+
+/* The active tab gets the same accent underline the legacy strip used, so
+   the visual language carries over. Custom tab content supplies its own
+   padding (the default tab padding would double up around it). */
+.dockview-theme-dark .dv-tab.dv-active-tab {
+  box-shadow: inset 0 -2px 0 0 var(--color-accent);
+}
+.dockview-theme-dark .dv-tab {
+  padding: 0;
+}
+
+/* Header action containers (the '+' picker) should fill the tab bar height
+   so the buttons inside aren't squished against the top edge. */
+.dockview-theme-dark .dv-left-actions-container,
+.dockview-theme-dark .dv-right-actions-container {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
 }

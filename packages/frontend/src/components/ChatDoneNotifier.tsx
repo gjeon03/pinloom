@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { WS_RUNS_CHANNEL } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { useNotifications } from '../stores/notifications.js';
-import { getActiveSessionId } from '../stores/activeSession.js';
+import { isSessionVisible } from '../stores/activeSession.js';
 
 // Debounce a finish before raising the notification: when the user has
 // queued several messages, a turn boundary emits `finished` and then the next
@@ -36,10 +36,11 @@ export function ChatDoneNotifier() {
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
       pending.delete(sessionId);
-      // Skip the chat you're already watching in the foreground; if the
-      // window is hidden/blurred, notify anyway (you're not watching it).
+      // Skip a chat that's on screen in ANY dock pane (focused or a
+      // side-by-side split); if the window is hidden/blurred, notify
+      // anyway (you're not watching it).
       if (
-        getActiveSessionId() === sessionId &&
+        isSessionVisible(sessionId) &&
         document.visibilityState === 'visible'
       ) {
         return;

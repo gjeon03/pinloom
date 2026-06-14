@@ -7,10 +7,54 @@
 // only in the temp `--settings` file; `--setting-sources user,project` still
 // loads the user's own config alongside it.
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import type { McpStdioServerConfig } from '../agents/types.js';
+
+/**
+ * Pre-accept the claude folder-trust dialog for `cwd`. The interactive TUI
+ * prompts "Do you trust this folder?" on first launch in a directory, and
+ * `--dangerously-skip-permissions` does NOT cover it (that flag is about
+ * file R/W/exec, not trust). For a human attach the user just clicks through,
+ * but a dispatch cold-start has no human → the seeded prompt never runs and
+ * the orchestrator blocks until timeout. codex pre-trusts via config.toml;
+ * this is the claude analog — write the trust flags into ~/.claude.json the
+ * way the CLI itself records an accepted dialog.
+ *
+ * Best-effort: realpath the cwd (claude keys trust on the resolved path, and
+ * /tmp→/private/tmp etc. would otherwise miss), skip the write if already
+ * trusted, and swallow any error (the human can still accept the dialog).
+ * Opening a project in pinloom is itself the user's intent to trust its cwd.
+ */
+export function preTrustClaudeCwd(cwd: string): void {
+  try {
+    const real = realpathSync(cwd);
+    const f = path.join(homedir(), '.claude.json');
+    const cfg: { projects?: Record<string, Record<string, unknown>> } =
+      existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : {};
+    cfg.projects = cfg.projects ?? {};
+    const cur = cfg.projects[real] ?? {};
+    if (cur.hasTrustDialogAccepted && cur.hasCompletedProjectOnboarding) {
+      return; // already trusted — avoid a needless read-modify-write race
+    }
+    cfg.projects[real] = {
+      ...cur,
+      hasTrustDialogAccepted: true,
+      hasCompletedProjectOnboarding: true,
+    };
+    writeFileSync(f, JSON.stringify(cfg));
+  } catch {
+    // best-effort — fall back to the human accepting the dialog
+  }
+}
 
 // ESM forwarder claude's Stop hook executes: reads the hook JSON on stdin and
 // POSTs it to our localhost server, merging in OUR pinloom session id (argv[3],

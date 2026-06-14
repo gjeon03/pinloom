@@ -289,4 +289,7 @@ export type WsEvent =
   // MCP). Channel: `project:${projectId}`. ProjectPage appends it to the tab strip
   // so it shows up live without a refresh. Carries the full Session so the
   // listener doesn't need to re-fetch.
-  | { type: 'session_created'; projectId: string; session: Session };
+  | { type: 'session_created'; projectId: string; session: Session }
+  // Mirror of session_created for deletion: other windows on the project drop
+  // the session's tab/panel live instead of waiting for a remount reconcile.
+  | { type: 'session_deleted'; projectId: string; sessionId: string };

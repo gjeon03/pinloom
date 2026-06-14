@@ -6,8 +6,39 @@ import {
   listUserEnvVars,
   upsertUserEnvVar,
 } from '../services/user-env.js';
+import { getSetting, setSetting, deleteSetting } from '../services/app-settings.js';
+import {
+  claudeTransport,
+  DEFAULT_TRANSPORT_KEY,
+} from '../services/agents/index.js';
 
 export async function settingsRoutes(app: FastifyInstance) {
+  // Default transport for NEW sessions. `effective` is what claudeTransport()
+  // currently resolves to (setting → env → 'sdk'); `setting` is the explicit
+  // user choice (null = follow env/default). Only sdk|terminal are user-
+  // selectable; 'pty' stays an env-only/billing concern.
+  app.get('/api/settings/default-transport', async () => {
+    const setting = getSetting(DEFAULT_TRANSPORT_KEY);
+    return { setting, effective: claudeTransport() };
+  });
+
+  app.put<{ Body: { transport?: string | null } }>(
+    '/api/settings/default-transport',
+    async (req, reply) => {
+      const t = req.body?.transport;
+      if (t === null || t === undefined || t === '') {
+        deleteSetting(DEFAULT_TRANSPORT_KEY); // clear → follow env/default
+        return { setting: null, effective: claudeTransport() };
+      }
+      if (t !== 'sdk' && t !== 'terminal') {
+        reply.code(400);
+        return { error: "transport must be 'sdk' or 'terminal'" };
+      }
+      setSetting(DEFAULT_TRANSPORT_KEY, t);
+      return { setting: t, effective: claudeTransport() };
+    },
+  );
+
   app.get('/api/settings/env', async () => {
     return listUserEnvVars();
   });

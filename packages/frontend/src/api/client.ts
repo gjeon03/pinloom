@@ -218,6 +218,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ids }),
     }),
+  convertSessionTransport: (sessionId: string, transport: 'sdk' | 'terminal') =>
+    request<{ session: Session; resumeCarried: boolean }>(
+      `/api/sessions/${sessionId}/transport`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ transport }),
+      },
+    ),
+  getDefaultTransport: () =>
+    request<{ setting: 'sdk' | 'terminal' | null; effective: string }>(
+      '/api/settings/default-transport',
+    ),
+  setDefaultTransport: (transport: 'sdk' | 'terminal' | null) =>
+    request<{ setting: 'sdk' | 'terminal' | null; effective: string }>(
+      '/api/settings/default-transport',
+      { method: 'PUT', body: JSON.stringify({ transport }) },
+    ),
 
   listPins: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/pins`),

@@ -1,39 +1,83 @@
-import { useEffect, useRef, useState } from 'react';
-import useSWR from 'swr';
+// Project workspace: a dockview-managed main area (each tab = a panel; tabs
+// can be dragged into VSCode-style splits) plus the fixed chrome around it
+// (header, left pins rail, bottom panel). The dock layout persists per
+// project as DockviewApi.toJSON() under `pinloom:layout:<projectId>`; legacy
+// pre-dock keys (tabOrder / last*) are read once as a migration source.
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import useSWR, { mutate as globalMutate } from 'swr';
 import type {
+  AgentKind,
   Message,
   Project,
   ProjectNotepadSummary,
   Session,
 } from '@pinloom/shared';
+import {
+  DockviewReact,
+  themeDark,
+  type DockviewApi,
+  type DockviewReadyEvent,
+} from 'dockview-react';
 import { api, projectNotepadApi } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { cacheKeys } from '../api/cacheKeys.js';
-import { setActiveSessionId } from '../stores/activeSession.js';
-import { useNotifications } from '../stores/notifications.js';
 import {
-  SessionTabs,
-  type InlineCanvasTab,
-  type TabRef,
-} from '../components/SessionTabs.js';
-import { ChatView } from '../components/ChatView.js';
-import { AgentTerminal } from '../components/AgentTerminal.js';
-import { TerminalSidePanel } from '../components/TerminalSidePanel.js';
-import { ProjectNotepadView } from '../components/ProjectNotepadView.js';
+  setActiveSessionId,
+  setVisibleSessionIds,
+} from '../stores/activeSession.js';
+import { useNotifications } from '../stores/notifications.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
 import { EditableTitle } from '../components/EditableTitle.js';
 import { SessionPickerModal } from '../components/SessionPickerModal.js';
-import { TeamCanvasPage } from './TeamCanvasPage.js';
 import { applyPinChange } from '../utils/pins.js';
+import { buildTeamRoles } from '../components/tabs/teamRoles.js';
+import {
+  DockProvider,
+  type DockContextValue,
+  type TabMenuRequest,
+} from '../components/dock/DockContext.js';
+import {
+  ChatPanel,
+  TerminalPanel,
+  CanvasPanel,
+  NotepadPanel,
+  DockWatermark,
+} from '../components/dock/panels.js';
+import { ProjectTab } from '../components/dock/ProjectTab.js';
+import { GroupActions } from '../components/dock/GroupActions.js';
+import { TabMenuHost } from '../components/dock/TabMenuHost.js';
+import {
+  loadLayout,
+  saveLayout,
+  loadLegacyState,
+  reconcileOrder,
+  reconcileLayout,
+  panelId,
+  parsePanelId,
+  type InlineCanvasTab,
+  type TabRef,
+} from '../components/dock/layout.js';
 
 // A session that renders as a live terminal (claude OR codex) instead of the
-// structured ChatView. Structured sessions (transport !== 'terminal') of either
-// agent still use ChatView.
+// structured ChatView. Structured sessions (transport !== 'terminal') of
+// either agent still use ChatView.
 function isTerminalAgentSession(s: Session): boolean {
-  return s.transport === 'terminal' && (s.agent === 'claude' || s.agent === 'codex');
+  return (
+    s.transport === 'terminal' && (s.agent === 'claude' || s.agent === 'codex')
+  );
 }
+
+// Stable component maps for DockviewReact — defined at module level so the
+// dock doesn't re-register components on every render.
+const DOCK_COMPONENTS = {
+  chat: ChatPanel,
+  terminal: TerminalPanel,
+  canvas: CanvasPanel,
+  notepad: NotepadPanel,
+};
 
 export function ProjectPage({
   project,
@@ -43,48 +87,75 @@ export function ProjectPage({
   onRenamed?: (project: Project) => void;
 }) {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeSession, setActiveSession] = useState<Session | null>(null);
-  const [pins, setPins] = useState<Message[]>([]);
-  const [sendingPin, setSendingPin] = useState<Message | null>(null);
-  // Inline canvas tabs the user opened next to chats. Persisted per
-  // project in localStorage so they survive cross-project navigation.
-  // The active view is either a session OR a canvas tab — we track
-  // which so the right panel renders accordingly.
   const [canvasTabs, setCanvasTabs] = useState<InlineCanvasTab[]>([]);
-  const [activeCanvasTeamId, setActiveCanvasTeamId] = useState<string | null>(
-    null,
-  );
-  // Per-project notepad tabs (loaded from the DB) + which one is open.
-  // A notepad being active means neither a session nor a canvas is the
-  // visible right-pane view.
   const [notepads, setNotepads] = useState<ProjectNotepadSummary[]>([]);
-  const [activeNotepadId, setActiveNotepadId] = useState<string | null>(null);
-  // Unified ordering of session + canvas tabs as the user has arranged
-  // them. The two underlying arrays (sessions / canvasTabs) keep their
-  // own shapes for everything else (data fetching, persistence); this
-  // array only governs the strip order.
-  const [tabOrder, setTabOrder] = useState<TabRef[]>([]);
+  // Which panel currently holds dock focus — the single source for the
+  // "active view" everything downstream reads (pins rail, bottom panel,
+  // notification suppression). Derived from onDidActivePanelChange.
+  const [focused, setFocused] = useState<TabRef | null>(null);
+  // Every session visible across the dock's groups (each group's selected
+  // tab). With splits, more than one session can be on screen at once —
+  // all of them count as "being watched" for notifications/read-state.
+  const [visibleSet, setVisibleSet] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const [sendingPin, setSendingPin] = useState<{
+    pin: Message;
+    sessionId: string;
+  } | null>(null);
+  const [tabMenu, setTabMenu] = useState<TabMenuRequest | null>(null);
+  const [stripError, setStripError] = useState<string | null>(null);
+  const [codexAvailable, setCodexAvailable] = useState<boolean | null>(null);
+  const [dataReady, setDataReady] = useState(false);
+  const [dock, setDock] = useState<DockviewApi | null>(null);
   const { markSessionRead } = useNotifications();
 
-  // Live-append sessions created out-of-band for this project (e.g. an
-  // orchestrator spawning a worker via MCP). Without this the new tab only
-  // surfaces after a manual refresh. We append but DON'T switch to it — the
-  // user didn't open it, so don't yank their active view.
-  useWebSocket(`project:${project.id}`, (ev) => {
-    if (ev.type !== 'session_created' || ev.projectId !== project.id) return;
-    const incoming = ev.session;
-    setSessions((prev) =>
-      prev.some((s) => s.id === incoming.id) ? prev : [...prev, incoming],
-    );
-    setTabOrder((prev) => {
-      if (prev.some((r) => r.kind === 'session' && r.id === incoming.id)) {
-        return prev;
-      }
-      const next: TabRef[] = [...prev, { kind: 'session', id: incoming.id }];
-      persistTabOrder(project.id, next);
-      return next;
-    });
-  });
+  const dockRef = useRef<DockviewApi | null>(null);
+  const builtRef = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionsRef = useRef<Session[]>(sessions);
+  const canvasesRef = useRef<InlineCanvasTab[]>(canvasTabs);
+  const notepadsRef = useRef<ProjectNotepadSummary[]>(notepads);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+  useEffect(() => {
+    canvasesRef.current = canvasTabs;
+  }, [canvasTabs]);
+  useEffect(() => {
+    notepadsRef.current = notepads;
+  }, [notepads]);
+
+  const activeSession = useMemo(
+    () =>
+      focused?.kind === 'session'
+        ? sessions.find((s) => s.id === focused.id) ?? null
+        : null,
+    [focused, sessions],
+  );
+
+  // Team membership for tab badges (shared SWR key, centrally revalidated
+  // by App.tsx on `pinloom:teams-changed`).
+  const { data: teams = [] } = useSWR(cacheKeys.teams(), () => api.listTeams());
+  const rolesBySessionId = useMemo(() => buildTeamRoles(teams), [teams]);
+
+  // One-shot health probe to know whether the Codex CLI is on PATH. Only
+  // dims the '+' picker option — the backend reports a clear spawn error
+  // if the user tries anyway.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .health()
+      .then((h) => {
+        if (!cancelled) setCodexAvailable(h.agents?.codex?.installed ?? false);
+      })
+      .catch(() => {
+        if (!cancelled) setCodexAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function persistCanvasTabs(projectId: string, tabs: InlineCanvasTab[]) {
     try {
@@ -93,116 +164,160 @@ export function ProjectPage({
         JSON.stringify(tabs),
       );
     } catch {
-      // localStorage may be unavailable (private mode, quota); the
-      // tabs still work for this session, just won't survive reload.
+      // localStorage may be unavailable (private mode, quota); the tabs
+      // still work for this session, just won't survive reload.
     }
   }
 
-  function persistTabOrder(projectId: string, order: TabRef[]) {
-    try {
-      localStorage.setItem(
-        `pinloom:tabOrder:${projectId}`,
-        JSON.stringify(order),
-      );
-    } catch {
-      // see persistCanvasTabs
+  // ─── dock panel helpers ───
+
+  // A captured groupId can go stale before an (async) addPanel runs — e.g.
+  // the group collapsed when its last panel was removed, or closed during an
+  // awaited session create. dockview THROWS on an unknown referenceGroup, so
+  // validate and fall back to "no anchor" (active group) instead.
+  function liveGroupId(
+    dv: DockviewApi,
+    groupId: string | null | undefined,
+  ): string | null {
+    if (!groupId) return null;
+    return dv.groups.some((g) => g.id === groupId) ? groupId : null;
+  }
+
+  function addSessionPanel(
+    s: Session,
+    opts?: { inactive?: boolean; groupId?: string | null },
+  ) {
+    const dv = dockRef.current;
+    if (!dv) return;
+    const id = panelId('session', s.id);
+    const existing = dv.getPanel(id);
+    if (existing) {
+      if (!opts?.inactive) existing.api.setActive();
+      return;
+    }
+    dv.addPanel({
+      id,
+      // Component chosen at add time: a session's transport is pinned at
+      // creation, so this never goes stale.
+      component: isTerminalAgentSession(s) ? 'terminal' : 'chat',
+      params: { kind: 'session', sessionId: s.id },
+      inactive: opts?.inactive ?? false,
+      ...(liveGroupId(dv, opts?.groupId)
+        ? { position: { referenceGroup: liveGroupId(dv, opts?.groupId)! } }
+        : {}),
+    });
+  }
+
+  function addCanvasPanel(
+    teamId: string,
+    opts?: { inactive?: boolean; groupId?: string | null },
+  ) {
+    const dv = dockRef.current;
+    if (!dv) return;
+    const id = panelId('canvas', teamId);
+    const existing = dv.getPanel(id);
+    if (existing) {
+      if (!opts?.inactive) existing.api.setActive();
+      return;
+    }
+    dv.addPanel({
+      id,
+      component: 'canvas',
+      params: { kind: 'canvas', teamId },
+      inactive: opts?.inactive ?? false,
+      ...(liveGroupId(dv, opts?.groupId)
+        ? { position: { referenceGroup: liveGroupId(dv, opts?.groupId)! } }
+        : {}),
+    });
+  }
+
+  function addNotepadPanel(
+    notepadId: string,
+    opts?: { inactive?: boolean; groupId?: string | null },
+  ) {
+    const dv = dockRef.current;
+    if (!dv) return;
+    const id = panelId('notepad', notepadId);
+    const existing = dv.getPanel(id);
+    if (existing) {
+      if (!opts?.inactive) existing.api.setActive();
+      return;
+    }
+    dv.addPanel({
+      id,
+      component: 'notepad',
+      params: { kind: 'notepad', notepadId },
+      inactive: opts?.inactive ?? false,
+      ...(liveGroupId(dv, opts?.groupId)
+        ? { position: { referenceGroup: liveGroupId(dv, opts?.groupId)! } }
+        : {}),
+    });
+  }
+
+  function addPanelForRef(
+    ref: TabRef,
+    opts?: { inactive?: boolean; groupId?: string | null },
+  ) {
+    if (ref.kind === 'session') {
+      const s = sessionsRef.current.find((x) => x.id === ref.id);
+      if (s) addSessionPanel(s, opts);
+    } else if (ref.kind === 'canvas') {
+      addCanvasPanel(ref.id, opts);
+    } else {
+      addNotepadPanel(ref.id, opts);
     }
   }
 
-  // Reconcile a persisted order against the current set of sessions +
-  // canvases: drop refs whose targets no longer exist, append any
-  // newcomers at the tail in source-array order. Returns a fresh array
-  // so callers can persist it without having to dedupe again.
-  function reconcileOrder(
-    persisted: TabRef[] | null,
-    sessionIds: string[],
-    canvasIds: string[],
-    notepadIds: string[],
-  ): TabRef[] {
-    const sessionSet = new Set(sessionIds);
-    const canvasSet = new Set(canvasIds);
-    const notepadSet = new Set(notepadIds);
-    const seen = new Set<string>();
-    const out: TabRef[] = [];
-    for (const ref of persisted ?? []) {
-      if (!ref || typeof ref !== 'object') continue;
-      const key = `${ref.kind}:${ref.id}`;
-      if (seen.has(key)) continue;
-      if (ref.kind === 'session' && sessionSet.has(ref.id)) {
-        out.push(ref);
-        seen.add(key);
-      } else if (ref.kind === 'canvas' && canvasSet.has(ref.id)) {
-        out.push(ref);
-        seen.add(key);
-      } else if (ref.kind === 'notepad' && notepadSet.has(ref.id)) {
-        out.push(ref);
-        seen.add(key);
-      }
-    }
-    for (const id of sessionIds) {
-      if (!seen.has(`session:${id}`)) {
-        out.push({ kind: 'session', id });
-        seen.add(`session:${id}`);
-      }
-    }
-    for (const id of canvasIds) {
-      if (!seen.has(`canvas:${id}`)) {
-        out.push({ kind: 'canvas', id });
-        seen.add(`canvas:${id}`);
-      }
-    }
-    for (const id of notepadIds) {
-      if (!seen.has(`notepad:${id}`)) {
-        out.push({ kind: 'notepad', id });
-        seen.add(`notepad:${id}`);
-      }
-    }
-    return out;
+  function removePanelFor(kind: TabRef['kind'], id: string) {
+    const dv = dockRef.current;
+    const panel = dv?.getPanel(panelId(kind, id));
+    if (dv && panel) dv.removePanel(panel);
   }
 
-  // Persist which view (session vs. canvas) was active for this project,
-  // so returning to it restores the same tab. Written synchronously from
-  // each handler instead of via useEffect to avoid the project-switch
-  // race where a stale value would clobber the new project's key.
-  function persistActiveCanvas(projectId: string, teamId: string | null) {
-    try {
-      const key = `pinloom:lastCanvas:${projectId}`;
-      if (teamId) localStorage.setItem(key, teamId);
-      else localStorage.removeItem(key);
-    } catch {
-      // see persistCanvasTabs
+  // Best-effort mirror of the visual session order back to local state +
+  // the backend, so listSessions' first-load order roughly matches the
+  // strip even if localStorage is wiped.
+  function syncSessionOrder(dv: DockviewApi) {
+    const ids: string[] = [];
+    for (const group of dv.groups) {
+      for (const p of group.panels) {
+        const ref = parsePanelId(p.id);
+        if (ref?.kind === 'session') ids.push(ref.id);
+      }
     }
+    const current = sessionsRef.current;
+    if (ids.length !== current.length) return;
+    if (current.every((s, i) => s.id === ids[i])) return;
+    const byId = new Map(current.map((s) => [s.id, s]));
+    const ordered = ids
+      .map((id) => byId.get(id))
+      .filter((s): s is Session => s != null);
+    if (ordered.length !== current.length) return;
+    setSessions(ordered);
+    void api.reorderSessions(project.id, ids).catch(() => {
+      // best-effort; the dock layout JSON is the real source of truth
+    });
   }
 
-  function persistActiveNotepad(projectId: string, notepadId: string | null) {
-    try {
-      const key = `pinloom:lastNotepad:${projectId}`;
-      if (notepadId) localStorage.setItem(key, notepadId);
-      else localStorage.removeItem(key);
-    } catch {
-      // see persistCanvasTabs
-    }
-  }
+  // ─── data load (per project) ───
 
   useEffect(() => {
     let cancelled = false;
+    builtRef.current = false;
+    setDataReady(false);
     setSessions([]);
-    setActiveSession(null);
-    setPins([]);
     setNotepads([]);
-    setActiveNotepadId(null);
-    // Restore inline canvas tabs for this project. We persist on every
-    // mutation rather than via a useEffect — a setter-based approach
-    // avoids the race where a project switch's first persist effect
-    // overwrites the new project's saved tabs with the previous state.
+    setFocused(null);
+    setTabMenu(null);
+    setSendingPin(null);
+    // Restore inline canvas tabs for this project (teamName lives only
+    // here — the dock layout references canvases by teamId).
     let restored: InlineCanvasTab[] = [];
     try {
       const raw = localStorage.getItem(`pinloom:canvasTabs:${project.id}`);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          // Defensive shape check — a tampered or older-schema entry
-          // shouldn't poison the strip with undefineds later.
           restored = parsed.filter(
             (t): t is InlineCanvasTab =>
               t &&
@@ -216,45 +331,6 @@ export function ProjectPage({
       restored = [];
     }
     setCanvasTabs(restored);
-    // Restore which canvas tab was active, but only if it still exists
-    // in the persisted strip — otherwise fall back to the chat session.
-    const lastCanvasId = localStorage.getItem(
-      `pinloom:lastCanvas:${project.id}`,
-    );
-    const restoreCanvas =
-      lastCanvasId && restored.some((t) => t.teamId === lastCanvasId);
-    setActiveCanvasTeamId(restoreCanvas ? lastCanvasId : null);
-
-    const lastKey = `pinloom:lastSession:${project.id}`;
-    const lastId = localStorage.getItem(lastKey);
-
-    // Read the persisted unified tab order once we know what sessions
-    // + canvases actually exist; reconcile against both to drop dead
-    // refs and append newcomers in source-array order.
-    let persistedOrder: TabRef[] | null = null;
-    try {
-      const raw = localStorage.getItem(`pinloom:tabOrder:${project.id}`);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          persistedOrder = parsed.filter(
-            (t): t is TabRef =>
-              t &&
-              typeof t === 'object' &&
-              (t.kind === 'session' ||
-                t.kind === 'canvas' ||
-                t.kind === 'notepad') &&
-              typeof t.id === 'string',
-          );
-        }
-      }
-    } catch {
-      persistedOrder = null;
-    }
-
-    const lastNotepadId = localStorage.getItem(
-      `pinloom:lastNotepad:${project.id}`,
-    );
 
     Promise.all([
       api.listSessions(project.id),
@@ -264,39 +340,14 @@ export function ProjectPage({
     ]).then(async ([list, npList]) => {
       if (cancelled) return;
       setNotepads(npList);
-      // If a notepad was the last active view, restore it (and make sure
-      // no canvas stays highlighted underneath).
-      if (lastNotepadId && npList.some((n) => n.id === lastNotepadId)) {
-        setActiveNotepadId(lastNotepadId);
-        setActiveCanvasTeamId(null);
-      }
-      const notepadIds = npList.map((n) => n.id);
       if (list.length > 0) {
         setSessions(list);
-        const remembered = lastId ? list.find((s) => s.id === lastId) : null;
-        setActiveSession(remembered ?? list[0]);
-        const order = reconcileOrder(
-          persistedOrder,
-          list.map((s) => s.id),
-          restored.map((c) => c.teamId),
-          notepadIds,
-        );
-        setTabOrder(order);
-        persistTabOrder(project.id, order);
       } else {
         const created = await api.createSession(project.id, { title: null });
         if (cancelled) return;
         setSessions([created]);
-        setActiveSession(created);
-        const order = reconcileOrder(
-          persistedOrder,
-          [created.id],
-          restored.map((c) => c.teamId),
-          notepadIds,
-        );
-        setTabOrder(order);
-        persistTabOrder(project.id, order);
       }
+      setDataReady(true);
     });
 
     return () => {
@@ -304,110 +355,264 @@ export function ProjectPage({
     };
   }, [project.id]);
 
-  // Remember last active session per project
+  // ─── dock build: restore saved layout or migrate from legacy keys ───
+
+  useEffect(() => {
+    const dv = dock;
+    if (!dv || !dataReady || builtRef.current) return;
+    // Never build against a stale/disposed dock (StrictMode's simulated
+    // remount disposes the first instance; dockRef tracks the live one —
+    // the effect re-runs when `dock` state catches up).
+    if (dockRef.current !== dv) return;
+
+    const sessionIds = sessionsRef.current.map((s) => s.id);
+    const canvasIds = canvasesRef.current.map((c) => c.teamId);
+    const notepadIds = notepadsRef.current.map((n) => n.id);
+    const legacy = loadLegacyState(project.id);
+
+    const saved = loadLayout(project.id);
+    let restoredLayout = false;
+    if (saved) {
+      try {
+        dv.fromJSON(saved);
+        restoredLayout = true;
+      } catch (err) {
+        // Corrupt layout — fall through to the migration builder. Never
+        // leave the dock blank. Logged because a failing restore silently
+        // flattens the user's split arrangement.
+        console.warn('[dock] layout restore failed, rebuilding:', err);
+        try {
+          dv.clear();
+        } catch {
+          // already empty
+        }
+      }
+    }
+
+    if (restoredLayout) {
+      const added = reconcileLayout(
+        dv,
+        sessionIds,
+        canvasIds,
+        notepadIds,
+        // Anchor to the last existing group so an out-of-band arrival never
+        // opens a surprise split (see the migration loop's group anchoring).
+        (ref) =>
+          addPanelForRef(ref, {
+            inactive: true,
+            groupId: dv.groups[dv.groups.length - 1]?.id ?? null,
+          }),
+      );
+      // A session moved in from another project pre-seeds lastSession —
+      // if its panel was just added by reconcile, surface it.
+      if (
+        legacy.lastSessionId &&
+        added.some(
+          (r) => r.kind === 'session' && r.id === legacy.lastSessionId,
+        )
+      ) {
+        dv.getPanel(panelId('session', legacy.lastSessionId))?.api.setActive();
+      }
+    } else {
+      // First dock mount for this project: build panels in the legacy
+      // strip order (or default source order) and restore the last
+      // active view, so the cutover is invisible.
+      const order = reconcileOrder(
+        legacy.order,
+        sessionIds,
+        canvasIds,
+        notepadIds,
+      );
+      // Anchor every panel to the FIRST panel's group: on an empty dock,
+      // `addPanel({inactive:true})` with no position leaves no active group,
+      // so each subsequent add would otherwise open a group of its own —
+      // i.e. one split per tab instead of one strip.
+      let migrateGroupId: string | null = null;
+      for (const ref of order) {
+        addPanelForRef(ref, { inactive: true, groupId: migrateGroupId });
+        if (!migrateGroupId) {
+          migrateGroupId =
+            dv.getPanel(panelId(ref.kind, ref.id))?.group.id ?? null;
+        }
+      }
+      const activate =
+        (legacy.lastNotepadId &&
+          notepadIds.includes(legacy.lastNotepadId) && {
+            kind: 'notepad' as const,
+            id: legacy.lastNotepadId,
+          }) ||
+        (legacy.lastCanvasId &&
+          canvasIds.includes(legacy.lastCanvasId) && {
+            kind: 'canvas' as const,
+            id: legacy.lastCanvasId,
+          }) ||
+        (legacy.lastSessionId &&
+          sessionIds.includes(legacy.lastSessionId) && {
+            kind: 'session' as const,
+            id: legacy.lastSessionId,
+          }) ||
+        (order[0] ?? null);
+      if (activate) {
+        dv.getPanel(panelId(activate.kind, activate.id))?.api.setActive();
+      }
+    }
+
+    builtRef.current = true;
+    // Initial focus + visible-set sync (the change events may have fired
+    // before we were ready to honor them).
+    const active = dv.activePanel;
+    setFocused(active ? parsePanelId(active.id) : null);
+    refreshVisibleSet(dv);
+    // Persist the (possibly migrated) layout right away.
+    try {
+      saveLayout(project.id, dv.toJSON());
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dock, dataReady, project.id]);
+
+  // Recompute the visible-session set from each group's selected tab.
+  // Cheap (groups are few); identity-preserving so downstream effects only
+  // fire on real changes.
+  function refreshVisibleSet(dv: DockviewApi) {
+    const next = new Set<string>();
+    for (const g of dv.groups) {
+      const ref = g.activePanel ? parsePanelId(g.activePanel.id) : null;
+      if (ref?.kind === 'session') next.add(ref.id);
+    }
+    setVisibleSet((prev) => {
+      if (prev.size === next.size && [...next].every((id) => prev.has(id))) {
+        return prev;
+      }
+      return next;
+    });
+  }
+
+  function onDockReady(event: DockviewReadyEvent) {
+    dockRef.current = event.api;
+    setDock(event.api);
+    event.api.onDidActivePanelChange((panel) => {
+      setFocused(panel ? parsePanelId(panel.id) : null);
+      refreshVisibleSet(event.api);
+    });
+    event.api.onDidLayoutChange(() => {
+      refreshVisibleSet(event.api);
+      if (!builtRef.current) return;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        // A late timer from a dock that's been replaced (project switch
+        // remounts DockviewReact) must not run — toJSON on a disposed dock
+        // can serialize an EMPTY grid and clobber the old project's saved
+        // layout. dockRef always points at the live dock.
+        if (dockRef.current !== event.api) return;
+        try {
+          saveLayout(project.id, event.api.toJSON());
+        } catch {
+          // dock disposed mid-debounce — drop the save
+        }
+        syncSessionOrder(event.api);
+      }, 300);
+    });
+  }
+
+  // Clear any pending debounced save when the project changes (ProjectPage
+  // does NOT unmount on a project switch — only the keyed DockviewReact
+  // does) and on unmount.
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [project.id]);
+
+  // ─── single-active chokepoints (unchanged semantics) ───
+
+  // Remember last active session per project (move-session pre-seeds the
+  // target project's key; also keeps rollback to the legacy strip sane).
   useEffect(() => {
     if (!activeSession) return;
-    localStorage.setItem(
-      `pinloom:lastSession:${project.id}`,
-      activeSession.id,
-    );
+    localStorage.setItem(`pinloom:lastSession:${project.id}`, activeSession.id);
   }, [project.id, activeSession?.id]);
 
-  // Publish which session is visible in the foreground so the chat-done
-  // notifier can suppress notifications for the chat you're looking at,
-  // and confirm any pending agent notifications for that session — landing
-  // on the tab is what counts as "I've checked this agent".
-  const visibleSessionId =
-    activeCanvasTeamId === null && activeNotepadId === null
-      ? activeSession?.id ?? null
-      : null;
+  // Publish the focused session (pins rail / bottom panel scope) and the
+  // full visible set (chat-done suppression + read-state across splits).
+  // Every session the user can SEE counts as checked — a tab landing on
+  // screen is what confirms its agent notifications.
+  const visibleSessionId = activeSession?.id ?? null;
   useEffect(() => {
     setActiveSessionId(visibleSessionId);
-    if (visibleSessionId) markSessionRead(visibleSessionId);
     return () => setActiveSessionId(null);
-  }, [visibleSessionId, markSessionRead]);
+  }, [visibleSessionId]);
 
-  // Cover the "session was foreground but window hidden when the agent
-  // finished" case: the notification was created with read=false and the
-  // tab-switch effect above didn't re-run because the active session id
-  // never changed. When the user returns to the window, retroactively
-  // confirm any chat-done items for the session they're already on.
+  useEffect(() => {
+    setVisibleSessionIds(visibleSet);
+    for (const id of visibleSet) markSessionRead(id);
+    return () => setVisibleSessionIds(new Set());
+  }, [visibleSet, markSessionRead]);
+
+  // Cover the "session was on screen but window hidden when the agent
+  // finished" case: the visible-set effect above didn't re-run because the
+  // set never changed. When the user returns to the window, retroactively
+  // confirm chat-done items for every session they can see.
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState !== 'visible') return;
-      if (visibleSessionId) markSessionRead(visibleSessionId);
+      for (const id of visibleSet) markSessionRead(id);
     }
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [visibleSessionId, markSessionRead]);
+  }, [visibleSet, markSessionRead]);
 
-  // Per-session pins via SWR — the cache survives session tab switches
-  // so going back to a previously visited session renders pins from memory
-  // instead of waiting on a fresh HTTP fetch. WS handles incremental
-  // updates; SWR is just the initial seed + focus revalidate safety net.
+  // Per-session pins via SWR — the focused session's pins feed the left
+  // rail; terminal panels fetch their own per-panel (see TerminalPanel).
   const { data: pinsData } = useSWR(
     activeSession ? cacheKeys.sessionPins(activeSession.id) : null,
     activeSession ? () => api.listPins(activeSession.id) : null,
   );
-  useEffect(() => {
-    if (!activeSession) {
-      setPins([]);
-      return;
-    }
-    if (pinsData) setPins(pinsData);
-  }, [activeSession?.id, pinsData]);
+  const pins = activeSession ? pinsData ?? [] : [];
 
-  // Canvas "go to tab" button. Cross-project navigation is handled by
-  // the canvas via navigate() + lastSession seeding; for same-project
-  // jumps the route doesn't change, so we listen here and switch the
-  // active tab in-place (also clearing any inline canvas tab focus).
-  // Read sessions through a ref so the listener doesn't tear down /
-  // re-attach on every session-state change — that would otherwise
-  // open a window where dispatched events get dropped.
-  const sessionsRef = useRef<Session[]>(sessions);
-  useEffect(() => {
-    sessionsRef.current = sessions;
-  }, [sessions]);
-  useEffect(() => {
-    function onGoto(event: Event) {
-      const detail = (event as CustomEvent<{
-        projectId: string;
-        sessionId: string;
-      }>).detail;
-      if (!detail || detail.projectId !== project.id) return;
-      const target = sessionsRef.current.find(
-        (s) => s.id === detail.sessionId,
-      );
-      if (!target) return;
-      setActiveCanvasTeamId(null);
-      persistActiveCanvas(project.id, null);
-      setActiveNotepadId(null);
-      persistActiveNotepad(project.id, null);
-      setActiveSession(target);
+  function handlePinsChange(updated: Message) {
+    // Mutate the per-session SWR key — every consumer (left rail, terminal
+    // side panels, pop-out pins page) reads through it. On a cache MISS
+    // (pin event for a session whose pins were never fetched) follow up
+    // with a revalidation so the rail doesn't flash a one-pin partial list.
+    let hadCache = true;
+    void globalMutate(
+      cacheKeys.sessionPins(updated.sessionId),
+      (prev: Message[] | undefined) => {
+        hadCache = prev !== undefined;
+        return applyPinChange(prev ?? [], updated);
+      },
+      { revalidate: false },
+    ).then(() => {
+      if (!hadCache) void globalMutate(cacheKeys.sessionPins(updated.sessionId));
+    });
+  }
+
+  // ─── out-of-band session arrivals ───
+
+  // Live-append sessions created out-of-band for this project (e.g. an
+  // orchestrator spawning a worker via MCP). We append but DON'T switch to
+  // it — the user didn't open it, so don't yank their active view.
+  useWebSocket(`project:${project.id}`, (ev) => {
+    if (ev.type === 'session_created' && ev.projectId === project.id) {
+      spliceInSession(ev.session);
+    } else if (ev.type === 'session_deleted' && ev.projectId === project.id) {
+      // Deleted from another window (or the backend) — drop the tab live.
+      // Idempotent for the window that initiated the delete (filter no-ops,
+      // panel already gone).
+      removeSessionLocally(ev.sessionId);
     }
-    window.addEventListener('pinloom:goto-session', onGoto as EventListener);
-    return () =>
-      window.removeEventListener(
-        'pinloom:goto-session',
-        onGoto as EventListener,
-      );
-  }, [project.id]);
+  });
 
   // A session created via an inline modal (e.g. the AddWorker form's
-  // "Create new session" button) doesn't pass through this strip's
-  // create flow, so the parent doesn't know about it until the page
-  // remounts. Listen for the dispatch and splice it in when it lives
-  // in the current project. We deliberately do NOT auto-select it —
-  // the user is mid-flow on a different tab and a surprise switch
-  // would be jarring.
+  // "Create new session" button) dispatches this window event.
   useEffect(() => {
     function onSessionCreated(event: Event) {
       const detail = (event as CustomEvent<{ session: Session }>).detail;
       const s = detail?.session;
       if (!s || s.projectId !== project.id) return;
-      setSessions((prev) =>
-        prev.some((p) => p.id === s.id) ? prev : [...prev, s],
-      );
+      spliceInSession(s);
     }
     window.addEventListener(
       'pinloom:session-created',
@@ -418,31 +623,271 @@ export function ProjectPage({
         'pinloom:session-created',
         onSessionCreated as EventListener,
       );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
-  function handlePinsChange(updated: Message) {
-    setPins((prev) => applyPinChange(prev, updated));
+  function spliceInSession(s: Session) {
+    setSessions((prev) =>
+      prev.some((p) => p.id === s.id) ? prev : [...prev, s],
+    );
+    // Pre-build arrivals are picked up by the build's reconcile pass.
+    if (builtRef.current) {
+      // setSessions hasn't flushed to sessionsRef yet — add directly.
+      const dv = dockRef.current;
+      if (dv && !dv.getPanel(panelId('session', s.id))) {
+        const lastGroup = dv.groups[dv.groups.length - 1]?.id ?? null;
+        dv.addPanel({
+          id: panelId('session', s.id),
+          component: isTerminalAgentSession(s) ? 'terminal' : 'chat',
+          params: { kind: 'session', sessionId: s.id },
+          inactive: true,
+          // Anchor so an inactive add can never open a surprise split.
+          ...(lastGroup ? { position: { referenceGroup: lastGroup } } : {}),
+        });
+      }
+    }
   }
 
-  // The user clicked "Close tab" on a terminal session's exit overlay (its claude
-  // TUI quit). Closing the tab means deleting the session — same as the X button.
-  // The overlay is the confirm (we don't auto-delete on exit). Durable knowledge
-  // lives in the wiki, so a finished session is meant to be cleared.
-  function closeTerminalSession(id: string) {
-    void api.deleteSession(id).catch(() => {
-      // best-effort: the pty already exited; a failed delete just leaves the row.
-    });
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.id !== id);
-      if (activeSession?.id === id) setActiveSession(next[0] ?? null);
+  // Canvas "go to tab" button. Cross-project navigation is handled by the
+  // canvas via navigate() + lastSession seeding; for same-project jumps the
+  // route doesn't change, so we listen here and focus the panel in-place.
+  useEffect(() => {
+    function onGoto(event: Event) {
+      const detail = (
+        event as CustomEvent<{ projectId: string; sessionId: string }>
+      ).detail;
+      if (!detail || detail.projectId !== project.id) return;
+      const target = sessionsRef.current.find(
+        (s) => s.id === detail.sessionId,
+      );
+      if (!target) return;
+      const dv = dockRef.current;
+      const panel = dv?.getPanel(panelId('session', target.id));
+      if (panel) panel.api.setActive();
+      else addSessionPanel(target);
+    }
+    window.addEventListener('pinloom:goto-session', onGoto as EventListener);
+    return () =>
+      window.removeEventListener(
+        'pinloom:goto-session',
+        onGoto as EventListener,
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
+  // ─── tab/panel actions ───
+
+  async function createSessionTab(agent: AgentKind, groupId: string | null) {
+    try {
+      // Leave the title null so the tab renders as "Chat <6char-suffix>" —
+      // keeps suffixes unique across many "new" sessions.
+      const created = await api.createSession(project.id, {
+        title: null,
+        agent,
+      });
+      setSessions((prev) => [...prev, created]);
+      addSessionPanel(created, { groupId });
+    } catch (err) {
+      setStripError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function createNotepadTab(groupId: string | null) {
+    try {
+      const created = await projectNotepadApi.create(project.id);
+      const summary: ProjectNotepadSummary = {
+        id: created.id,
+        projectId: created.projectId,
+        name: created.name,
+        position: created.position,
+        createdAt: created.createdAt,
+        updatedAt: created.updatedAt,
+      };
+      setNotepads((prev) => [...prev, summary]);
+      addNotepadPanel(created.id, { groupId });
+    } catch {
+      // surfaced server-side; leave the dock unchanged
+    }
+  }
+
+  function openCanvasTab(tab: InlineCanvasTab) {
+    setCanvasTabs((prev) => {
+      const next = prev.some((c) => c.teamId === tab.teamId)
+        ? prev
+        : [...prev, tab];
+      persistCanvasTabs(project.id, next);
       return next;
     });
-    setTabOrder((prev) => {
-      const next = prev.filter((r) => !(r.kind === 'session' && r.id === id));
-      persistTabOrder(project.id, next);
+    addCanvasPanel(tab.teamId);
+  }
+
+  function closeCanvas(teamId: string) {
+    setCanvasTabs((prev) => {
+      const next = prev.filter((c) => c.teamId !== teamId);
+      persistCanvasTabs(project.id, next);
       return next;
+    });
+    removePanelFor('canvas', teamId);
+  }
+
+  async function deleteNotepad(id: string) {
+    try {
+      await projectNotepadApi.remove(id);
+    } catch {
+      // ignore — fall through and drop it from the UI anyway
+    }
+    setNotepads((prev) => prev.filter((n) => n.id !== id));
+    removePanelFor('notepad', id);
+  }
+
+  function renameNotepad(id: string, name: string) {
+    setNotepads((prev) => prev.map((n) => (n.id === id ? { ...n, name } : n)));
+    void projectNotepadApi.update(id, { name }).catch(() => {
+      // optimistic; a failed rename just reverts on next load
     });
   }
+
+  async function renameSession(sessionId: string, title: string | null) {
+    try {
+      const updated = await api.renameSession(sessionId, title);
+      onSessionUpdate(updated);
+    } catch (err) {
+      setStripError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function onSessionUpdate(updated: Session) {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === updated.id ? updated : s)),
+    );
+  }
+
+  function removeSessionLocally(sessionId: string) {
+    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    removePanelFor('session', sessionId);
+  }
+
+  // Menu "Delete tab" — the API delete plus local/panel cleanup. The menu
+  // already confirmed with the user.
+  async function deleteSessionTab(sessionId: string) {
+    await api.deleteSession(sessionId);
+    removeSessionLocally(sessionId);
+  }
+
+  // The user clicked "Close tab" on a terminal session's exit overlay (its
+  // TUI quit). Closing the tab means deleting the session — the overlay is
+  // the confirm. Durable knowledge lives in the wiki, so a finished session
+  // is meant to be cleared.
+  function closeTerminalSession(id: string) {
+    void api.deleteSession(id).catch(() => {
+      // best-effort: the pty already exited; a failed delete just leaves
+      // the row.
+    });
+    removeSessionLocally(id);
+  }
+
+  // Menu "Switch to terminal/chat mode" — flips the transport server-side
+  // (conversation carries via the resume token), then swaps the panel: the
+  // dockview component (chat vs terminal) is fixed at addPanel time, so the
+  // panel is re-created in place with the new component.
+  async function convertTransport(sessionId: string, to: 'sdk' | 'terminal') {
+    const { session: updated, resumeCarried } =
+      await api.convertSessionTransport(sessionId, to);
+    onSessionUpdate(updated);
+    const dv = dockRef.current;
+    if (dv) {
+      const panel = dv.getPanel(panelId('session', sessionId));
+      // Recreate next to where it lived so the layout doesn't jump. try/finally:
+      // the component (chat vs terminal) is fixed at addPanel time, so we must
+      // remove+re-add — but a re-add failure must never leave the tab vanished.
+      const groupId = liveGroupId(dv, panel?.group.id ?? null);
+      try {
+        if (panel) dv.removePanel(panel);
+      } finally {
+        addSessionPanel(updated, { groupId });
+      }
+    }
+    if (!resumeCarried) {
+      // History is intact, but the agent couldn't carry its prior thread
+      // (e.g. a codex orchestrator's transient SDK home). Don't let it be a
+      // silent context loss.
+      setStripError(
+        'Converted — conversation history kept, but the agent starts a fresh thread (prior context not carried).',
+      );
+    }
+  }
+
+  // Menu "Split right/down" — the non-drag path to a side-by-side. Moves the
+  // session's panel into a new group next to its current one. dockview
+  // collapses the old group automatically if this was its only panel.
+  function splitSessionPanel(sessionId: string, direction: 'right' | 'down') {
+    const dv = dockRef.current;
+    const panel = dv?.getPanel(panelId('session', sessionId));
+    if (!panel) return;
+    panel.api.moveTo({
+      group: panel.group,
+      position: direction === 'right' ? 'right' : 'bottom',
+    });
+  }
+
+  function onHandoff(newSession: Session) {
+    setSessions((prev) =>
+      prev.some((s) => s.id === newSession.id) ? prev : [...prev, newSession],
+    );
+    const dv = dockRef.current;
+    if (dv && !dv.getPanel(panelId('session', newSession.id))) {
+      dv.addPanel({
+        id: panelId('session', newSession.id),
+        component: isTerminalAgentSession(newSession) ? 'terminal' : 'chat',
+        params: { kind: 'session', sessionId: newSession.id },
+      });
+    }
+  }
+
+  // ─── dock context ───
+
+  const sessionsById = useMemo(
+    () => new Map(sessions.map((s) => [s.id, s])),
+    [sessions],
+  );
+  const canvasesById = useMemo(
+    () => new Map(canvasTabs.map((c) => [c.teamId, c])),
+    [canvasTabs],
+  );
+  const notepadsById = useMemo(
+    () => new Map(notepads.map((n) => [n.id, n])),
+    [notepads],
+  );
+
+  const dockContext: DockContextValue = {
+    projectId: project.id,
+    projectName: project.name,
+    projectCwd: project.cwd,
+    sessionsById,
+    canvasesById,
+    notepadsById,
+    rolesBySessionId,
+    teams,
+    sessionCount: sessions.length,
+    codexAvailable,
+    // Re-clicking the open menu's own trigger toggles it closed (parity with
+    // the legacy strip).
+    openTabMenu: (req) =>
+      setTabMenu((prev) =>
+        prev && prev.sessionId === req.sessionId ? null : req,
+      ),
+    renameSession,
+    renameNotepad,
+    closeCanvas,
+    deleteNotepad,
+    createSessionTab: (agent, groupId) => void createSessionTab(agent, groupId),
+    createNotepadTab: (groupId) => void createNotepadTab(groupId),
+    onSessionUpdate,
+    onPinChange: handlePinsChange,
+    onHandoff,
+    onSendPin: (sessionId, pin) => setSendingPin({ pin, sessionId }),
+    closeTerminalSession,
+  };
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -460,179 +905,17 @@ export function ProjectPage({
             {project.cwd}
           </div>
         </div>
+        {stripError && (
+          <button
+            type="button"
+            onClick={() => setStripError(null)}
+            className="ml-auto text-xs text-red-400 truncate max-w-[320px]"
+            title={`${stripError} (click to dismiss)`}
+          >
+            {stripError}
+          </button>
+        )}
       </header>
-
-      <SessionTabs
-        projectId={project.id}
-        sessions={sessions}
-        activeSessionId={
-          activeCanvasTeamId === null && activeNotepadId === null
-            ? activeSession?.id ?? null
-            : null
-        }
-        onSelect={(s) => {
-          setActiveCanvasTeamId(null);
-          persistActiveCanvas(project.id, null);
-          setActiveNotepadId(null);
-          persistActiveNotepad(project.id, null);
-          setActiveSession(s);
-        }}
-        onCreate={(s) => {
-          setSessions((prev) => [...prev, s]);
-          setTabOrder((prev) => {
-            if (prev.some((r) => r.kind === 'session' && r.id === s.id)) {
-              return prev;
-            }
-            const next: TabRef[] = [...prev, { kind: 'session', id: s.id }];
-            persistTabOrder(project.id, next);
-            return next;
-          });
-          setActiveCanvasTeamId(null);
-          persistActiveCanvas(project.id, null);
-          setActiveNotepadId(null);
-          persistActiveNotepad(project.id, null);
-          setActiveSession(s);
-        }}
-        onDelete={(id) => {
-          setSessions((prev) => {
-            const next = prev.filter((s) => s.id !== id);
-            if (activeSession?.id === id) setActiveSession(next[0] ?? null);
-            return next;
-          });
-          setTabOrder((prev) => {
-            const next = prev.filter(
-              (r) => !(r.kind === 'session' && r.id === id),
-            );
-            persistTabOrder(project.id, next);
-            return next;
-          });
-        }}
-        onRename={(updated) => {
-          setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-          if (activeSession?.id === updated.id) setActiveSession(updated);
-        }}
-        onReorder={(reordered) => setSessions(reordered)}
-        canvasTabs={canvasTabs}
-        activeCanvasTeamId={activeCanvasTeamId}
-        onSelectCanvas={(teamId) => {
-          setActiveCanvasTeamId(teamId);
-          persistActiveCanvas(project.id, teamId);
-          setActiveNotepadId(null);
-          persistActiveNotepad(project.id, null);
-        }}
-        onCloseCanvas={(teamId) => {
-          setCanvasTabs((prev) => {
-            const next = prev.filter((c) => c.teamId !== teamId);
-            persistCanvasTabs(project.id, next);
-            return next;
-          });
-          setTabOrder((prev) => {
-            const next = prev.filter(
-              (r) => !(r.kind === 'canvas' && r.id === teamId),
-            );
-            persistTabOrder(project.id, next);
-            return next;
-          });
-          if (activeCanvasTeamId === teamId) {
-            setActiveCanvasTeamId(null);
-            persistActiveCanvas(project.id, null);
-          }
-        }}
-        onOpenCanvasTab={(tab) => {
-          setCanvasTabs((prev) => {
-            const next = prev.some((c) => c.teamId === tab.teamId)
-              ? prev
-              : [...prev, tab];
-            persistCanvasTabs(project.id, next);
-            return next;
-          });
-          setTabOrder((prev) => {
-            if (prev.some((r) => r.kind === 'canvas' && r.id === tab.teamId)) {
-              return prev;
-            }
-            const next: TabRef[] = [
-              ...prev,
-              { kind: 'canvas', id: tab.teamId },
-            ];
-            persistTabOrder(project.id, next);
-            return next;
-          });
-          setActiveCanvasTeamId(tab.teamId);
-          persistActiveCanvas(project.id, tab.teamId);
-          setActiveNotepadId(null);
-          persistActiveNotepad(project.id, null);
-        }}
-        notepads={notepads}
-        activeNotepadId={activeNotepadId}
-        onSelectNotepad={(id) => {
-          setActiveCanvasTeamId(null);
-          persistActiveCanvas(project.id, null);
-          setActiveNotepadId(id);
-          persistActiveNotepad(project.id, id);
-        }}
-        onCreateNotepad={async () => {
-          try {
-            const created = await projectNotepadApi.create(project.id);
-            const summary: ProjectNotepadSummary = {
-              id: created.id,
-              projectId: created.projectId,
-              name: created.name,
-              position: created.position,
-              createdAt: created.createdAt,
-              updatedAt: created.updatedAt,
-            };
-            setNotepads((prev) => [...prev, summary]);
-            setTabOrder((prev) => {
-              const next: TabRef[] = [
-                ...prev,
-                { kind: 'notepad', id: created.id },
-              ];
-              persistTabOrder(project.id, next);
-              return next;
-            });
-            setActiveCanvasTeamId(null);
-            persistActiveCanvas(project.id, null);
-            setActiveNotepadId(created.id);
-            persistActiveNotepad(project.id, created.id);
-          } catch {
-            // surfaced server-side; leave the strip unchanged
-          }
-        }}
-        onCloseNotepad={async (id) => {
-          try {
-            await projectNotepadApi.remove(id);
-          } catch {
-            // ignore — fall through and drop it from the UI anyway
-          }
-          setNotepads((prev) => prev.filter((n) => n.id !== id));
-          setTabOrder((prev) => {
-            const next = prev.filter(
-              (r) => !(r.kind === 'notepad' && r.id === id),
-            );
-            persistTabOrder(project.id, next);
-            return next;
-          });
-          if (activeNotepadId === id) {
-            setActiveNotepadId(null);
-            persistActiveNotepad(project.id, null);
-          }
-        }}
-        onRenameNotepad={async (id, name) => {
-          setNotepads((prev) =>
-            prev.map((n) => (n.id === id ? { ...n, name } : n)),
-          );
-          try {
-            await projectNotepadApi.update(id, { name });
-          } catch {
-            // optimistic; a failed rename just reverts on next load
-          }
-        }}
-        tabOrder={tabOrder}
-        onReorderTabs={(nextOrder) => {
-          setTabOrder(nextOrder);
-          persistTabOrder(project.id, nextOrder);
-        }}
-      />
 
       <div className="flex-1 flex min-h-0">
         <HSplitter
@@ -640,10 +923,9 @@ export function ProjectPage({
           minLeft={320}
           minRight={420}
           left={
-            // Hidden for terminal-claude sessions — their pins live in the right
-            // rail's Pins tab (TerminalSidePanel) instead, so we don't show two
-            // pin panels. Structured sessions keep the left rail unchanged.
-            activeNotepadId === null &&
+            // Hidden for terminal sessions — their pins live in the right
+            // rail's Pins tab (TerminalSidePanel) instead, so we don't show
+            // two pin panels. Structured sessions keep the left rail.
             pins.length > 0 &&
             activeSession &&
             !isTerminalAgentSession(activeSession) ? (
@@ -653,78 +935,30 @@ export function ProjectPage({
                 onChange={handlePinsChange}
                 sessionId={activeSession.id}
                 projectName={project.name}
-                onHandoff={(newSession) => {
-                  setSessions((prev) => [...prev, newSession]);
-                  setActiveSession(newSession);
-                }}
-                onSendPin={(pin) => setSendingPin(pin)}
+                onHandoff={onHandoff}
+                onSendPin={(pin) =>
+                  setSendingPin({ pin, sessionId: activeSession.id })
+                }
               />
             ) : null
           }
           right={
-            activeNotepadId ? (
-              <ProjectNotepadView
-                key={activeNotepadId}
-                notepadId={activeNotepadId}
-              />
-            ) : activeCanvasTeamId ? (
-              // Inline canvas — wraps the dedicated route's component so
-              // updates / fixes flow into both surfaces. The page reads
-              // teamId from the URL via useParams, so we route inline by
-              // overriding the `teamId` segment via a key + path.
-              <InlineCanvasView teamId={activeCanvasTeamId} />
-            ) : activeSession && isTerminalAgentSession(activeSession) ? (
-              // Terminal-chat mode: render the session's live claude TUI instead
-              // of the structured chat. Pinned per-session (sessions.transport),
-              // so flipping the env only affects newly-created sessions. Terminal
-              // mode is claude-only — codex sessions stay on the structured path.
-              // The live TUI fills the pane; the side panel lists captured turns
-              // and lets the human pin them (the pin UI ChatView gives structured
-              // sessions).
-              <div className="flex h-full w-full min-h-0">
-                <div className="min-w-0 flex-1">
-                  <AgentTerminal
-                    key={activeSession.id}
-                    sessionId={activeSession.id}
-                    onCleanExit={() => closeTerminalSession(activeSession.id)}
-                  />
-                </div>
-                <TerminalSidePanel
-                  key={`panel-${activeSession.id}`}
-                  sessionId={activeSession.id}
-                  pins={pins}
-                  onPinChange={handlePinsChange}
-                  projectName={project.name}
-                  projectCwd={project.cwd}
-                  onHandoff={(newSession) => {
-                    setSessions((prev) => [...prev, newSession]);
-                    setActiveSession(newSession);
-                  }}
-                  onSendPin={(pin) => setSendingPin(pin)}
+            <DockProvider value={dockContext}>
+              <div className="h-full w-full">
+                <DockviewReact
+                  key={project.id}
+                  onReady={onDockReady}
+                  components={DOCK_COMPONENTS}
+                  defaultTabComponent={ProjectTab}
+                  // left = immediately AFTER the last tab (dockview renders the
+                  // left-actions container between the tabs and the void), which
+                  // is where the legacy strip kept its '+' button.
+                  leftHeaderActionsComponent={GroupActions}
+                  watermarkComponent={DockWatermark}
+                  theme={themeDark}
                 />
               </div>
-            ) : activeSession ? (
-              // Force a fresh component instance per session so per-session
-              // local state (textarea draft, queue, wikiSyncing flag, etc.)
-              // doesn't leak across tab switches.
-              <ChatView
-                key={activeSession.id}
-                session={activeSession}
-                onPinChange={handlePinsChange}
-                onSessionUpdate={(updated) => {
-                  setSessions((prev) =>
-                    prev.map((s) => (s.id === updated.id ? updated : s)),
-                  );
-                  if (activeSession?.id === updated.id) {
-                    setActiveSession(updated);
-                  }
-                }}
-              />
-            ) : (
-              <div className="p-6 text-sm text-[var(--color-ink-muted)]">
-                No sessions yet. Click + in the tab bar to create one.
-              </div>
-            )
+            </DockProvider>
           }
         />
       </div>
@@ -737,24 +971,29 @@ export function ProjectPage({
         />
       )}
 
-      {sendingPin && activeSession && (
+      <TabMenuHost
+        projectId={project.id}
+        sessions={sessions}
+        menu={tabMenu}
+        onCloseMenu={() => setTabMenu(null)}
+        onDeleteSession={deleteSessionTab}
+        onSessionMovedAway={removeSessionLocally}
+        onSplit={splitSessionPanel}
+        onConvertTransport={convertTransport}
+        onOpenCanvasTab={openCanvasTab}
+        onError={setStripError}
+      />
+
+      {sendingPin && (
         <SessionPickerModal
-          pin={sendingPin}
+          pin={sendingPin.pin}
           projectId={project.id}
           sessions={sessions}
-          currentSessionId={activeSession.id}
+          currentSessionId={sendingPin.sessionId}
           onClose={() => setSendingPin(null)}
-          onNewSessionCreated={(s) => setSessions((prev) => [...prev, s])}
+          onNewSessionCreated={(s) => spliceInSession(s)}
         />
       )}
     </div>
   );
-}
-
-// Thin wrapper around TeamCanvasPage for inline mounting in the right
-// pane. The header is suppressed because the SessionTabs strip already
-// shows which canvas is active. `key={teamId}` resets internal state on
-// switch so events from a previous team don't bleed in.
-function InlineCanvasView({ teamId }: { teamId: string }) {
-  return <TeamCanvasPage key={teamId} teamId={teamId} showHeader={false} />;
 }

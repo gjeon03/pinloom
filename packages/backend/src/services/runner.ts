@@ -219,21 +219,62 @@ export function persistMessage(args: PersistArgs): Message {
   const model = args.model ?? null;
   const transcriptUuid = args.transcriptUuid ?? null;
 
-  db.prepare(
-    `INSERT INTO messages
+  const info = db
+    .prepare(
+      `INSERT OR IGNORE INTO messages
        (id, session_id, plan_item_id, role, content, tool_use, model, transcript_uuid, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    args.sessionId,
-    args.planItemId,
-    args.role,
-    args.content,
-    toolUseJson,
-    model,
-    transcriptUuid,
-    now,
-  );
+    )
+    .run(
+      id,
+      args.sessionId,
+      args.planItemId,
+      args.role,
+      args.content,
+      toolUseJson,
+      model,
+      transcriptUuid,
+      now,
+    );
+
+  // Dedupe hit: this transcript line was already folded (e.g. a capture
+  // re-scan after resume re-reads a turn past the cursor). The UNIQUE
+  // (session_id, transcript_uuid) index ignored the insert — return the
+  // EXISTING row and skip the broadcast + updated_at bump so a duplicate
+  // never reaches history/search or the live message stream.
+  if (info.changes === 0 && transcriptUuid !== null) {
+    const existing = db
+      .prepare(
+        `SELECT id, role, content, tool_use, model, created_at
+         FROM messages WHERE session_id = ? AND transcript_uuid = ?`,
+      )
+      .get(args.sessionId, transcriptUuid) as
+      | {
+          id: string;
+          role: string;
+          content: string;
+          tool_use: string | null;
+          model: string | null;
+          created_at: string;
+        }
+      | undefined;
+    if (existing) {
+      return {
+        id: existing.id,
+        sessionId: args.sessionId,
+        planItemId: args.planItemId,
+        role: existing.role as MessageRole,
+        content: existing.content,
+        toolUse: existing.tool_use,
+        pinned: false,
+        pinTitle: null,
+        pinnedAt: null,
+        sourceMessageId: null,
+        model: existing.model,
+        createdAt: existing.created_at,
+      };
+    }
+  }
 
   db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(now, args.sessionId);
 

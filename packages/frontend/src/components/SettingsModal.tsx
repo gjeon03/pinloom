@@ -349,6 +349,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             )}
           </section>
 
+          <DefaultTransportSection />
+
           <EnvVarsSection />
 
           <BackupSection />
@@ -364,6 +366,87 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Default transport for NEW sessions. SDK = structured ChatView; Terminal =
+// live claude/codex TUI. Per-session conversion (tab menu) is independent;
+// this only sets what a freshly-created session starts as. The session pins
+// its transport at creation, so changing this never alters existing sessions.
+function DefaultTransportSection() {
+  const [setting, setSetting] = useState<'sdk' | 'terminal' | null>(null);
+  const [effective, setEffective] = useState<string>('sdk');
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getDefaultTransport()
+      .then((r) => {
+        setSetting(r.setting);
+        setEffective(r.effective);
+        setLoaded(true);
+      })
+      .catch((e) => {
+        setError(String(e));
+        setLoaded(true);
+      });
+  }, []);
+
+  // The dropdown's selected value: the explicit setting, or 'env' (follow
+  // PINLOOM_CLAUDE_TRANSPORT / default) when none is set.
+  const selected = setting ?? 'env';
+
+  async function change(next: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const body =
+        next === 'env' ? null : (next as 'sdk' | 'terminal');
+      const r = await api.setDefaultTransport(body);
+      setSetting(r.setting);
+      setEffective(r.effective);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        New-session mode
+      </h3>
+      {!loaded ? (
+        <p className="text-[var(--color-ink-muted)] text-sm">Loading…</p>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <select
+              value={selected}
+              disabled={busy}
+              onChange={(e) => void change(e.target.value)}
+              className="px-2 py-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm disabled:opacity-60"
+            >
+              <option value="sdk">SDK — structured chat</option>
+              <option value="terminal">Terminal — live agent TUI</option>
+              <option value="env">Follow environment / default</option>
+            </select>
+            <span className="text-xs text-[var(--color-ink-muted)]">
+              now: <span className="font-mono">{effective}</span>
+            </span>
+          </div>
+          <p className="text-[11px] leading-relaxed text-[var(--color-ink-muted)]">
+            Applies to sessions you create from here on (claude + codex).
+            Existing sessions keep their mode; switch any one from its tab’s
+            ⋮ menu. “Follow environment” defers to PINLOOM_CLAUDE_TRANSPORT.
+          </p>
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+        </div>
+      )}
+    </section>
+  );
 }
 
 // Session DB backup is decoupled from the GitHub repo — the operator

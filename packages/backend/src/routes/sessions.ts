@@ -24,6 +24,11 @@ import { claudeTransport } from '../services/agents/index.js';
 import { killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
 import { killCodexTerminal, removeCodexHome } from '../services/codex-pty/agent-terminal.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
+import {
+  convertSessionTransport,
+  TransportConvertError,
+} from '../services/transport-convert.js';
+import { broadcast } from '../ws/hub.js';
 import { runWikiSync } from '../services/wiki-sync.js';
 
 const ALLOWED_IMAGE_MIME: ReadonlySet<ImageMediaType> = new Set<ImageMediaType>([
@@ -552,10 +557,51 @@ export async function sessionRoutes(app: FastifyInstance) {
       killAgentTerminal(sessionId);
       killCodexTerminal(sessionId);
       removeCodexHome(sessionId);
+      const row = db
+        .prepare('SELECT project_id FROM sessions WHERE id = ?')
+        .get(sessionId) as { project_id: string } | undefined;
       db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+      // Mirror of session_created: tell other windows on this project to drop
+      // the tab live instead of waiting for their next mount's reconcile.
+      if (row) {
+        broadcast(`project:${row.project_id}`, {
+          type: 'session_deleted',
+          projectId: row.project_id,
+          sessionId,
+        });
+      }
       return { ok: true };
     },
   );
+
+  // Flip a session between the SDK (ChatView) and terminal (live TUI)
+  // transports, carrying the agent conversation across (claude shares its
+  // transcript; codex's rollout file is copied between session stores). 409
+  // while a run is in flight.
+  app.post<{
+    Params: { sessionId: string };
+    Body: { transport?: string };
+  }>('/api/sessions/:sessionId/transport', async (req, reply) => {
+    const to = req.body?.transport;
+    if (to !== 'sdk' && to !== 'terminal') {
+      reply.code(400);
+      return { error: "transport must be 'sdk' or 'terminal'" };
+    }
+    let resumeCarried = true;
+    try {
+      ({ resumeCarried } = convertSessionTransport(req.params.sessionId, to));
+    } catch (err) {
+      if (err instanceof TransportConvertError) {
+        reply.code(err.status);
+        return { error: err.message };
+      }
+      throw err;
+    }
+    const row = db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(req.params.sessionId) as SessionRow;
+    return { session: toSession(row), resumeCarried };
+  });
 
   app.patch<{
     Params: { sessionId: string };
