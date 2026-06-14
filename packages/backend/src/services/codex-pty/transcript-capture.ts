@@ -10,6 +10,7 @@
 // messages. Idempotency comes from a line-count cursor persisted in the existing
 // `last_captured_transcript_uuid` column (repurposed as an opaque string cursor).
 
+import { existsSync } from 'node:fs';
 import { getDb } from '../../db/connection.js';
 import { persistMessage, emitRunStatus, notifySessionIdle } from '../runner.js';
 import { findRollout, readRolloutLines } from './rollout.js';
@@ -37,6 +38,13 @@ function rehydrateTurnsSeen(codexHome: string, cursor: number): number {
 }
 
 const POLL_MS = 500;
+// How long the rollout must be QUIET (no new lines) with un-captured content
+// and no task_complete before we fold it anyway. codex normally emits
+// task_complete at turn end; a turn that never does (Esc-interrupt, crash) would
+// otherwise never be captured and would hang any dispatch waiter to timeout.
+// Generous so a legitimately slow turn (codex still emits function_call lines as
+// it works, which reset the timer) isn't folded mid-flight.
+const STALL_MS = 6000;
 
 interface CaptureState {
   codexHome: string;
@@ -45,6 +53,9 @@ interface CaptureState {
   cursor: number;
   /** Completed turns folded so far (a new task_complete count means a new turn). */
   turnsSeen: number;
+  /** Line count at the last poll + when it last changed — drives stall detection. */
+  lastLineCount: number;
+  lastGrowthAt: number;
   /** codex session id (resume token) once known. */
   codexSessionId: string | null;
   timer: ReturnType<typeof setInterval> | null;
@@ -76,6 +87,8 @@ export function startCodexCapture(
     // turnsSeen to them so the next completed turn (not a captured one) is what
     // wakes dispatch waiters and gets folded.
     turnsSeen: rehydrateTurnsSeen(codexHome, safeCursor),
+    lastLineCount: -1,
+    lastGrowthAt: Date.now(),
     codexSessionId: resumeSessionId,
     timer: null,
     running: false,
@@ -144,17 +157,46 @@ async function poll(pinloomSessionId: string): Promise<void> {
   if (!state || state.running) return;
   state.running = true;
   try {
+    // Re-resolve if the cached rollout vanished (file rotated/removed) — a
+    // cursor is a line offset into ONE file, so a new file must restart it.
+    if (state.rolloutPath && !existsSync(state.rolloutPath)) {
+      state.rolloutPath = null;
+      state.cursor = 0;
+      state.turnsSeen = 0;
+    }
     if (!state.rolloutPath) {
       state.rolloutPath = findRollout(state.codexHome);
       if (!state.rolloutPath) return;
     }
     const lines = readRolloutLines(state.rolloutPath);
-    const totalTurns = countTaskComplete(lines);
-    if (totalTurns <= state.turnsSeen) return; // no newly-completed turn
 
-    // Persist everything up to and including the last completed turn. Cut after
-    // the final task_complete so a half-written next turn isn't folded early.
-    const cut = lastTaskCompleteIndex(lines) + 1;
+    // Track growth so we can tell a still-working turn (file growing) from a
+    // stalled one (interrupted/crashed, no task_complete coming).
+    if (lines.length !== state.lastLineCount) {
+      state.lastLineCount = lines.length;
+      state.lastGrowthAt = Date.now();
+    }
+
+    const totalTurns = countTaskComplete(lines);
+    let cut: number;
+    let isFallback = false;
+    if (totalTurns > state.turnsSeen) {
+      // Normal path: fold up to and including the last completed turn. Cut
+      // after the final task_complete so a half-written next turn isn't folded.
+      cut = lastTaskCompleteIndex(lines) + 1;
+    } else if (
+      lines.length > state.cursor &&
+      Date.now() - state.lastGrowthAt >= STALL_MS
+    ) {
+      // Fallback: un-captured lines, no new task_complete, and the rollout has
+      // gone quiet — the turn won't complete. Fold what's there so it isn't
+      // lost and any dispatch waiter resolves instead of hanging to timeout.
+      cut = lines.length;
+      isFallback = true;
+    } else {
+      return; // nothing newly complete, not stalled
+    }
+
     const fresh = lines.slice(state.cursor, cut);
     const rows = parseRolloutRows(fresh);
 
@@ -180,7 +222,11 @@ async function poll(pinloomSessionId: string): Promise<void> {
     }
 
     state.cursor = cut;
-    state.turnsSeen = totalTurns;
+    // Only advance turnsSeen on a real task_complete boundary. A fallback fold
+    // doesn't consume a turn boundary — if codex later does emit task_complete
+    // past this cut, the normal path still fires (cursor already moved, so no
+    // rows duplicate).
+    if (!isFallback) state.turnsSeen = totalTurns;
     db.prepare('UPDATE sessions SET last_captured_transcript_uuid = ? WHERE id = ?').run(
       String(cut),
       pinloomSessionId,
@@ -189,9 +235,16 @@ async function poll(pinloomSessionId: string): Promise<void> {
     emitRunStatus(pinloomSessionId, 'finished');
     notifySessionIdle(pinloomSessionId);
 
-    // Wake dispatch waiters with this turn's reply.
+    // Wake dispatch waiters with this turn's reply (the last agent message up
+    // to the cut — partial on a fallback fold, which is correct for an
+    // interrupted turn).
     if (state.waiters.length > 0) {
-      const reply = lastAgentMessage(lines) ?? '';
+      // Prefer the task_complete.last_agent_message; on a fallback fold (no
+      // task_complete) fall back to the last assistant row we just folded.
+      const reply =
+        lastAgentMessage(lines.slice(0, cut)) ??
+        [...rows].reverse().find((r) => r.role === 'assistant')?.content ??
+        '';
       const waiters = state.waiters.splice(0);
       for (const w of waiters) w(reply);
     }
