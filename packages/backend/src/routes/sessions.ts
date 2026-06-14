@@ -587,8 +587,9 @@ export async function sessionRoutes(app: FastifyInstance) {
       reply.code(400);
       return { error: "transport must be 'sdk' or 'terminal'" };
     }
+    let resumeCarried = true;
     try {
-      convertSessionTransport(req.params.sessionId, to);
+      ({ resumeCarried } = convertSessionTransport(req.params.sessionId, to));
     } catch (err) {
       if (err instanceof TransportConvertError) {
         reply.code(err.status);
@@ -599,7 +600,7 @@ export async function sessionRoutes(app: FastifyInstance) {
     const row = db
       .prepare('SELECT * FROM sessions WHERE id = ?')
       .get(req.params.sessionId) as SessionRow;
-    return toSession(row);
+    return { session: toSession(row), resumeCarried };
   });
 
   app.patch<{

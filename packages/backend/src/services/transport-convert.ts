@@ -27,10 +27,12 @@ import { getDb } from '../db/connection.js';
 import { isAiRunning } from './runner.js';
 import { readLines } from './claude-pty/transcript.js';
 import {
+  agentTerminalLock,
   hasAgentTerminal,
   killAgentTerminal,
 } from './claude-pty/agent-terminal.js';
 import {
+  codexTerminalLock,
   hasCodexTerminal,
   killCodexTerminal,
 } from './codex-pty/agent-terminal.js';
@@ -113,7 +115,7 @@ const userCodexSessions = () =>
 export function convertSessionTransport(
   sessionId: string,
   to: 'sdk' | 'terminal',
-): void {
+): { resumeCarried: boolean } {
   const db = getDb();
   const row = db
     .prepare('SELECT id, agent, transport, agent_session_id FROM sessions WHERE id = ?')
@@ -130,6 +132,19 @@ export function convertSessionTransport(
   if (isAiRunning(sessionId)) {
     throw new TransportConvertError(
       'a run is in flight — wait for it to finish before converting',
+      409,
+    );
+  }
+  // isAiRunning only sees the SDK runner's activeRuns. A terminal worker being
+  // driven by an orchestrator dispatch tracks its in-flight turn via PTY lock
+  // state instead — killing it mid-dispatch would sever the orchestrator's
+  // team_ask (hangs to timeout, turn lost). Reject those too.
+  if (
+    agentTerminalLock(sessionId) === 'dispatch' ||
+    codexTerminalLock(sessionId) === 'dispatch'
+  ) {
+    throw new TransportConvertError(
+      'this worker is mid-dispatch — wait for the orchestrator turn to finish',
       409,
     );
   }
@@ -211,6 +226,13 @@ export function convertSessionTransport(
     new Date().toISOString(),
     sessionId,
   );
+
+  // resumeCarried=false means there WAS a prior agent thread we couldn't carry
+  // (the rollout was unfindable — most notably a codex orchestrator, whose SDK
+  // runs use a temp CODEX_HOME that's reaped each run, so its rollout never
+  // persists). pinloom's message history is intact, but the agent starts a
+  // fresh thread; the caller surfaces this so it isn't a silent context loss.
+  return { resumeCarried: !clearResume };
 }
 
 function findClaudeTranscript(agentSessionId: string): string | null {

@@ -791,14 +791,30 @@ export function ProjectPage({
   // dockview component (chat vs terminal) is fixed at addPanel time, so the
   // panel is re-created in place with the new component.
   async function convertTransport(sessionId: string, to: 'sdk' | 'terminal') {
-    const updated = await api.convertSessionTransport(sessionId, to);
+    const { session: updated, resumeCarried } =
+      await api.convertSessionTransport(sessionId, to);
     onSessionUpdate(updated);
     const dv = dockRef.current;
-    const panel = dv?.getPanel(panelId('session', sessionId));
-    // Recreate next to where it lived so the layout doesn't jump.
-    const groupId = panel?.group.id ?? null;
-    if (dv && panel) dv.removePanel(panel);
-    addSessionPanel(updated, { groupId });
+    if (dv) {
+      const panel = dv.getPanel(panelId('session', sessionId));
+      // Recreate next to where it lived so the layout doesn't jump. try/finally:
+      // the component (chat vs terminal) is fixed at addPanel time, so we must
+      // remove+re-add — but a re-add failure must never leave the tab vanished.
+      const groupId = liveGroupId(dv, panel?.group.id ?? null);
+      try {
+        if (panel) dv.removePanel(panel);
+      } finally {
+        addSessionPanel(updated, { groupId });
+      }
+    }
+    if (!resumeCarried) {
+      // History is intact, but the agent couldn't carry its prior thread
+      // (e.g. a codex orchestrator's transient SDK home). Don't let it be a
+      // silent context loss.
+      setStripError(
+        'Converted — conversation history kept, but the agent starts a fresh thread (prior context not carried).',
+      );
+    }
   }
 
   // Menu "Split right/down" — the non-drag path to a side-by-side. Moves the
