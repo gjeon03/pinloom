@@ -129,6 +129,34 @@ export function AgentTerminal({
       `${proto}://${location.host}/ws/agent-terminal?session=${encodeURIComponent(sessionId)}`,
     );
     let exited = false;
+
+    // Shift+Enter → newline (not submit). Plain xterm encodes Shift+Enter the
+    // same as Enter (\r = submit), so the TUI can't tell them apart. Send a
+    // bare LF (\n, i.e. what Ctrl+J emits) — Claude Code (and readline TUIs
+    // generally) insert a newline on LF while CR submits. This is the
+    // "works in every terminal with no setup" path. Returning false
+    // suppresses xterm's default \r.
+    term.attachCustomKeyEventHandler((e) => {
+      if (
+        e.type === 'keydown' &&
+        e.key === 'Enter' &&
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        // preventDefault is essential: returning false only stops xterm from
+        // processing the keydown — without it the browser still fires keypress
+        // for Enter, which xterm turns into \r (submit). Cancel the native
+        // sequence and send a bare LF ourselves.
+        e.preventDefault();
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ t: 'i', d: '\n' }));
+        }
+        return false;
+      }
+      return true;
+    });
     // Drop xterm→pty data while replaying scrollback (xterm auto-replies to
     // DA/DSR queries embedded in the replay; forwarding those to the TUI echoes junk).
     let replaying = false;
