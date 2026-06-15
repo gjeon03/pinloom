@@ -40,23 +40,49 @@ function MissingTarget({ label }: { label: string }) {
   );
 }
 
+// SDK sessions get the same right rail as terminal sessions, minus History
+// (ChatView already shows the full conversation). Keeps pins/wiki consistent
+// across both modes and per-panel under splits.
+const SDK_SIDE_TABS = ['pins', 'wiki'] as const;
+
 export function ChatPanel(props: IDockviewPanelProps) {
   const { sessionId } = props.params as SessionPanelParams;
   const ctx = useDock();
   const visible = usePanelVisible(props.api);
   const session = ctx.sessionsById.get(sessionId);
+  // Per-panel pins (same as TerminalPanel) — under splits each visible SDK
+  // session needs its own pin list.
+  const { data: pinsData } = useSWR(
+    visible && session ? cacheKeys.sessionPins(sessionId) : null,
+    () => api.listPins(sessionId),
+  );
   if (!visible) return null;
   if (!session) return <MissingTarget label="Session not found." />;
   return (
-    // Force a fresh component instance per session so per-session local
-    // state (textarea draft, queue, wikiSyncing flag, etc.) doesn't leak
-    // across renders — same contract as the pre-dock keyed mount.
-    <ChatView
-      key={session.id}
-      session={session}
-      onPinChange={ctx.onPinChange}
-      onSessionUpdate={ctx.onSessionUpdate}
-    />
+    <div className="flex h-full w-full min-h-0">
+      <div className="min-w-0 flex-1">
+        {/* Force a fresh component instance per session so per-session local
+            state (textarea draft, queue, wikiSyncing flag, etc.) doesn't leak
+            across renders — same contract as the pre-dock keyed mount. */}
+        <ChatView
+          key={session.id}
+          session={session}
+          onPinChange={ctx.onPinChange}
+          onSessionUpdate={ctx.onSessionUpdate}
+        />
+      </div>
+      <TerminalSidePanel
+        key={`panel-${session.id}`}
+        sessionId={session.id}
+        pins={pinsData ?? []}
+        onPinChange={ctx.onPinChange}
+        projectName={ctx.projectName}
+        projectCwd={ctx.projectCwd}
+        onHandoff={ctx.onHandoff}
+        onSendPin={(pin) => ctx.onSendPin(session.id, pin)}
+        tabs={[...SDK_SIDE_TABS]}
+      />
+    </div>
   );
 }
 

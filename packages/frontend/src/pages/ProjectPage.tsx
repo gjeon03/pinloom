@@ -27,9 +27,7 @@ import {
   setVisibleSessionIds,
 } from '../stores/activeSession.js';
 import { useNotifications } from '../stores/notifications.js';
-import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
-import { HSplitter } from '../components/HSplitter.js';
 import { EditableTitle } from '../components/EditableTitle.js';
 import { SessionPickerModal } from '../components/SessionPickerModal.js';
 import { applyPinChange } from '../utils/pins.js';
@@ -563,17 +561,9 @@ export function ProjectPage({
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [visibleSet, markSessionRead]);
 
-  // Per-session pins via SWR — the focused session's pins feed the left
-  // rail; terminal panels fetch their own per-panel (see TerminalPanel).
-  const { data: pinsData } = useSWR(
-    activeSession ? cacheKeys.sessionPins(activeSession.id) : null,
-    activeSession ? () => api.listPins(activeSession.id) : null,
-  );
-  const pins = activeSession ? pinsData ?? [] : [];
-
   function handlePinsChange(updated: Message) {
-    // Mutate the per-session SWR key — every consumer (left rail, terminal
-    // side panels, pop-out pins page) reads through it. On a cache MISS
+    // Mutate the per-session SWR key — every consumer (each session panel's
+    // right rail, pop-out pins page) reads through it. On a cache MISS
     // (pin event for a session whose pins were never fetched) follow up
     // with a revalidation so the rail doesn't flash a one-pin partial list.
     let hadCache = true;
@@ -917,50 +907,26 @@ export function ProjectPage({
         )}
       </header>
 
+      {/* Dock fills the workspace. Pins now live in each session panel's right
+          rail (TerminalSidePanel) for BOTH terminal and SDK sessions, so there's
+          no separate left pin rail — and under splits each pane shows its own. */}
       <div className="flex-1 flex min-h-0">
-        <HSplitter
-          storageKey={`pinloom:splitter:${project.id}`}
-          minLeft={320}
-          minRight={420}
-          left={
-            // Hidden for terminal sessions — their pins live in the right
-            // rail's Pins tab (TerminalSidePanel) instead, so we don't show
-            // two pin panels. Structured sessions keep the left rail.
-            pins.length > 0 &&
-            activeSession &&
-            !isTerminalAgentSession(activeSession) ? (
-              <PinnedPanel
-                key={activeSession.id}
-                pins={pins}
-                onChange={handlePinsChange}
-                sessionId={activeSession.id}
-                projectName={project.name}
-                onHandoff={onHandoff}
-                onSendPin={(pin) =>
-                  setSendingPin({ pin, sessionId: activeSession.id })
-                }
-              />
-            ) : null
-          }
-          right={
-            <DockProvider value={dockContext}>
-              <div className="h-full w-full">
-                <DockviewReact
-                  key={project.id}
-                  onReady={onDockReady}
-                  components={DOCK_COMPONENTS}
-                  defaultTabComponent={ProjectTab}
-                  // left = immediately AFTER the last tab (dockview renders the
-                  // left-actions container between the tabs and the void), which
-                  // is where the legacy strip kept its '+' button.
-                  leftHeaderActionsComponent={GroupActions}
-                  watermarkComponent={DockWatermark}
-                  theme={themeDark}
-                />
-              </div>
-            </DockProvider>
-          }
-        />
+        <DockProvider value={dockContext}>
+          <div className="h-full w-full">
+            <DockviewReact
+              key={project.id}
+              onReady={onDockReady}
+              components={DOCK_COMPONENTS}
+              defaultTabComponent={ProjectTab}
+              // left = immediately AFTER the last tab (dockview renders the
+              // left-actions container between the tabs and the void), which
+              // is where the legacy strip kept its '+' button.
+              leftHeaderActionsComponent={GroupActions}
+              watermarkComponent={DockWatermark}
+              theme={themeDark}
+            />
+          </div>
+        </DockProvider>
       </div>
 
       {activeSession && (

@@ -8,18 +8,20 @@ import { useNotifications } from '../stores/notifications.js';
 import { ActionIconButton, CopyMarkdownButton, PinToggleButton } from './MessageActions.js';
 import { PinnedPanel } from './PinnedPanel.js';
 
-// Right rail for terminal-mode sessions. The live claude TUI is the main view,
-// but the conversation is captured to the DB, so this panel gives terminal
-// sessions the chrome ChatView's surroundings give structured sessions (minus
-// the input box — the TUI IS the input):
-//   - History: the captured turns, with a quick pin toggle.
+// Right rail for a session, shared by terminal AND structured (SDK) sessions:
+//   - History: the captured turns, with a quick pin toggle. TERMINAL ONLY —
+//     the TUI is ephemeral so the DB capture is the only scrollback; an SDK
+//     session's ChatView already shows the full conversation, so SDK callers
+//     omit this tab (pass tabs={['pins','wiki']}).
 //   - Pins: the FULL pin manager, reusing the shared PinnedPanel verbatim (title
 //     edit, expand/detail, copy, download, send-to-session, handoff).
-// Pins inject into the session's system prompt on its NEXT launch (the running
-// TUI keeps its launch-time prompt), so a freshly-pinned note reaches claude
-// after the session is reopened / resumed.
+//   - Wiki: sync this session + relevant project wiki pages.
+// Pins inject into the session's system prompt on its NEXT launch (for terminal,
+// the running TUI keeps its launch-time prompt), so a freshly-pinned note
+// reaches the agent after the session is reopened / resumed.
 
 type Tab = 'history' | 'pins' | 'wiki';
+const ALL_TABS: Tab[] = ['history', 'pins', 'wiki'];
 
 const collapsedKey = (sid: string) => `pinloom:termpanel:collapsed:${sid}`;
 const tabKey = (sid: string) => `pinloom:termpanel:tab:${sid}`;
@@ -64,6 +66,9 @@ interface Props {
   projectCwd: string;
   onHandoff?: (newSession: Session) => void;
   onSendPin?: (pin: Message) => void;
+  /** Which tabs to show, in order. Defaults to all three (terminal). SDK
+   *  sessions pass ['pins','wiki'] — their ChatView already shows history. */
+  tabs?: Tab[];
 }
 
 export function TerminalSidePanel({
@@ -74,11 +79,13 @@ export function TerminalSidePanel({
   projectCwd,
   onHandoff,
   onSendPin,
+  tabs = ALL_TABS,
 }: Props) {
+  const hasHistory = tabs.includes('history');
   const [messages, setMessages] = useState<Message[]>([]);
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem(tabKey(sessionId));
-    return isTab(saved) ? saved : 'history';
+    return isTab(saved) && tabs.includes(saved) ? saved : tabs[0];
   });
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(collapsedKey(sessionId)) === '1',
@@ -106,6 +113,7 @@ export function TerminalSidePanel({
   const prependAnchor = useRef<number | null>(null);
 
   useEffect(() => {
+    if (!hasHistory) return; // SDK sessions: ChatView owns the conversation
     let cancelled = false;
     api
       .listMessages(sessionId)
@@ -118,10 +126,11 @@ export function TerminalSidePanel({
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, hasHistory]);
 
   const onWsEvent = useCallback(
     (ev: WsEvent) => {
+      if (!hasHistory) return; // history not shown — nothing to keep in sync
       if (ev.type === 'message' && ev.sessionId === sessionId) {
         setMessages((prev) =>
           prev.some((m) => m.id === ev.message.id) ? prev : [...prev, ev.message],
@@ -130,7 +139,7 @@ export function TerminalSidePanel({
         setMessages((prev) => prev.map((m) => (m.id === ev.message.id ? ev.message : m)));
       }
     },
-    [sessionId],
+    [sessionId, hasHistory],
   );
   useWebSocket(`session:${sessionId}`, onWsEvent);
 
@@ -243,7 +252,9 @@ export function TerminalSidePanel({
         className="flex h-full w-8 shrink-0 flex-col items-center gap-2 border-l border-[var(--color-border)] bg-[var(--color-surface-2)] py-2 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
       >
         <ChevronRight className="h-4 w-4 rotate-180" />
-        <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide">History &amp; Pins</span>
+        <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide">
+          {hasHistory ? 'History & Pins' : 'Pins & Wiki'}
+        </span>
         {pinCount > 0 && <span className="text-[10px]">{pinCount}</span>}
       </button>
     );
@@ -290,9 +301,10 @@ export function TerminalSidePanel({
       </div>
       <header className="flex items-center justify-between border-b border-[var(--color-border)] pr-1">
         <div className="flex items-center">
-          {tabBtn('history', 'History')}
-          {tabBtn('pins', pinCount > 0 ? `Pins ${pinCount}` : 'Pins')}
-          {tabBtn('wiki', 'Wiki')}
+          {tabs.includes('history') && tabBtn('history', 'History')}
+          {tabs.includes('pins') &&
+            tabBtn('pins', pinCount > 0 ? `Pins ${pinCount}` : 'Pins')}
+          {tabs.includes('wiki') && tabBtn('wiki', 'Wiki')}
         </div>
         <button
           type="button"
@@ -307,7 +319,9 @@ export function TerminalSidePanel({
       {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
 
       {/* History stays mounted (hidden when inactive) so its scroll position and
-          sticky-bottom refs survive tab switches; Pins/Wiki mount on demand. */}
+          sticky-bottom refs survive tab switches; Pins/Wiki mount on demand.
+          Omitted entirely for SDK sessions (no 'history' tab). */}
+      {hasHistory && (
       <div className={`flex min-h-0 flex-1 flex-col ${tab === 'history' ? '' : 'hidden'}`}>
           <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto px-2 py-2">
             {rows.length === 0 ? (
@@ -393,6 +407,7 @@ export function TerminalSidePanel({
             Pins apply on the session's next launch (the live TUI keeps its launch-time prompt).
           </footer>
       </div>
+      )}
 
       {tab === 'pins' && (
         <div className="min-h-0 flex-1">
