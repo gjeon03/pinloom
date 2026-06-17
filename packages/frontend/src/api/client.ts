@@ -39,6 +39,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface AutostartStatus {
+  supported: boolean;
+  platform: 'darwin' | 'linux' | 'unsupported';
+  installed: boolean;
+  registered: boolean;
+  unitPath: string | null;
+}
+
+export interface AutostartActionResult {
+  status: AutostartStatus;
+  warnings: string[];
+}
+
 export interface BrowseEntry {
   name: string;
   isDir: boolean;
@@ -235,6 +248,18 @@ export const api = {
       '/api/settings/default-transport',
       { method: 'PUT', body: JSON.stringify({ transport }) },
     ),
+
+  getAutostart: () => request<AutostartStatus>('/api/settings/autostart'),
+  enableAutostart: () =>
+    request<AutostartActionResult>('/api/settings/autostart', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  disableAutostart: () =>
+    request<AutostartActionResult>('/api/settings/autostart', {
+      method: 'DELETE',
+    }),
+  autostartUnitUrl: () => '/api/settings/autostart/unit',
 
   listPins: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/pins`),

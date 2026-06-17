@@ -1,7 +1,7 @@
 import { type CSSProperties, useEffect, useState } from 'react';
 import { Download, Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { HealthResponse, UserEnvVar } from '@pinloom/shared';
-import { api } from '../api/client.js';
+import { api, type AutostartStatus } from '../api/client.js';
 import { usePwaInstall } from '../hooks/usePwaInstall.js';
 
 type CliStatus = HealthResponse['agents']['claude'];
@@ -354,6 +354,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
           <InstallAppSection />
 
+          <AutostartSection />
+
           <EnvVarsSection />
 
           <BackupSection />
@@ -501,6 +503,114 @@ function InstallAppSection() {
           </p>
         )}
       </div>
+    </section>
+  );
+}
+
+// Login autostart — register pinloom to launch at login so an installed PWA
+// always opens to a live backend. macOS/Linux only; the source of truth is the
+// OS (the server re-queries launchctl/systemctl on every GET), so the toggle
+// reflects out-of-band changes. Unsupported platforms get a manual unit-file
+// download instead.
+function AutostartSection() {
+  const [status, setStatus] = useState<AutostartStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+
+  useEffect(() => {
+    api
+      .getAutostart()
+      .then(setStatus)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  async function toggle(next: boolean) {
+    setBusy(true);
+    setError(null);
+    setWarnings([]);
+    try {
+      const result = next
+        ? await api.enableAutostart()
+        : await api.disableAutostart();
+      setStatus(result.status);
+      setWarnings(result.warnings);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function downloadUnit() {
+    const a = document.createElement('a');
+    a.href = api.autostartUnitUrl();
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  const platformLabel =
+    status?.platform === 'darwin'
+      ? 'macOS (LaunchAgent)'
+      : status?.platform === 'linux'
+        ? 'Linux (systemd --user)'
+        : 'this platform';
+
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        Start at login
+      </h3>
+      {status === null && !error ? (
+        <p className="text-[var(--color-ink-muted)] text-sm">Loading…</p>
+      ) : status && status.supported ? (
+        <div className="space-y-2 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={status.installed}
+              disabled={busy}
+              onChange={(e) => void toggle(e.target.checked)}
+            />
+            <span>
+              Launch pinloom automatically when you log in ({platformLabel})
+            </span>
+          </label>
+          <p className="text-[11px] leading-relaxed text-[var(--color-ink-muted)]">
+            Runs <code>pnpm start:served</code> from a login shell — it serves
+            the current build (no rebuild). After pulling new code, run{' '}
+            <code>pnpm build</code> to refresh it. Toggle off to remove the
+            agent completely.
+          </p>
+          {status.installed && !status.registered && (
+            <p className="text-amber-400 text-xs">
+              The unit file exists but the OS doesn’t report it as loaded — try
+              toggling off and on again.
+            </p>
+          )}
+          {warnings.length > 0 && (
+            <p className="text-amber-400 text-xs">{warnings.join(' ')}</p>
+          )}
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+        </div>
+      ) : (
+        <div className="space-y-2 text-sm">
+          <p className="text-[var(--color-ink-muted)]">
+            Automatic login start isn’t supported on {platformLabel} yet. You
+            can download the launcher unit and install it manually.
+          </p>
+          <button
+            type="button"
+            onClick={downloadUnit}
+            className="rounded border border-[var(--color-border)] text-sm px-3 py-1.5 hover:border-[var(--color-accent)]"
+          >
+            Download launcher file
+          </button>
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+        </div>
+      )}
     </section>
   );
 }
