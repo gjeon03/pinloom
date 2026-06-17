@@ -44,8 +44,14 @@ import {
   SessionNotFoundError,
 } from '../services/message-queue.js';
 import { isAiRunning, tryDrainQueue, waitForIdle } from '../services/runner.js';
-import { dispatchToWorker } from '../services/claude-pty/agent-terminal.js';
-import { dispatchToCodexWorker } from '../services/codex-pty/agent-terminal.js';
+import {
+  agentTerminalLock,
+  dispatchToWorker,
+} from '../services/claude-pty/agent-terminal.js';
+import {
+  codexTerminalLock,
+  dispatchToCodexWorker,
+} from '../services/codex-pty/agent-terminal.js';
 import { resolveTeamByToken } from '../services/team-tokens.js';
 import {
   emitDispatchEvent,
@@ -99,8 +105,43 @@ interface DispatchMember {
   queued: number;
 }
 
+// A terminal-mode worker runs as a live TUI (PTY), not through the SDK runner,
+// so `isAiRunning` (which only knows the runner's activeRuns) can't see it. The
+// dispatch write-lock is the busy signal: while an orchestrator dispatch drives
+// the worker, the lock is held as 'dispatch' for the whole turn. Both lock
+// getters return null for non-terminal sessions, so this is safe to call for any
+// worker. Without this, team_status/team_wait report a busy terminal worker as
+// idle and the orchestrator mis-judges it as doing nothing.
+function isTerminalWorkerBusy(sessionId: string): boolean {
+  return (
+    agentTerminalLock(sessionId) === 'dispatch' ||
+    codexTerminalLock(sessionId) === 'dispatch'
+  );
+}
+
+function isWorkerRunning(sessionId: string): boolean {
+  return isAiRunning(sessionId) || isTerminalWorkerBusy(sessionId);
+}
+
+// team_wait for a terminal worker: poll until the dispatch lock clears (there's
+// no runner idle event to await). Resolves true once idle (or already idle),
+// false if it's still busy when the timeout / socket-close abort fires.
+async function waitForTerminalIdle(
+  sessionId: string,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (!isTerminalWorkerBusy(sessionId)) return true;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !signal.aborted) {
+    await new Promise((r) => setTimeout(r, 250));
+    if (!isTerminalWorkerBusy(sessionId)) return true;
+  }
+  return !isTerminalWorkerBusy(sessionId);
+}
+
 function memberStatus(sessionId: string): DispatchMember['status'] {
-  const running = isAiRunning(sessionId);
+  const running = isWorkerRunning(sessionId);
   const queued = listQueueItems(sessionId).length;
   if (running && queued > 0) return 'mixed';
   if (running) return 'running';
@@ -1034,7 +1075,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       return { error: `no worker with alias "${alias}" in this team` };
     }
     return {
-      running: isAiRunning(member.sessionId),
+      running: isWorkerRunning(member.sessionId),
       queued: listQueueItems(member.sessionId).length,
     };
   });
@@ -1075,7 +1116,10 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     const onSocketClose = () => ac.abort();
     req.raw.once('close', onSocketClose);
     try {
-      const idle = await waitForIdle(member.sessionId, timeoutMs, ac.signal);
+      // Terminal workers have no runner to await — poll the dispatch lock.
+      const idle = isTerminalWorker(member.sessionId)
+        ? await waitForTerminalIdle(member.sessionId, timeoutMs, ac.signal)
+        : await waitForIdle(member.sessionId, timeoutMs, ac.signal);
       return {
         idle,
         queued: listQueueItems(member.sessionId).length,
