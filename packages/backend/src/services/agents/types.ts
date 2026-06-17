@@ -80,6 +80,16 @@ export interface AgentRunArgs {
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Prior session/thread id; null = start fresh. */
   resume?: string | null;
+  /**
+   * Fork the resumed session into a new branch instead of continuing it
+   * in place. Used to switch the model mid-conversation: the Claude SDK
+   * pins a resumed thread to its original model and ignores a new `model`
+   * on a plain resume, but forking carries the conversation context into a
+   * fresh session that DOES honor the new model. Yields a new session id
+   * (captured via the normal session_id event). No effect on adapters that
+   * don't support forking (Codex). Ignored unless `resume` is also set.
+   */
+  forkSession?: boolean;
   abortController: AbortController;
   /** First user message that kicks the run off. */
   initialPrompt: UserPrompt;

@@ -587,6 +587,26 @@ function clearClaudeSessionId(sessionId: string) {
   ).run(new Date().toISOString(), sessionId);
 }
 
+// Model the most recent assistant turn ran on, used to detect a mid-conversation
+// model switch. null when the session has no prior captured-model turn yet.
+function getLastAssistantModel(sessionId: string): string | null {
+  const row = getDb()
+    .prepare(
+      `SELECT model FROM messages
+         WHERE session_id = ? AND role = 'assistant' AND model IS NOT NULL
+         ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(sessionId) as { model: string | null } | undefined;
+  return row?.model ?? null;
+}
+
+// Compare model ids ignoring the CLI's context-window suffix (`claude-opus-4-8[1m]`)
+// since the reported model id drops it (`claude-opus-4-8`). Without this every
+// turn would look like a model change and fork needlessly.
+function normalizeModelId(model: string): string {
+  return model.replace(/\[[^\]]*\]\s*$/, '').trim();
+}
+
 interface HistoryMessage {
   role: string;
   content: string;
@@ -624,6 +644,11 @@ interface ActiveRun {
   // True while the agent is producing output — flips on push, off on
   // turn_complete. Drives `isAiRunning` for the run-status endpoint.
   inFlight: boolean;
+  // The model this live agent process is pinned to. A live run keeps the
+  // same process across turns (pushMessage), and that process is fixed to
+  // its launch model — so switching models requires tearing this run down
+  // and starting a fresh (forked) one. null = CLI default.
+  model: string | null;
 }
 
 const activeRuns = new Map<string, ActiveRun>();
@@ -991,7 +1016,21 @@ export async function sendUserMessages(
   // intent is the most likely owner of any tool/plan changes that follow.
   const lastPlanItemId = resolvedIds[resolvedIds.length - 1];
 
-  const existing = activeRuns.get(sessionId);
+  let existing = activeRuns.get(sessionId);
+  // Model switch on an idle-but-alive run: the live agent process is pinned to
+  // its launch model, so pushMessage would keep using the old one. Tear it down
+  // so the fresh run below forks the session (keeping context) under the new
+  // model. (The in-flight case already tears down via the interrupt path above.)
+  const requestedModel = model ?? ctx.model ?? null;
+  if (
+    existing &&
+    requestedModel !== null &&
+    existing.model !== null &&
+    normalizeModelId(requestedModel) !== normalizeModelId(existing.model)
+  ) {
+    stopRun(sessionId, { silent: true });
+    existing = undefined;
+  }
   if (existing) {
     // Mid-run injection. Plan-item rollover depends on whether a turn is
     // currently in flight: if yes, queue the new id and let the next
@@ -1176,6 +1215,7 @@ async function runAttempt(
   model?: string,
   mcpServers?: Record<string, McpStdioServerConfig>,
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+  forkSession = false,
 ): Promise<AttemptResult> {
   const adapter = getAgentAdapter(ctx.agent);
   const abortController = new AbortController();
@@ -1186,6 +1226,7 @@ async function runAttempt(
     model,
     reasoningEffort,
     resume: useResume ? ctx.claudeSessionId : null,
+    forkSession: useResume && forkSession,
     abortController,
     initialPrompt: { text: prompt, images },
     mcpServers,
@@ -1198,6 +1239,7 @@ async function runAttempt(
     pendingPlanItemId: null,
     hasPendingPlanItem: false,
     inFlight: true,
+    model: model ?? null,
   };
   activeRuns.set(ctx.id, active);
   emitWorkerStatusIfMember(ctx.id);
@@ -1465,6 +1507,19 @@ async function runAssistant(
   // moment the fallback ran.
   const mcpServers = buildOrchestratorMcpConfig(ctx.id);
 
+  // Detect a mid-conversation model switch. The Claude SDK pins a resumed
+  // thread to its original model and ignores a new `model` on a plain resume,
+  // so to actually switch we fork the session (carries context, honors the new
+  // model). Only meaningful when resuming an existing thread; the suffix is
+  // normalized so `claude-opus-4-8[1m]` vs the reported `claude-opus-4-8` isn't
+  // mistaken for a change.
+  const requestedModel = model ?? ctx.model ?? null;
+  const priorModel = getLastAssistantModel(ctx.id);
+  const forkForModelSwitch =
+    requestedModel !== null &&
+    priorModel !== null &&
+    normalizeModelId(requestedModel) !== normalizeModelId(priorModel);
+
   let result: AttemptResult = { shouldFallback: false, cancelled: false, silent: false };
 
   try {
@@ -1481,6 +1536,7 @@ async function runAssistant(
           model ?? ctx.model ?? undefined,
           mcpServers,
           ctx.reasoningEffort ?? undefined,
+          forkForModelSwitch,
         );
       } catch (err) {
         // Hard error after the attempt produced output — surface as runner

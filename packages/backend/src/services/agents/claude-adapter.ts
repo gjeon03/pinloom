@@ -184,6 +184,10 @@ class ClaudeAdapterImpl implements AgentAdapter {
       thinking: thinkingOption,
     };
     if (args.resume) options.resume = args.resume;
+    // Fork on resume to switch the model mid-conversation (a plain `--resume`
+    // pins the thread to its original model and ignores `--model`). `--fork-session`
+    // branches into a new session that honors the model while keeping context.
+    if (args.resume && args.forkSession) options.forkSession = true;
     if (args.model) options.model = args.model;
     if (args.mcpServers) {
       // SDK accepts McpStdioServerConfig literally, plus an optional
