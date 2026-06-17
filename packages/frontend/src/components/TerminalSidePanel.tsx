@@ -368,6 +368,8 @@ export function TerminalSidePanel({
           ? ChevronUp
           : ChevronDown;
 
+  // Fixed-size cells so the 4 edges lay out as a clear square D-pad (top
+  // center, left/right middle, bottom center) — easy to read and to click.
   const posBtn = (p: SidePanelPosition, Icon: typeof PanelRight, label: string) => (
     <button
       type="button"
@@ -375,11 +377,12 @@ export function TerminalSidePanel({
         setSidePanelPosition(p);
         setPickerOpen(false);
       }}
-      title={label}
-      className={`flex items-center justify-center rounded p-1.5 ${
+      title={`Dock ${label.toLowerCase()}`}
+      aria-label={`Dock ${label.toLowerCase()}`}
+      className={`flex h-9 w-9 items-center justify-center rounded border ${
         position === p
-          ? 'bg-[var(--color-accent)] text-black'
-          : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]'
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-black'
+          : 'border-[var(--color-border)] text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]'
       }`}
     >
       <Icon className="h-4 w-4" />
@@ -448,13 +451,23 @@ export function TerminalSidePanel({
                   className="fixed inset-0 z-30"
                   onClick={() => setPickerOpen(false)}
                 />
-                <div className="absolute right-0 top-full z-40 mt-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 shadow-lg">
-                  <div className="grid grid-cols-3 gap-1">
+                <div className="absolute right-0 top-full z-40 mt-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 shadow-lg">
+                  {/* Fixed track sizes — `grid-cols-3` (1fr) collapses to 0 in
+                      a shrink-wrapped absolute popover. */}
+                  <div
+                    className="grid gap-1"
+                    style={{
+                      gridTemplateColumns: 'repeat(3, 2.25rem)',
+                      gridTemplateRows: 'repeat(3, 2.25rem)',
+                    }}
+                  >
                     <span />
                     {posBtn('top', PanelTop, 'Top')}
                     <span />
                     {posBtn('left', PanelLeft, 'Left')}
-                    <span />
+                    <span className="flex items-center justify-center text-[9px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+                      Dock
+                    </span>
                     {posBtn('right', PanelRight, 'Right')}
                     <span />
                     {posBtn('bottom', PanelBottom, 'Bottom')}
