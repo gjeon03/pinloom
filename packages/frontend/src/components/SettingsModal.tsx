@@ -1,7 +1,8 @@
 import { type CSSProperties, useEffect, useState } from 'react';
-import { Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Download, Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { HealthResponse, UserEnvVar } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { usePwaInstall } from '../hooks/usePwaInstall.js';
 
 type CliStatus = HealthResponse['agents']['claude'];
 
@@ -351,6 +352,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
           <DefaultTransportSection />
 
+          <InstallAppSection />
+
           <EnvVarsSection />
 
           <BackupSection />
@@ -445,6 +448,59 @@ function DefaultTransportSection() {
           {error && <p className="text-red-400 text-xs">{error}</p>}
         </div>
       )}
+    </section>
+  );
+}
+
+// Install pinloom as a standalone PWA so it gets a dock/taskbar icon and its
+// own window (no browser chrome). The service worker only precaches the static
+// shell — the app still needs the backend running, which pairs with the
+// login-autostart setting. Chromium fires `beforeinstallprompt` (button drives
+// the native dialog); iOS Safari has no programmatic prompt, so we fall back to
+// the manual "Add to Home Screen" instructions.
+function InstallAppSection() {
+  const { canInstall, isInstalled, isIos, promptInstall } = usePwaInstall();
+
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        Install as app
+      </h3>
+      <div className="space-y-2 text-sm">
+        {isInstalled ? (
+          <p className="text-[var(--color-ink-muted)]">
+            pinloom is running as an installed app. Pair this with “Start at
+            login” below so the backend is always up when you open it.
+          </p>
+        ) : canInstall ? (
+          <>
+            <p className="text-[var(--color-ink-muted)]">
+              Install pinloom as a desktop app — its own window with a
+              dock/taskbar icon, no browser tabs.
+            </p>
+            <button
+              type="button"
+              onClick={() => void promptInstall()}
+              className="inline-flex items-center gap-1.5 rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm"
+            >
+              <Download size={14} />
+              Install pinloom
+            </button>
+          </>
+        ) : isIos ? (
+          <p className="text-[var(--color-ink-muted)]">
+            On iOS Safari, tap the <strong>Share</strong> button, then{' '}
+            <strong>Add to Home Screen</strong> to install pinloom as an app.
+          </p>
+        ) : (
+          <p className="text-[var(--color-ink-muted)]">
+            Installation isn’t available in this browser right now. In
+            Chrome/Edge, look for the install icon in the address bar; if it’s
+            missing, the app may already be installed or the browser doesn’t
+            support it.
+          </p>
+        )}
+      </div>
     </section>
   );
 }

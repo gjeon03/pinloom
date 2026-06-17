@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 const API_PORT = process.env.PORT || '4748';
 
@@ -20,7 +21,64 @@ const proxy = {
 };
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    // Installable PWA so pinloom can run as a standalone desktop app window
+    // (dock/taskbar icon, no browser chrome). pinloom is a dynamic localhost
+    // app: the service worker precaches ONLY the static app shell — every
+    // `/api` call and WebSocket stays on the network. `autoUpdate` swaps in a
+    // new shell on the next load whenever `vite build` changes the asset
+    // hashes (matters because prod re-serves via `vite preview` after build).
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.png'],
+      manifest: {
+        name: 'pinloom',
+        short_name: 'pinloom',
+        description:
+          'Local Claude Code workspace — persistent history, pinned answers, project wiki, team orchestration.',
+        theme_color: '#1a1b26',
+        background_color: '#1a1b26',
+        display: 'standalone',
+        start_url: '/',
+        scope: '/',
+        icons: [
+          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+          {
+            src: 'pwa-maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
+      workbox: {
+        // Precache the built shell only. NEVER the dynamic surfaces:
+        // - `/api/*`  → NetworkOnly (conversation data, settings, health)
+        // - `/ws*`    → WebSockets bypass the SW fetch handler entirely, but
+        //               we deny them from the SPA navigation fallback too so a
+        //               socket path is never answered with index.html.
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2}'],
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api/, /^\/ws/],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith('/api') ||
+              url.pathname.startsWith('/ws'),
+            handler: 'NetworkOnly',
+          },
+        ],
+        // A new pinloom build should take over immediately rather than waiting
+        // for every tab to close — pairs with `registerType: 'autoUpdate'`.
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+      },
+    }),
+  ],
   server: {
     port: 4747,
     strictPort: false,
