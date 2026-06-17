@@ -7,11 +7,13 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  History,
   LayoutGrid,
   PanelBottom,
   PanelLeft,
   PanelRight,
   PanelTop,
+  Pin,
 } from 'lucide-react';
 import type { Message, Session, WsEvent } from '@pinloom/shared';
 import { api, type WikiPage } from '../api/client.js';
@@ -303,7 +305,9 @@ export function TerminalSidePanel({
         : position === 'top'
           ? 'border-b'
           : 'border-t';
-  const collapsedLabel = hasHistory ? 'History & Pins' : 'Pins & Wiki';
+  const collapsedTitle = hasHistory
+    ? 'Show history, pins & wiki'
+    : 'Show pins & wiki';
 
   if (collapsed) {
     // Expand chevron points inward (toward the content), per docked edge.
@@ -319,20 +323,27 @@ export function TerminalSidePanel({
       <button
         type="button"
         onClick={() => persistCollapsed(false)}
-        title="Show panel"
-        className={`flex shrink-0 items-center justify-center gap-2 ${contentBorder} border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] ${
+        title={collapsedTitle}
+        aria-label={collapsedTitle}
+        // Anchor the icons at the start of the strip — top for a vertical
+        // rail, left for a horizontal one — rather than floating in the
+        // center. Icons (pin / wiki, plus history for terminal) read cleaner
+        // than the old sideways text.
+        className={`flex shrink-0 items-center justify-start gap-2 ${contentBorder} border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] ${
           vertical ? 'h-full w-8 flex-col py-2' : 'h-8 w-full flex-row px-2'
         }`}
       >
         <ExpandIcon className="h-4 w-4" />
-        <span
-          className={`text-[10px] tracking-wide ${
-            vertical ? '[writing-mode:vertical-rl]' : ''
-          }`}
-        >
-          {collapsedLabel}
+        {hasHistory && <History className="h-4 w-4" />}
+        <span className="relative inline-flex">
+          <Pin className="h-4 w-4" />
+          {pinCount > 0 && (
+            <span className="absolute -right-1.5 -top-1.5 rounded-full bg-[var(--color-accent)] px-1 text-[9px] leading-[1.2] text-black">
+              {pinCount}
+            </span>
+          )}
         </span>
-        {pinCount > 0 && <span className="text-[10px]">{pinCount}</span>}
+        <BookOpen className="h-4 w-4" />
       </button>
     );
   }
@@ -341,10 +352,13 @@ export function TerminalSidePanel({
     <button
       type="button"
       onClick={() => selectTab(id)}
-      className={`px-2.5 py-1 text-[11px] ${
+      // Active underline via inset shadow (not border-b) so it doesn't add to
+      // the button's box height. Fixed h-8 matches the right-side icon buttons
+      // so header `items-center` lines everything up exactly.
+      className={`flex h-8 items-center px-2.5 text-[11px] ${
         tab === id
-          ? 'border-b-2 border-[var(--color-accent)] text-[var(--color-ink)]'
-          : 'border-b-2 border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+          ? 'text-[var(--color-ink)] shadow-[inset_0_-2px_0_0_var(--color-accent)]'
+          : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
       }`}
     >
       {label}
@@ -440,7 +454,7 @@ export function TerminalSidePanel({
               onClick={() => setPickerOpen((v) => !v)}
               title="Panel position"
               aria-label="Panel position"
-              className="px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              className="flex h-8 items-center px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
             >
               <LayoutGrid className="h-4 w-4" />
             </button>
@@ -481,7 +495,7 @@ export function TerminalSidePanel({
             type="button"
             onClick={() => persistCollapsed(true)}
             title="Collapse"
-            className="px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            className="flex h-8 items-center px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
           >
             <CollapseIcon className="h-4 w-4" />
           </button>
