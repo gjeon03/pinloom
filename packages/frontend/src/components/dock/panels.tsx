@@ -4,6 +4,7 @@
 // panel visibility (usePanelVisible) to preserve the pre-dock "only the
 // foreground view is mounted" semantics per group.
 
+import type { ReactNode } from 'react';
 import useSWR from 'swr';
 import type { IDockviewPanelProps, IWatermarkPanelProps } from 'dockview-react';
 import { api } from '../../api/client.js';
@@ -14,6 +15,10 @@ import { TerminalSidePanel } from '../TerminalSidePanel.js';
 import { ProjectNotepadView } from '../ProjectNotepadView.js';
 import { TeamCanvasPage } from '../../pages/TeamCanvasPage.js';
 import { useDock, usePanelVisible } from './DockContext.js';
+import {
+  isVerticalRail,
+  useSidePanelPosition,
+} from '../../hooks/useSidePanelPosition.js';
 
 export interface SessionPanelParams {
   kind: 'session';
@@ -40,6 +45,39 @@ function MissingTarget({ label }: { label: string }) {
   );
 }
 
+// Lays the main view + its side rail out along the rail's docked edge: a row
+// for left/right rails, a column for top/bottom. The rail comes first for
+// left/top, last for right/bottom. Shared by chat + terminal panels.
+function SessionRailLayout({
+  content,
+  rail,
+  position,
+}: {
+  content: ReactNode;
+  rail: ReactNode;
+  position: ReturnType<typeof useSidePanelPosition>;
+}) {
+  const row = isVerticalRail(position);
+  const railFirst = position === 'left' || position === 'top';
+  return (
+    <div
+      className={`flex h-full w-full min-h-0 ${row ? 'flex-row' : 'flex-col'}`}
+    >
+      {railFirst ? (
+        <>
+          {rail}
+          {content}
+        </>
+      ) : (
+        <>
+          {content}
+          {rail}
+        </>
+      )}
+    </div>
+  );
+}
+
 // SDK sessions get the same right rail as terminal sessions, minus History
 // (ChatView already shows the full conversation). Keeps pins/wiki consistent
 // across both modes and per-panel under splits.
@@ -50,6 +88,7 @@ export function ChatPanel(props: IDockviewPanelProps) {
   const ctx = useDock();
   const visible = usePanelVisible(props.api);
   const session = ctx.sessionsById.get(sessionId);
+  const position = useSidePanelPosition();
   // Per-panel pins (same as TerminalPanel) — under splits each visible SDK
   // session needs its own pin list.
   const { data: pinsData } = useSWR(
@@ -58,32 +97,34 @@ export function ChatPanel(props: IDockviewPanelProps) {
   );
   if (!visible) return null;
   if (!session) return <MissingTarget label="Session not found." />;
-  return (
-    <div className="flex h-full w-full min-h-0">
-      <div className="min-w-0 flex-1">
-        {/* Force a fresh component instance per session so per-session local
-            state (textarea draft, queue, wikiSyncing flag, etc.) doesn't leak
-            across renders — same contract as the pre-dock keyed mount. */}
-        <ChatView
-          key={session.id}
-          session={session}
-          onPinChange={ctx.onPinChange}
-          onSessionUpdate={ctx.onSessionUpdate}
-        />
-      </div>
-      <TerminalSidePanel
-        key={`panel-${session.id}`}
-        sessionId={session.id}
-        pins={pinsData ?? []}
+  const content = (
+    <div className="min-w-0 min-h-0 flex-1">
+      {/* Force a fresh component instance per session so per-session local
+          state (textarea draft, queue, wikiSyncing flag, etc.) doesn't leak
+          across renders — same contract as the pre-dock keyed mount. */}
+      <ChatView
+        key={session.id}
+        session={session}
         onPinChange={ctx.onPinChange}
-        projectName={ctx.projectName}
-        projectCwd={ctx.projectCwd}
-        onHandoff={ctx.onHandoff}
-        onSendPin={(pin) => ctx.onSendPin(session.id, pin)}
-        tabs={[...SDK_SIDE_TABS]}
+        onSessionUpdate={ctx.onSessionUpdate}
       />
     </div>
   );
+  const rail = (
+    <TerminalSidePanel
+      key={`panel-${session.id}`}
+      sessionId={session.id}
+      pins={pinsData ?? []}
+      onPinChange={ctx.onPinChange}
+      projectName={ctx.projectName}
+      projectCwd={ctx.projectCwd}
+      onHandoff={ctx.onHandoff}
+      onSendPin={(pin) => ctx.onSendPin(session.id, pin)}
+      tabs={[...SDK_SIDE_TABS]}
+      position={position}
+    />
+  );
+  return <SessionRailLayout content={content} rail={rail} position={position} />;
 }
 
 export function TerminalPanel(props: IDockviewPanelProps) {
@@ -91,6 +132,7 @@ export function TerminalPanel(props: IDockviewPanelProps) {
   const ctx = useDock();
   const visible = usePanelVisible(props.api);
   const session = ctx.sessionsById.get(sessionId);
+  const position = useSidePanelPosition();
   // Per-panel pins fetch: with splits, two visible terminal sessions each
   // need their own pin list — a single focused-session pins store can't
   // serve both. SWR dedupes + caches across tab switches; onPinChange
@@ -101,27 +143,29 @@ export function TerminalPanel(props: IDockviewPanelProps) {
   );
   if (!visible) return null;
   if (!session) return <MissingTarget label="Session not found." />;
-  return (
-    <div className="flex h-full w-full min-h-0">
-      <div className="min-w-0 flex-1">
-        <AgentTerminal
-          key={session.id}
-          sessionId={session.id}
-          onCleanExit={() => ctx.closeTerminalSession(session.id)}
-        />
-      </div>
-      <TerminalSidePanel
-        key={`panel-${session.id}`}
+  const content = (
+    <div className="min-w-0 min-h-0 flex-1">
+      <AgentTerminal
+        key={session.id}
         sessionId={session.id}
-        pins={pinsData ?? []}
-        onPinChange={ctx.onPinChange}
-        projectName={ctx.projectName}
-        projectCwd={ctx.projectCwd}
-        onHandoff={ctx.onHandoff}
-        onSendPin={(pin) => ctx.onSendPin(session.id, pin)}
+        onCleanExit={() => ctx.closeTerminalSession(session.id)}
       />
     </div>
   );
+  const rail = (
+    <TerminalSidePanel
+      key={`panel-${session.id}`}
+      sessionId={session.id}
+      pins={pinsData ?? []}
+      onPinChange={ctx.onPinChange}
+      projectName={ctx.projectName}
+      projectCwd={ctx.projectCwd}
+      onHandoff={ctx.onHandoff}
+      onSendPin={(pin) => ctx.onSendPin(session.id, pin)}
+      position={position}
+    />
+  );
+  return <SessionRailLayout content={content} rail={rail} position={position} />;
 }
 
 export function CanvasPanel(props: IDockviewPanelProps) {

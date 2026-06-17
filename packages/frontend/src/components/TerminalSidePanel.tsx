@@ -1,9 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BookOpen, BookPlus, ChevronDown, ChevronRight, ChevronUp } from 'lucide-react';
+import {
+  BookOpen,
+  BookPlus,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  LayoutGrid,
+  PanelBottom,
+  PanelLeft,
+  PanelRight,
+  PanelTop,
+} from 'lucide-react';
 import type { Message, Session, WsEvent } from '@pinloom/shared';
 import { api, type WikiPage } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
+import {
+  isVerticalRail,
+  setSidePanelPosition,
+  type SidePanelPosition,
+} from '../hooks/useSidePanelPosition.js';
 import { useNotifications } from '../stores/notifications.js';
 import { ActionIconButton, CopyMarkdownButton, PinToggleButton } from './MessageActions.js';
 import { PinnedPanel } from './PinnedPanel.js';
@@ -44,11 +61,17 @@ function projectSlug(cwd: string): string {
 // render the newest WINDOW and page older history in on scroll-up.
 const WINDOW = 60;
 
-// Drag-to-resize: one width preference shared across terminal sessions.
+// Drag-to-resize: preferences shared across sessions. Width drives left/right
+// rails; height drives top/bottom slabs (kept as a separate key so flipping
+// orientation restores a sane size for that axis).
 const WIDTH_KEY = 'pinloom:termpanel:width';
 const MIN_W = 240;
 const MAX_W = 720;
 const DEFAULT_W = 320;
+const HEIGHT_KEY = 'pinloom:termpanel:height';
+const MIN_H = 140;
+const MAX_H = 560;
+const DEFAULT_H = 240;
 
 function preview(content: string, max = 600): string {
   const t = content.trim();
@@ -69,6 +92,8 @@ interface Props {
   /** Which tabs to show, in order. Defaults to all three (terminal). SDK
    *  sessions pass ['pins','wiki'] — their ChatView already shows history. */
   tabs?: Tab[];
+  /** Which edge the rail docks to (global preference from the parent). */
+  position?: SidePanelPosition;
 }
 
 export function TerminalSidePanel({
@@ -80,8 +105,10 @@ export function TerminalSidePanel({
   onHandoff,
   onSendPin,
   tabs = ALL_TABS,
+  position = 'right',
 }: Props) {
   const hasHistory = tabs.includes('history');
+  const vertical = isVerticalRail(position);
   const [messages, setMessages] = useState<Message[]>([]);
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem(tabKey(sessionId));
@@ -94,14 +121,22 @@ export function TerminalSidePanel({
   const [limit, setLimit] = useState(WINDOW);
   // Per-message "show full content" toggles (history rows truncate by default).
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  // Drag-resizable width (clamped, persisted globally).
+  // Drag-resizable size (clamped, persisted globally). Width for vertical
+  // rails, height for horizontal slabs.
   const [width, setWidth] = useState(() => {
     const v = Number(localStorage.getItem(WIDTH_KEY));
     return Number.isFinite(v) && v >= MIN_W && v <= MAX_W ? v : DEFAULT_W;
   });
+  const [height, setHeight] = useState(() => {
+    const v = Number(localStorage.getItem(HEIGHT_KEY));
+    return Number.isFinite(v) && v >= MIN_H && v <= MAX_H ? v : DEFAULT_H;
+  });
   const [dragging, setDragging] = useState(false);
+  // Position picker popover (next to the collapse button).
+  const [pickerOpen, setPickerOpen] = useState(false);
   const asideRef = useRef<HTMLElement>(null);
-  const dragRightRef = useRef(0); // panel's right edge (fixed during a drag)
+  // The panel edge held fixed during a drag (opposite the drag handle).
+  const dragAnchorRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Sticky-bottom: true while the user is parked at the latest turn. Opening the
   // panel and new live turns scroll to the bottom; once the user scrolls up to
@@ -143,21 +178,37 @@ export function TerminalSidePanel({
   );
   useWebSocket(`session:${sessionId}`, onWsEvent);
 
-  // Drag-to-resize. The panel is flush-right, so its width is the distance from
-  // the cursor to its (drag-fixed) right edge. Mirrors HSplitter's body cursor /
-  // user-select handling. AgentTerminal's container ResizeObserver re-fits the
-  // xterm automatically as the panel grows/shrinks.
+  // Drag-to-resize. The size is the distance from the cursor to the panel's
+  // (drag-fixed) anchor edge — the edge opposite the drag handle. Mirrors
+  // HSplitter's body cursor / user-select handling. AgentTerminal's container
+  // ResizeObserver re-fits the xterm automatically as the panel resizes.
   useEffect(() => {
     if (!dragging) return;
     function onMove(e: MouseEvent) {
-      const next = Math.max(MIN_W, Math.min(MAX_W, dragRightRef.current - e.clientX));
-      setWidth(next);
-      localStorage.setItem(WIDTH_KEY, String(next));
+      if (vertical) {
+        // right rail grows leftward (anchor=right edge); left rail rightward.
+        const raw =
+          position === 'right'
+            ? dragAnchorRef.current - e.clientX
+            : e.clientX - dragAnchorRef.current;
+        const next = Math.max(MIN_W, Math.min(MAX_W, raw));
+        setWidth(next);
+        localStorage.setItem(WIDTH_KEY, String(next));
+      } else {
+        // bottom slab grows upward (anchor=bottom edge); top slab downward.
+        const raw =
+          position === 'bottom'
+            ? dragAnchorRef.current - e.clientY
+            : e.clientY - dragAnchorRef.current;
+        const next = Math.max(MIN_H, Math.min(MAX_H, raw));
+        setHeight(next);
+        localStorage.setItem(HEIGHT_KEY, String(next));
+      }
     }
     function onUp() {
       setDragging(false);
     }
-    document.body.style.cursor = 'col-resize';
+    document.body.style.cursor = vertical ? 'col-resize' : 'row-resize';
     document.body.style.userSelect = 'none';
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -167,7 +218,7 @@ export function TerminalSidePanel({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [dragging]);
+  }, [dragging, vertical, position]);
 
   // Quick pin/unpin from the history list. Updates this panel's own copy AND the
   // shared pins state so the Pins tab / left rail reflect it immediately (the
@@ -243,17 +294,43 @@ export function TerminalSidePanel({
     }
   }
 
+  // Border on the content-facing edge so the rail reads as docked to `position`.
+  const contentBorder =
+    position === 'right'
+      ? 'border-l'
+      : position === 'left'
+        ? 'border-r'
+        : position === 'top'
+          ? 'border-b'
+          : 'border-t';
+  const collapsedLabel = hasHistory ? 'History & Pins' : 'Pins & Wiki';
+
   if (collapsed) {
+    // Expand chevron points inward (toward the content), per docked edge.
+    const ExpandIcon =
+      position === 'right'
+        ? ChevronLeft
+        : position === 'left'
+          ? ChevronRight
+          : position === 'top'
+            ? ChevronDown
+            : ChevronUp;
     return (
       <button
         type="button"
         onClick={() => persistCollapsed(false)}
-        title="Show history & pins"
-        className="flex h-full w-8 shrink-0 flex-col items-center gap-2 border-l border-[var(--color-border)] bg-[var(--color-surface-2)] py-2 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        title="Show panel"
+        className={`flex shrink-0 items-center justify-center gap-2 ${contentBorder} border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] ${
+          vertical ? 'h-full w-8 flex-col py-2' : 'h-8 w-full flex-row px-2'
+        }`}
       >
-        <ChevronRight className="h-4 w-4 rotate-180" />
-        <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide">
-          {hasHistory ? 'History & Pins' : 'Pins & Wiki'}
+        <ExpandIcon className="h-4 w-4" />
+        <span
+          className={`text-[10px] tracking-wide ${
+            vertical ? '[writing-mode:vertical-rl]' : ''
+          }`}
+        >
+          {collapsedLabel}
         </span>
         {pinCount > 0 && <span className="text-[10px]">{pinCount}</span>}
       </button>
@@ -274,27 +351,73 @@ export function TerminalSidePanel({
     </button>
   );
 
+  // Drag handle sits on the content-facing edge (same side as contentBorder);
+  // the opposite (outer) edge is the fixed anchor during a resize.
+  const handleClass = vertical
+    ? `inset-y-0 ${position === 'right' ? 'left-0 -translate-x-1/2' : 'right-0 translate-x-1/2'} w-2 cursor-col-resize`
+    : `inset-x-0 ${position === 'bottom' ? 'top-0 -translate-y-1/2' : 'bottom-0 translate-y-1/2'} h-2 cursor-row-resize`;
+  const handleLineClass = vertical
+    ? 'inset-y-0 left-1/2 w-px -translate-x-1/2'
+    : 'inset-x-0 top-1/2 h-px -translate-y-1/2';
+  const CollapseIcon =
+    position === 'right'
+      ? ChevronRight
+      : position === 'left'
+        ? ChevronLeft
+        : position === 'top'
+          ? ChevronUp
+          : ChevronDown;
+
+  const posBtn = (p: SidePanelPosition, Icon: typeof PanelRight, label: string) => (
+    <button
+      type="button"
+      onClick={() => {
+        setSidePanelPosition(p);
+        setPickerOpen(false);
+      }}
+      title={label}
+      className={`flex items-center justify-center rounded p-1.5 ${
+        position === p
+          ? 'bg-[var(--color-accent)] text-black'
+          : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]'
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+    </button>
+  );
+
   return (
     <aside
       ref={asideRef}
-      style={{ width }}
-      className="relative flex h-full shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)]"
+      style={vertical ? { width } : { height }}
+      className={`relative flex shrink-0 flex-col ${contentBorder} border-[var(--color-border)] bg-[var(--color-surface)] ${
+        vertical ? 'h-full' : 'w-full'
+      }`}
     >
-      {/* Drag handle on the left edge — resize the panel (and the terminal). */}
+      {/* Drag handle on the content-facing edge — resizes the panel. */}
       <div
         onMouseDown={(e) => {
           e.preventDefault();
           const r = asideRef.current?.getBoundingClientRect();
-          if (r) dragRightRef.current = r.right;
+          if (r) {
+            dragAnchorRef.current =
+              position === 'right'
+                ? r.right
+                : position === 'left'
+                  ? r.left
+                  : position === 'bottom'
+                    ? r.bottom
+                    : r.top;
+          }
           setDragging(true);
         }}
         title="Drag to resize"
-        className={`group absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize ${
+        className={`group absolute z-20 ${handleClass} ${
           dragging ? 'bg-[var(--color-accent)]' : ''
         }`}
       >
         <div
-          className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 ${
+          className={`absolute ${handleLineClass} ${
             dragging ? 'bg-[var(--color-accent)]' : 'group-hover:bg-[var(--color-accent)]/50'
           }`}
         />
@@ -306,14 +429,50 @@ export function TerminalSidePanel({
             tabBtn('pins', pinCount > 0 ? `Pins ${pinCount}` : 'Pins')}
           {tabs.includes('wiki') && tabBtn('wiki', 'Wiki')}
         </div>
-        <button
-          type="button"
-          onClick={() => persistCollapsed(true)}
-          title="Collapse"
-          className="px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          {/* Position picker — dock the rail to any edge. */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setPickerOpen((v) => !v)}
+              title="Panel position"
+              aria-label="Panel position"
+              className="px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </button>
+            {pickerOpen && (
+              <>
+                {/* Click-away overlay. */}
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setPickerOpen(false)}
+                />
+                <div className="absolute right-0 top-full z-40 mt-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 shadow-lg">
+                  <div className="grid grid-cols-3 gap-1">
+                    <span />
+                    {posBtn('top', PanelTop, 'Top')}
+                    <span />
+                    {posBtn('left', PanelLeft, 'Left')}
+                    <span />
+                    {posBtn('right', PanelRight, 'Right')}
+                    <span />
+                    {posBtn('bottom', PanelBottom, 'Bottom')}
+                    <span />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => persistCollapsed(true)}
+            title="Collapse"
+            className="px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          >
+            <CollapseIcon className="h-4 w-4" />
+          </button>
+        </div>
       </header>
 
       {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
