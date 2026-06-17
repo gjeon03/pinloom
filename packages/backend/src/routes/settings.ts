@@ -11,6 +11,14 @@ import {
   claudeTransport,
   DEFAULT_TRANSPORT_KEY,
 } from '../services/agents/index.js';
+import {
+  AutostartNotBuiltError,
+  AutostartUnsupportedError,
+  disableAutostart,
+  enableAutostart,
+  generateAutostartUnit,
+  getAutostartStatus,
+} from '../services/autostart.js';
 
 export async function settingsRoutes(app: FastifyInstance) {
   // Default transport for NEW sessions. `effective` is what claudeTransport()
@@ -38,6 +46,59 @@ export async function settingsRoutes(app: FastifyInstance) {
       return { setting: t, effective: claudeTransport() };
     },
   );
+
+  // Login autostart (macOS LaunchAgent / Linux systemd --user). The OS is the
+  // source of truth — every GET re-reads the unit file + queries the loader,
+  // because the user can unload it out-of-band. See services/autostart.ts.
+  app.get('/api/settings/autostart', async () => {
+    return getAutostartStatus();
+  });
+
+  app.post('/api/settings/autostart', async (_req, reply) => {
+    try {
+      return await enableAutostart();
+    } catch (err) {
+      if (err instanceof AutostartUnsupportedError) {
+        reply.code(501);
+        return { error: err.message };
+      }
+      if (err instanceof AutostartNotBuiltError) {
+        reply.code(409);
+        return { error: err.message };
+      }
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  app.delete('/api/settings/autostart', async (_req, reply) => {
+    try {
+      return await disableAutostart();
+    } catch (err) {
+      if (err instanceof AutostartUnsupportedError) {
+        reply.code(501);
+        return { error: err.message };
+      }
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // The generated unit file as a download — the manual fallback for
+  // unsupported platforms (Windows) or users who prefer to install it
+  // themselves. Returns 501 when the current platform has no unit format.
+  app.get('/api/settings/autostart/unit', async (_req, reply) => {
+    const unit = generateAutostartUnit();
+    if (!unit) {
+      reply.code(501);
+      return { error: 'No autostart unit format for this platform.' };
+    }
+    const filename = unit.path.split('/').pop() ?? 'pinloom-autostart';
+    reply
+      .header('Content-Type', 'text/plain; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${filename}"`);
+    return unit.content;
+  });
 
   app.get('/api/settings/env', async () => {
     return listUserEnvVars();

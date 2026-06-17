@@ -18,6 +18,7 @@
     "dev:terminal": "PINLOOM_CLAUDE_TRANSPORT=terminal PINLOOM_DB_PATH=data/pinloom.dev.sqlite pnpm dev",
     "prestart": "pnpm build",
     "start": "concurrently --kill-others --names backend,frontend \"pnpm --filter @pinloom/backend start\" \"pnpm --filter @pinloom/frontend preview\"",
+    "start:served": "concurrently --kill-others --names backend,frontend \"pnpm --filter @pinloom/backend start\" \"pnpm --filter @pinloom/frontend preview\"",
     "test": "pnpm --filter @pinloom/backend test",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "typecheck": "tsc -b",
