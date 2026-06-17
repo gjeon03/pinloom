@@ -1017,17 +1017,18 @@ export async function sendUserMessages(
   const lastPlanItemId = resolvedIds[resolvedIds.length - 1];
 
   let existing = activeRuns.get(sessionId);
-  // Model switch on an idle-but-alive run: the live agent process is pinned to
-  // its launch model, so pushMessage would keep using the old one. Tear it down
-  // so the fresh run below forks the session (keeping context) under the new
-  // model. (The in-flight case already tears down via the interrupt path above.)
+  // Model switch on a live run: the agent process is pinned to its launch model,
+  // so pushMessage would keep using the old one. Tear it down so the fresh run
+  // below forks the session (keeping context) under the new model. Compare the
+  // requested model to the run's launch model verbatim (NOT normalized): the
+  // live run remembers the requested id including the `[1m]` context-window
+  // suffix, so this catches a 1M⇄non-1M switch of the same base model too — and
+  // a CLI-default run (model === null) switching to an explicit model. The
+  // normalized comparison is only for the no-live-run path (runAssistant), where
+  // the only reference is the suffix-less *reported* model.
   const requestedModel = model ?? ctx.model ?? null;
-  if (
-    existing &&
-    requestedModel !== null &&
-    existing.model !== null &&
-    normalizeModelId(requestedModel) !== normalizeModelId(existing.model)
-  ) {
+  const modelSwitch = !!existing && requestedModel !== existing.model;
+  if (modelSwitch) {
     stopRun(sessionId, { silent: true });
     existing = undefined;
   }
@@ -1056,7 +1057,10 @@ export async function sendUserMessages(
     return persisted;
   }
 
-  // No active run — kick one off with the combined prompt.
+  // No active run — kick one off with the combined prompt. When we just tore a
+  // live run down for a model switch, force the resumed attempt to fork (the
+  // suffix-aware decision was made here; runAssistant's own check sees only the
+  // suffix-less reported model and would miss a 1M⇄non-1M switch).
   runAssistant(
     ctx,
     combinedText,
@@ -1064,6 +1068,7 @@ export async function sendUserMessages(
     planItems,
     combinedImages,
     model,
+    modelSwitch,
   ).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     persistMessage({
@@ -1468,6 +1473,10 @@ async function runAssistant(
   planItems: PlanItemLite[],
   images: ImageInput[] = [],
   model?: string,
+  // Caller already decided (suffix-aware) that the model changed and tore down
+  // the prior live run — force the resumed attempt to fork regardless of the
+  // suffix-less reported-model heuristic below.
+  forceFork = false,
 ): Promise<void> {
   emitRunStatus(ctx.id, 'started');
 
@@ -1516,9 +1525,10 @@ async function runAssistant(
   const requestedModel = model ?? ctx.model ?? null;
   const priorModel = getLastAssistantModel(ctx.id);
   const forkForModelSwitch =
-    requestedModel !== null &&
-    priorModel !== null &&
-    normalizeModelId(requestedModel) !== normalizeModelId(priorModel);
+    forceFork ||
+    (requestedModel !== null &&
+      priorModel !== null &&
+      normalizeModelId(requestedModel) !== normalizeModelId(priorModel));
 
   let result: AttemptResult = { shouldFallback: false, cancelled: false, silent: false };
 
