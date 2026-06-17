@@ -4,6 +4,9 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App.js';
 import { NotificationProvider } from './stores/notifications.js';
 import { applyTheme, getStoredPreference, watchSystem } from './theme.js';
+// Side-effect import: attach the PWA `beforeinstallprompt` listener at startup
+// so the deferred install prompt is captured before the user opens Settings.
+import './stores/pwaInstall.js';
 import 'dockview-react/dist/styles/dockview.css';
 import './styles/index.css';
 
