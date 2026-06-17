@@ -3,11 +3,18 @@ import { AlertTriangle } from 'lucide-react';
 
 // As an installed PWA the static shell loads from the service worker cache,
 // so the window can open even when the backend (port 4748) isn't running —
-// every `/api` call and WebSocket then fails silently. This banner polls
-// `/api/health` and surfaces an explicit "backend is down" state so the user
-// knows to start pinloom (or that login-autostart didn't fire) instead of
-// staring at an app that quietly does nothing.
-const POLL_MS = 5000;
+// every `/api` call and WebSocket then fails silently. This banner surfaces an
+// explicit "backend is down" state so the user knows to start pinloom (or that
+// login-autostart didn't fire).
+//
+// We deliberately do NOT poll on a healthy backend — that would spam the
+// request log for no benefit. The only moment the banner matters is when you
+// open or return to the app, so we check once on mount and again whenever the
+// tab becomes visible. While DOWN we re-check on a short timer so the banner
+// clears itself once you start the backend; that loop stops the moment it's
+// reachable again. The probe hits `/api/ping` (no work) rather than
+// `/api/health` (which spawns `claude`/`codex --version`).
+const RECOVER_MS = 4000; // while down: how often to re-check for recovery
 
 export function BackendStatusBanner() {
   const [down, setDown] = useState(false);
@@ -20,32 +27,43 @@ export function BackendStatusBanner() {
     let timer: ReturnType<typeof setTimeout>;
 
     async function check() {
+      // Skip while backgrounded — nothing to show; we re-check on return.
+      if (document.visibilityState !== 'visible') return;
       try {
-        const res = await fetch('/api/health', { cache: 'no-store' });
+        const res = await fetch('/api/ping', { cache: 'no-store' });
         if (cancelled) return;
         if (res.ok) {
+          // Healthy → clear and STOP. No timer is scheduled, so a running
+          // backend is never polled; the next check is on focus/visibility.
           missesRef.current = 0;
           setDown(false);
         } else {
           bump();
         }
       } catch {
-        if (cancelled) return;
-        bump();
-      } finally {
-        if (!cancelled) timer = setTimeout(check, POLL_MS);
+        if (!cancelled) bump();
       }
     }
 
     function bump() {
       missesRef.current += 1;
       if (missesRef.current >= 2) setDown(true);
+      // Keep retrying ONLY while unreachable, so the banner auto-clears once
+      // the backend comes back.
+      clearTimeout(timer);
+      timer = setTimeout(check, RECOVER_MS);
     }
 
+    function onVisible() {
+      if (document.visibilityState === 'visible') check();
+    }
+
+    document.addEventListener('visibilitychange', onVisible);
     check();
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 

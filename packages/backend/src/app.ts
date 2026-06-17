@@ -103,6 +103,14 @@ export async function createApp() {
     };
   });
 
+  // Cheap liveness check for the frontend's backend-up poller. Unlike
+  // /api/health it does NO work (health spawns `claude`/`codex --version`).
+  // `logLevel: 'silent'` suppresses the per-request log lines so an open tab
+  // heartbeating in the background doesn't fill the console.
+  app.get('/api/ping', { logLevel: 'silent' }, async () => {
+    return { ok: true as const };
+  });
+
   // Server-side config the frontend needs at boot. `claudeTransport` decides
   // which pane a claude session renders (chat vs terminal) — it's a backend env,
   // so the frontend fetches it once. See docs/terminal-chat-mode-plan.md.
