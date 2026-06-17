@@ -352,10 +352,13 @@ export function TerminalSidePanel({
     <button
       type="button"
       onClick={() => selectTab(id)}
-      className={`px-2.5 py-1 text-[11px] ${
+      // Active underline via inset shadow (not border-b) so it doesn't add to
+      // the button's box height. Fixed h-8 matches the right-side icon buttons
+      // so header `items-center` lines everything up exactly.
+      className={`flex h-8 items-center px-2.5 text-[11px] ${
         tab === id
-          ? 'border-b-2 border-[var(--color-accent)] text-[var(--color-ink)]'
-          : 'border-b-2 border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+          ? 'text-[var(--color-ink)] shadow-[inset_0_-2px_0_0_var(--color-accent)]'
+          : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
       }`}
     >
       {label}
@@ -451,7 +454,7 @@ export function TerminalSidePanel({
               onClick={() => setPickerOpen((v) => !v)}
               title="Panel position"
               aria-label="Panel position"
-              className="px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              className="flex h-8 items-center px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
             >
               <LayoutGrid className="h-4 w-4" />
             </button>
@@ -492,7 +495,7 @@ export function TerminalSidePanel({
             type="button"
             onClick={() => persistCollapsed(true)}
             title="Collapse"
-            className="px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            className="flex h-8 items-center px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
           >
             <CollapseIcon className="h-4 w-4" />
           </button>
