@@ -6,6 +6,7 @@ import { NotificationCenter } from './components/NotificationCenter.js';
 import { GithubLink } from './components/GithubLink.js';
 import { NotepadToggle, NotepadPanel } from './components/Notepad.js';
 import { ChatDoneNotifier } from './components/ChatDoneNotifier.js';
+import { BackendStatusBanner } from './components/BackendStatusBanner.js';
 import { ProjectPage } from './pages/ProjectPage.js';
 import { PinsPage } from './pages/PinsPage.js';
 import { SessionPage } from './pages/SessionPage.js';
@@ -47,11 +48,13 @@ export function App() {
   return (
     <SWRConfig value={swrConfig}>
       <ChatDoneNotifier />
-      <div className="flex h-screen overflow-hidden">
-        {/* Content column. The top-right control cluster is positioned
-            relative to this column (not the viewport) so it tracks the
-            content edge and never overlaps the docked notepad. */}
-        <div className="relative flex-1 min-w-0">
+      <div className="flex flex-col h-screen overflow-hidden">
+        <BackendStatusBanner />
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          {/* Content column. The top-right control cluster is positioned
+              relative to this column (not the viewport) so it tracks the
+              content edge and never overlaps the docked notepad. */}
+          <div className="relative flex-1 min-w-0">
           <div className="absolute top-3 right-3 z-40 flex items-center gap-1.5">
             <GithubLink />
             <NotepadToggle
@@ -122,8 +125,9 @@ export function App() {
               }
             />
           </Routes>
+          </div>
+          {notepadOpen && <NotepadPanel onClose={() => setNotepadOpen(false)} />}
         </div>
-        {notepadOpen && <NotepadPanel onClose={() => setNotepadOpen(false)} />}
       </div>
     </SWRConfig>
   );
