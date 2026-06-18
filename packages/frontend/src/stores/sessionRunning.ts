@@ -46,7 +46,7 @@ export function setSessionRunning(
     if (running.has(sessionId)) return; // already running — keep the first startedAt
     running.set(sessionId, {
       sessionId,
-      startedAt: startedAt ?? running.get(sessionId)?.startedAt ?? Date.now(),
+      startedAt: startedAt ?? Date.now(),
       ...info,
     });
   } else {
