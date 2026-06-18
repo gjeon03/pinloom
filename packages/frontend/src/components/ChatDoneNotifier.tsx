@@ -3,6 +3,7 @@ import { WS_RUNS_CHANNEL } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { useNotifications } from '../stores/notifications.js';
 import { isSessionVisible } from '../stores/activeSession.js';
+import { setSessionRunning } from '../stores/sessionRunning.js';
 
 // Debounce a finish before raising the notification: when the user has
 // queued several messages, a turn boundary emits `finished` and then the next
@@ -23,6 +24,8 @@ export function ChatDoneNotifier() {
     const pending = timers.current;
 
     if (phase === 'started') {
+      // Light up the session's tab as "working now".
+      setSessionRunning(sessionId, true);
       const t = pending.get(sessionId);
       if (t) {
         clearTimeout(t);
@@ -31,7 +34,8 @@ export function ChatDoneNotifier() {
       return;
     }
 
-    // phase === 'finished' | 'error'
+    // phase === 'finished' | 'error' — turn ended, clear the tab dot.
+    setSessionRunning(sessionId, false);
     const existing = pending.get(sessionId);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
