@@ -237,22 +237,25 @@ server.registerTool(
   'team_send',
   {
     description:
-      "Send a prompt to a worker session by alias. Enqueues the message; the worker's runner will pick it up at the next turn boundary. Returns immediately — use team_wait to block until the worker is idle.",
+      "Send a prompt to a worker session by alias. Enqueues the message; the worker's runner will pick it up at the next turn boundary. Returns immediately with a dispatchId handle — use team_wait/team_status, or team_read(dispatchId) to fetch the reply once it's done. Best for kicking off a long task without blocking your turn.",
     inputSchema: {
       alias: z.string().describe('Worker alias (without leading @)'),
       text: z.string().describe('Prompt text to send'),
     },
   },
   async (args) => {
-    await call('POST', teamUrl('/send'), {
+    const r = await call<{ dispatchId?: string }>('POST', teamUrl('/send'), {
       alias: args.alias,
       text: args.text,
     });
+    const handle = r.dispatchId
+      ? ` Dispatch ${r.dispatchId} — reconnect later with team_status / team_wait / team_read(dispatchId).`
+      : '';
     return {
       content: [
         {
           type: 'text',
-          text: `Enqueued ${args.text.length} chars to @${args.alias}.`,
+          text: `Enqueued ${args.text.length} chars to @${args.alias}.${handle}`,
         },
       ],
     };
@@ -341,6 +344,9 @@ server.registerTool(
       idle: boolean;
       alias: string;
       sessionId: string;
+      dispatchId?: string;
+      state?: string;
+      error?: string;
       message: { id: string; content: string; createdAt: string } | null;
     };
     const params: Record<string, unknown> = {
@@ -350,11 +356,35 @@ server.registerTool(
     if (args.timeoutMs !== undefined) params.timeoutMs = args.timeoutMs;
     const r = await call<Reply>('POST', teamUrl('/ask'), params);
     if (!r.idle) {
+      const handle = r.dispatchId ? ` (dispatchId ${r.dispatchId})` : '';
+      if (r.state === 'cancelled') {
+        // Superseded: a newer dispatch to this same worker replaced this one.
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `@${args.alias}'s dispatch was superseded by a newer one${handle} before it returned. Re-send if you still need this answer.`,
+            },
+          ],
+        };
+      }
+      if (r.state === 'failed' || r.error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `@${args.alias} dispatch failed${handle}: ${r.error ?? 'unknown error'}.`,
+            },
+          ],
+        };
+      }
+      // Still running: the dispatch keeps going past this wait. Hand back the
+      // handle so the orchestrator can reconnect instead of losing the work.
       return {
         content: [
           {
             type: 'text',
-            text: `@${args.alias} did not finish within the timeout. The message is still queued — you can call team_status / team_wait, or wait and call team_read later.`,
+            text: `@${args.alias} is still running${handle}. The dispatch keeps going past this wait — reconnect with team_wait, or team_read(dispatchId) once it's done.`,
           },
         ],
       };
@@ -531,9 +561,18 @@ server.registerTool(
   'team_read',
   {
     description:
-      "Read messages from a worker. Default: most recent N messages (chronological order). Pass sinceMessageId to instead get messages newer than that id (forward pagination). Returns user + assistant messages only.",
+      "Read a worker's output. Pass dispatchId to get that specific dispatch's final reply straight from its record (the reply captured at completion) — more reliable than the live chat for terminal workers, whose chat rows land via an async capture that can briefly lag. Otherwise pass alias for recent chat: most recent N messages (chronological), or messages newer than sinceMessageId. Returns user + assistant messages only.",
     inputSchema: {
-      alias: z.string().describe('Worker alias (without leading @)'),
+      alias: z
+        .string()
+        .optional()
+        .describe('Worker alias (without leading @). Required unless dispatchId is set.'),
+      dispatchId: z
+        .string()
+        .optional()
+        .describe(
+          'If set, return that dispatch\'s recorded reply directly (the handle from team_send/team_ask). Race-free; ignores alias/sinceMessageId/limit.',
+        ),
       sinceMessageId: z
         .string()
         .optional()
@@ -552,6 +591,36 @@ server.registerTool(
     },
   },
   async (args) => {
+    // dispatchId form: the record reply, shaped as { dispatch, messages }.
+    if (args.dispatchId) {
+      const params = new URLSearchParams({ dispatchId: args.dispatchId });
+      const r = await call<{
+        dispatch: { dispatchId: string; state: string; error: string | null };
+        messages: WorkerMessage[];
+      }>('GET', teamUrl(`/messages?${params.toString()}`));
+      if (r.messages.length === 0) {
+        const tail = r.dispatch.error ? ` (${r.dispatch.error})` : '';
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Dispatch ${r.dispatch.dispatchId} is ${r.dispatch.state} with no reply yet${tail}.`,
+            },
+          ],
+        };
+      }
+      const formatted = r.messages
+        .map((m) => `--- ${m.role} (${m.id}) at ${m.createdAt} ---\n${m.content}`)
+        .join('\n\n');
+      return { content: [{ type: 'text', text: formatted }] };
+    }
+    if (!args.alias) {
+      return {
+        content: [
+          { type: 'text', text: 'team_read needs either alias or dispatchId.' },
+        ],
+      };
+    }
     const params = new URLSearchParams({ alias: args.alias });
     if (args.sinceMessageId) params.set('sinceMessageId', args.sinceMessageId);
     if (args.limit) params.set('limit', String(args.limit));
@@ -582,17 +651,21 @@ server.registerTool(
   },
   async (args) => {
     const params = new URLSearchParams({ alias: args.alias });
-    const status = await call<{ running: boolean; queued: number }>(
-      'GET',
-      teamUrl(`/status?${params.toString()}`),
-    );
+    const status = await call<{
+      running: boolean;
+      queued: number;
+      dispatch: { dispatchId: string; state: string } | null;
+    }>('GET', teamUrl(`/status?${params.toString()}`));
+    const dispatchLine = status.dispatch
+      ? ` — last dispatch ${status.dispatch.dispatchId} is ${status.dispatch.state}`
+      : '';
     return {
       content: [
         {
           type: 'text',
           text: `@${args.alias}: ${
             status.running ? 'running' : 'idle'
-          }, ${status.queued} queued`,
+          }, ${status.queued} queued${dispatchLine}`,
         },
       ],
     };
@@ -620,17 +693,23 @@ server.registerTool(
   async (args) => {
     const params = new URLSearchParams({ alias: args.alias });
     if (args.timeoutMs) params.set('timeoutMs', String(args.timeoutMs));
-    const result = await call<{ idle: boolean; queued: number }>(
-      'GET',
-      teamUrl(`/wait?${params.toString()}`),
-    );
+    const result = await call<{
+      idle: boolean;
+      queued: number;
+      dispatch: { dispatchId: string; state: string } | null;
+    }>('GET', teamUrl(`/wait?${params.toString()}`));
+    const dispatchLine = result.dispatch
+      ? ` Dispatch ${result.dispatch.dispatchId}: ${result.dispatch.state}.`
+      : '';
     return {
       content: [
         {
           type: 'text',
-          text: result.idle
-            ? `@${args.alias} is now idle (queued=${result.queued}).`
-            : `@${args.alias} did not become idle within the timeout (queued=${result.queued}).`,
+          text:
+            (result.idle
+              ? `@${args.alias} is now idle (queued=${result.queued}).`
+              : `@${args.alias} did not become idle within the timeout (queued=${result.queued}).`) +
+            dispatchLine,
         },
       ],
     };

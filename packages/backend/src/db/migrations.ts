@@ -399,6 +399,53 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         WHERE transcript_uuid IS NOT NULL;
     `,
   },
+  {
+    id: 28,
+    // Dispatch job records — the durable, transport-agnostic source of truth
+    // for one orchestrator→worker turn (docs/teams-dispatch-redesign.md).
+    // Replaces the scattered, transport-specific polling that team_status/
+    // team_wait/team_read used to do (runner activeRuns vs dispatch lock vs
+    // the messages table). One row per dispatch; the id is the handle a
+    // long task is reconnected through.
+    //
+    // FK policy is deliberate:
+    //  - team_id REFERENCES teams ON DELETE CASCADE — a dispatch without its
+    //    team is meaningless; deleting a team cleans its dispatches.
+    //  - worker_session_id / orchestrator_session_id have NO FK. Worker
+    //    sessions are ephemeral (closing a tab hard-deletes them), but a
+    //    dispatch is an audit/handle record that must outlive that. A row
+    //    whose worker vanished is swept to failed(worker_gone) by the
+    //    recovery sweep, not cascaded away.
+    //
+    // last_progress is added now (unused until P2's progress stream) so a
+    // later phase doesn't need a second migration.
+    sql: `
+      CREATE TABLE IF NOT EXISTS dispatches (
+        id                       TEXT PRIMARY KEY,
+        team_id                  TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        worker_session_id        TEXT NOT NULL,
+        orchestrator_session_id  TEXT,
+        idempotency_key          TEXT,
+        prompt                   TEXT NOT NULL,
+        state                    TEXT NOT NULL,  -- queued|running|done|failed|timeout|cancelled
+        stop_reason              TEXT,           -- end_turn|error|aborted|null
+        reply                    TEXT,
+        error                    TEXT,
+        last_progress            TEXT,
+        created_at               TEXT NOT NULL,
+        started_at               TEXT,
+        ended_at                 TEXT,
+        updated_at               TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_dispatches_worker
+        ON dispatches(worker_session_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_dispatches_team
+        ON dispatches(team_id, created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatches_idempotency
+        ON dispatches(team_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

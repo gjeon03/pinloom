@@ -57,6 +57,18 @@ import {
   emitDispatchEvent,
   listRecentEvents,
 } from '../services/team-events.js';
+import {
+  createDispatch,
+  getDispatch,
+  getLatestDispatchForWorker,
+  getLiveDispatchForWorker,
+  isTerminalState,
+  markDone,
+  markFailed,
+  pruneWorkerDispatches,
+  waitForTerminal,
+  type DispatchRow,
+} from '../services/dispatches.js';
 
 interface SessionRow {
   id: string;
@@ -168,6 +180,96 @@ function memberStatus(sessionId: string): DispatchMember['status'] {
   if (running) return 'running';
   if (queued > 0) return 'queued';
   return 'idle';
+}
+
+// How long a terminal dispatch waits for the transcript capture to flush the
+// authoritative assistant reply when the Stop-hook payload came back empty.
+// The claude rescan tail runs ~10s (transcript-capture.ts), so this covers it
+// with a little slack; the fast path (non-empty payload) never waits.
+const CAPTURE_WAIT_MS = 12_000;
+
+// Public shape of a dispatch record for the MCP shim. `dispatchId` is the
+// handle a long task is reconnected through.
+function dispatchPublic(row: DispatchRow) {
+  return {
+    dispatchId: row.id,
+    state: row.state,
+    reply: row.reply,
+    error: row.error,
+    stopReason: row.stop_reason,
+    createdAt: row.created_at,
+    endedAt: row.ended_at,
+  };
+}
+
+function orchestratorIdForTeam(teamId: string): string | null {
+  const row = getDb()
+    .prepare('SELECT orchestrator_session_id FROM teams WHERE id = ?')
+    .get(teamId) as { orchestrator_session_id: string } | undefined;
+  return row?.orchestrator_session_id ?? null;
+}
+
+// Poll the messages table for the worker's assistant reply produced after the
+// dispatch started. Terminal workers persist replies asynchronously (the
+// Stop-hook → transcript rescan), so a read right at Stop can miss it; this
+// gives the capture a bounded window to land the authoritative text.
+async function waitForCapturedAssistant(
+  sessionId: string,
+  sinceISO: string,
+  ceilingMs: number,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const deadline = Date.now() + ceilingMs;
+  // Strict `>`: terminal replies are captured asynchronously (the transcript
+  // rescan), so a *prior* turn's reply can still be flushing when this dispatch
+  // is created. `>` excludes a same-millisecond prior row; this dispatch's own
+  // reply always lands well after creation (injection + a full model turn), so
+  // it's never excluded. (Full prompt↔reply correlation is a P2 concern.)
+  const read = () =>
+    getDb()
+      .prepare(
+        `SELECT content FROM messages
+         WHERE session_id = ? AND role = 'assistant' AND created_at > ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(sessionId, sinceISO) as { content: string } | undefined;
+  for (;;) {
+    const row = read();
+    if (row) return row.content;
+    if (signal?.aborted || Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
+// Close out a terminal-worker dispatch once its TUI turn settled. Reply
+// authority is the transcript capture (the same rows the worker's chat shows);
+// the Stop-hook payload is only a fast path when it actually carried the text.
+async function finalizeTerminalDispatch(
+  dispatchId: string,
+  sessionId: string,
+  sinceISO: string,
+  result: { ok: true; reply: string } | { ok: false; error: string },
+  signal?: AbortSignal,
+): Promise<DispatchRow | undefined> {
+  if (!result.ok) {
+    const row = markFailed(dispatchId, { error: result.error });
+    pruneWorkerDispatches(sessionId);
+    return row;
+  }
+  let reply: string | null =
+    result.reply && result.reply.length > 0 ? result.reply : null;
+  if (reply === null) {
+    reply = await waitForCapturedAssistant(
+      sessionId,
+      sinceISO,
+      CAPTURE_WAIT_MS,
+      signal,
+    );
+  }
+  const row = markDone(dispatchId, { reply });
+  pruneWorkerDispatches(sessionId);
+  return row;
 }
 
 export async function teamDispatchRoutes(app: FastifyInstance) {
@@ -385,7 +487,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { teamId: string };
-    Body: { alias?: string; text?: string };
+    Body: { alias?: string; text?: string; idempotencyKey?: string };
   }>('/api/teams/:teamId/dispatch/send', async (req, reply) => {
     if (!authorize(req, reply)) return;
     const alias = req.body?.alias?.trim();
@@ -406,13 +508,40 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     // Terminal worker: fire-and-forget inject into its TUI (the reply lands in
     // the terminal + capture; the orchestrator doesn't wait on /send).
     if (isTerminalWorker(member.sessionId)) {
-      // Fire-and-forget: don't await, but surface a failed dispatch instead of
-      // silently dropping the DispatchResult.
-      void dispatchTerminalWorker(member.sessionId, text, new AbortController().signal).then((r) => {
-        if (!r.ok) {
-          console.warn(`[team-dispatch] /send to @${member.alias} failed: ${r.error}`);
-        }
+      const dispatch = createDispatch({
+        teamId: req.params.teamId,
+        workerSessionId: member.sessionId,
+        orchestratorSessionId: orchestratorIdForTeam(req.params.teamId),
+        prompt: text,
+        idempotencyKey: req.body?.idempotencyKey ?? null,
       });
+      // Fire-and-forget, but the dispatch record still finalizes when the TUI
+      // turn settles — so a later team_status/team_wait/team_read(dispatchId)
+      // sees the real outcome instead of a stale flag.
+      void dispatchTerminalWorker(member.sessionId, text, new AbortController().signal)
+        .then((r) => {
+          void finalizeTerminalDispatch(
+            dispatch.id,
+            member.sessionId,
+            dispatch.started_at ?? dispatch.created_at,
+            r,
+          ).catch((err) => {
+            console.warn(
+              `[team-dispatch] /send finalize for @${member.alias} failed:`,
+              err instanceof Error ? err.message : err,
+            );
+          });
+          if (!r.ok) {
+            console.warn(`[team-dispatch] /send to @${member.alias} failed: ${r.error}`);
+          }
+        })
+        .catch((err) => {
+          // dispatchTerminalWorker normally resolves {ok:false}; a hard reject
+          // (e.g. PTY spawn throw) would otherwise orphan the row as 'running'.
+          const msg = err instanceof Error ? err.message : String(err);
+          markFailed(dispatch.id, { error: msg });
+          console.warn(`[team-dispatch] /send to @${member.alias} threw: ${msg}`);
+        });
       emitDispatchEvent({
         type: 'dispatch_send',
         teamId: req.params.teamId,
@@ -421,10 +550,20 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
         at: new Date().toISOString(),
       });
-      return { ok: true, queueItemId: `terminal:${member.sessionId}` };
+      return { ok: true, dispatchId: dispatch.id, queueItemId: `terminal:${member.sessionId}` };
     }
     try {
       const item = enqueueMessage({ sessionId: member.sessionId, content: text });
+      // The dispatch record is the busy reservation + durable handle. SDK
+      // completion is reported by the runner's turn_complete chokepoint
+      // (completeLiveDispatchForWorker), so no waiter is needed here.
+      const dispatch = createDispatch({
+        teamId: req.params.teamId,
+        workerSessionId: member.sessionId,
+        orchestratorSessionId: orchestratorIdForTeam(req.params.teamId),
+        prompt: text,
+        idempotencyKey: req.body?.idempotencyKey ?? null,
+      });
       // Worker session may be idle — kick off a drain so the dispatched
       // prompt actually reaches its agent instead of sitting in the queue
       // until the worker happens to receive its next user message.
@@ -437,7 +576,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
         at: new Date().toISOString(),
       });
-      return { ok: true, queueItemId: item.id };
+      return { ok: true, dispatchId: dispatch.id, queueItemId: item.id };
     } catch (err) {
       if (err instanceof SessionNotFoundError) {
         reply.code(404);
@@ -680,7 +819,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
   // item with a request id and link the resulting messages.
   app.post<{
     Params: { teamId: string };
-    Body: { alias?: string; text?: string; timeoutMs?: number };
+    Body: { alias?: string; text?: string; timeoutMs?: number; idempotencyKey?: string };
   }>('/api/teams/:teamId/dispatch/ask', async (req, reply) => {
     if (!authorize(req, reply)) return;
     const alias = req.body?.alias?.trim();
@@ -704,17 +843,24 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         ? Math.min(Math.max(Math.floor(requested), 100), MAX_WAIT_MS)
         : MAX_WAIT_MS;
 
-    // Terminal-mode worker: no runner drives it, so enqueue/waitForIdle don't
-    // apply. Inject the prompt into the worker's TUI and read the reply straight
-    // from the Stop-hook payload (capture persists the rows asynchronously).
+    emitDispatchEvent({
+      type: 'dispatch_send',
+      teamId: req.params.teamId,
+      alias: member.alias,
+      sessionId: member.sessionId,
+      previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+      at: new Date().toISOString(),
+    });
+
+    // Terminal-mode worker: no runner drives it. Inject into its TUI, then
+    // finalize the dispatch from the transcript capture (authoritative reply).
     if (isTerminalWorker(member.sessionId)) {
-      emitDispatchEvent({
-        type: 'dispatch_send',
+      const dispatch = createDispatch({
         teamId: req.params.teamId,
-        alias: member.alias,
-        sessionId: member.sessionId,
-        previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
-        at: new Date().toISOString(),
+        workerSessionId: member.sessionId,
+        orchestratorSessionId: orchestratorIdForTeam(req.params.teamId),
+        prompt: text,
+        idempotencyKey: req.body?.idempotencyKey ?? null,
       });
       const ac = new AbortController();
       const onClose = () => ac.abort();
@@ -725,13 +871,25 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       } finally {
         req.raw.off('close', onClose);
       }
-      if (!result.ok) {
+      const row = await finalizeTerminalDispatch(
+        dispatch.id,
+        member.sessionId,
+        dispatch.started_at ?? dispatch.created_at,
+        result,
+        ac.signal,
+      );
+      // Anything but a clean `done` (failed, or `cancelled` because a newer
+      // dispatch superseded this one mid-finalize) is NOT a reply — returning
+      // ok:true with an empty message would mislead the orchestrator into
+      // thinking the worker answered.
+      if (!row || row.state !== 'done') {
         return {
           ok: false,
           idle: false,
           alias: member.alias,
           sessionId: member.sessionId,
-          error: result.error,
+          ...(row ? dispatchPublic(row) : { dispatchId: dispatch.id, state: 'running' }),
+          error: row?.error ?? null,
         };
       }
       return {
@@ -739,17 +897,19 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         idle: true,
         alias: member.alias,
         sessionId: member.sessionId,
+        ...dispatchPublic(row),
         message: {
-          id: `terminal:${member.sessionId}`,
-          content: result.reply,
+          id: dispatch.id,
+          content: row.reply ?? '',
           createdAt: new Date().toISOString(),
         },
       };
     }
 
-    // Snapshot before enqueue so we can disambiguate "new" assistant
-    // messages from anything that already existed.
-    const before = new Date().toISOString();
+    // SDK worker: enqueue + drain, then block on the dispatch record reaching a
+    // terminal state. Completion is reported by the runner's turn_complete
+    // chokepoint (completeLiveDispatchForWorker), so the reply is read off the
+    // record — immune to the idle-check race the old `before`-snapshot read had.
     let queueItemId: string;
     try {
       const item = enqueueMessage({
@@ -768,61 +928,72 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       }
       throw err;
     }
-    tryDrainQueue(member.sessionId);
-    emitDispatchEvent({
-      type: 'dispatch_send',
+    const dispatch = createDispatch({
       teamId: req.params.teamId,
-      alias: member.alias,
-      sessionId: member.sessionId,
-      previewText: text.length > 120 ? `${text.slice(0, 117)}…` : text,
-      at: before,
+      workerSessionId: member.sessionId,
+      orchestratorSessionId: orchestratorIdForTeam(req.params.teamId),
+      prompt: text,
+      idempotencyKey: req.body?.idempotencyKey ?? null,
     });
+    tryDrainQueue(member.sessionId);
     const ac = new AbortController();
     // Match the /wait route's listener-cleanup pattern (once + off in
     // finally) so a long-lived backend doesn't leak a closure on
     // IncomingMessage per /ask call.
     const onSocketClose = () => ac.abort();
     req.raw.once('close', onSocketClose);
-    let idle = false;
+    let row: DispatchRow | null = null;
     try {
-      idle = await waitForIdle(member.sessionId, timeoutMs, ac.signal);
+      row = await waitForTerminal(dispatch.id, timeoutMs, ac.signal);
     } finally {
       req.raw.off('close', onSocketClose);
     }
-    if (!idle) {
-      // Worker hasn't completed yet — let the orch decide whether to
-      // poll again or give up. Don't 5xx; this is a normal "didn't
-      // make it in the budget" outcome.
+    if (!row) {
+      // waitForTerminal timed out/aborted. Re-read in case the row reached a
+      // terminal state in the same tick the timer fired — otherwise return the
+      // dispatch as a handle so the orchestrator can reconnect via
+      // team_status/team_wait/team_read instead of losing it to the wall.
+      const latest = getDispatch(dispatch.id);
+      if (!latest || !isTerminalState(latest.state)) {
+        return {
+          ok: false,
+          idle: false,
+          alias: member.alias,
+          sessionId: member.sessionId,
+          dispatchId: dispatch.id,
+          state: latest?.state ?? 'running',
+          queueItemId,
+        };
+      }
+      row = latest;
+    }
+    pruneWorkerDispatches(member.sessionId);
+    // Only a clean `done` carries a reply. `failed` (worker/runner error) and
+    // `cancelled` (this dispatch was superseded by a newer one) are explicit
+    // non-replies — returning ok:true would hand back a false empty answer.
+    if (row.state !== 'done') {
       return {
         ok: false,
         idle: false,
         alias: member.alias,
         sessionId: member.sessionId,
+        ...dispatchPublic(row),
         queueItemId,
+        error: row.error,
       };
     }
-    // Pick up the latest assistant message produced after our enqueue.
-    const reply_ = db
-      .prepare(
-        `SELECT id, content, created_at FROM messages
-         WHERE session_id = ? AND role = 'assistant' AND created_at > ?
-         ORDER BY created_at DESC, id DESC
-         LIMIT 1`,
-      )
-      .get(member.sessionId, before) as
-      | { id: string; content: string; created_at: string }
-      | undefined;
     return {
       ok: true,
       idle: true,
       alias: member.alias,
       sessionId: member.sessionId,
+      ...dispatchPublic(row),
       queueItemId,
-      message: reply_
+      message: row.reply
         ? {
-            id: reply_.id,
-            content: reply_.content,
-            createdAt: reply_.created_at,
+            id: row.id,
+            content: row.reply,
+            createdAt: row.ended_at ?? row.updated_at,
           }
         : null,
     };
@@ -1006,13 +1177,41 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
 
   app.get<{
     Params: { teamId: string };
-    Querystring: { alias?: string; sinceMessageId?: string; limit?: string };
+    Querystring: { alias?: string; sinceMessageId?: string; limit?: string; dispatchId?: string };
   }>('/api/teams/:teamId/dispatch/messages', async (req, reply) => {
     if (!authorize(req, reply)) return;
+    // dispatchId form: return that dispatch's record reply directly. This is
+    // the race-free read — the reply was written authoritatively at completion
+    // (SDK turn_complete / terminal transcript capture), so it never races the
+    // async messages-table capture the alias form historically did.
+    const dispatchId = req.query.dispatchId?.trim();
+    if (dispatchId) {
+      const row = getDispatch(dispatchId);
+      if (!row || row.team_id !== req.params.teamId) {
+        reply.code(404);
+        return { error: `no dispatch ${JSON.stringify(dispatchId)} in this team` };
+      }
+      return {
+        dispatch: dispatchPublic(row),
+        // Mirror the alias form's message shape so a shim can read either the
+        // same way. A dispatch with no reply yet (still running) returns [].
+        messages:
+          row.reply !== null
+            ? [
+                {
+                  id: row.id,
+                  role: 'assistant',
+                  content: row.reply,
+                  createdAt: row.ended_at ?? row.updated_at,
+                },
+              ]
+            : [],
+      };
+    }
     const alias = req.query.alias?.trim();
     if (!alias) {
       reply.code(400);
-      return { error: 'alias is required' };
+      return { error: 'alias or dispatchId is required' };
     }
     const member = getMemberByAlias(req.params.teamId, alias);
     if (!member) {
@@ -1101,9 +1300,17 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       reply.code(404);
       return { error: `no worker with alias "${alias}" in this team` };
     }
+    // `running` is a deliberate UNION (docs/teams-dispatch-redesign.md §1):
+    // the worker's latest dispatch being live, OR direct activity. A worker is
+    // a first-class session a human can type into — that produces no dispatch
+    // row, so reading the record alone would wrongly report it idle. The
+    // `dispatch` field is the record-backed truth for orchestrator-driven work.
+    const latest = getLatestDispatchForWorker(member.sessionId);
+    const live = getLiveDispatchForWorker(member.sessionId);
     return {
-      running: isWorkerRunning(member.sessionId),
+      running: isWorkerRunning(member.sessionId) || live !== undefined,
       queued: listQueueItems(member.sessionId).length,
+      dispatch: latest ? dispatchPublic(latest) : null,
     };
   });
 
@@ -1143,13 +1350,27 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     const onSocketClose = () => ac.abort();
     req.raw.once('close', onSocketClose);
     try {
-      // Terminal workers have no runner to await — poll the dispatch lock.
+      // Prefer the dispatch record: block until the worker's live dispatch
+      // reaches a terminal state, woken by the in-process signal (no scattered
+      // 250ms poll). This is uniform across SDK and terminal workers.
+      const live = getLiveDispatchForWorker(member.sessionId);
+      if (live) {
+        const row = await waitForTerminal(live.id, timeoutMs, ac.signal);
+        return {
+          idle: row !== null,
+          queued: listQueueItems(member.sessionId).length,
+          dispatch: dispatchPublic(row ?? live),
+        };
+      }
+      // No live dispatch (e.g. a human is driving the worker directly, or it's
+      // already idle) — fall back to the activity signal.
       const idle = isTerminalWorker(member.sessionId)
         ? await waitForTerminalIdle(member.sessionId, timeoutMs, ac.signal)
         : await waitForIdle(member.sessionId, timeoutMs, ac.signal);
       return {
         idle,
         queued: listQueueItems(member.sessionId).length,
+        dispatch: null,
       };
     } finally {
       req.raw.off('close', onSocketClose);
