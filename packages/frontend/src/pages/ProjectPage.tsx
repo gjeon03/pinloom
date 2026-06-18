@@ -27,7 +27,6 @@ import {
   setVisibleSessionIds,
 } from '../stores/activeSession.js';
 import { setSessionRunning } from '../stores/sessionRunning.js';
-import { runningNotifId } from '../components/ChatDoneNotifier.js';
 import { useNotifications } from '../stores/notifications.js';
 import { BottomPanel } from '../components/BottomPanel.js';
 import { EditableTitle } from '../components/EditableTitle.js';
@@ -108,7 +107,7 @@ export function ProjectPage({
   const [codexAvailable, setCodexAvailable] = useState<boolean | null>(null);
   const [dataReady, setDataReady] = useState(false);
   const [dock, setDock] = useState<DockviewApi | null>(null);
-  const { markSessionRead, dismiss: dismissNotification } = useNotifications();
+  const { markSessionRead } = useNotifications();
 
   const dockRef = useRef<DockviewApi | null>(null);
   const builtRef = useRef(false);
@@ -595,10 +594,9 @@ export function ProjectPage({
       // panel already gone).
       removeSessionLocally(ev.sessionId);
       // A run aborted by the delete resolves after the row is gone, so its
-      // terminal run_activity is swallowed — clear both the tab dot and the
-      // bell's "in progress" entry so neither strands a dead session.
-      setSessionRunning(ev.sessionId, false);
-      dismissNotification(runningNotifId(ev.sessionId));
+      // terminal run_activity is swallowed — clear the running entry (tab dot +
+      // bell In-progress) so it doesn't strand a dead session.
+      setSessionRunning(ev.sessionId, null);
     }
   });
 
