@@ -299,7 +299,10 @@ function NotificationRow({
   // that agent's session". Other kinds collapse to read on bell open and
   // keep the original visual weight.
   const isAgent = item.kind === 'chat-done';
-  const unread = isAgent && !item.read;
+  // While running, the spinner already conveys state — don't also stamp the
+  // Unvisited/Visited badge or the unread accent bar on it.
+  const isRunning = item.status === 'running';
+  const unread = isAgent && !item.read && !isRunning;
   return (
     <li className="group relative">
       {isAgent && (
@@ -334,7 +337,7 @@ function NotificationRow({
             >
               {item.title}
             </span>
-            {isAgent && (
+            {isAgent && !isRunning && (
               <span
                 className={`shrink-0 text-[9px] leading-none px-1.5 py-[2px] rounded-full ${
                   unread
