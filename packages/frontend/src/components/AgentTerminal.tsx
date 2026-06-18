@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { Minus, Plus } from 'lucide-react';
+import { Minus, Plus, RotateCw } from 'lucide-react';
 import type { WsEvent } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 
@@ -327,6 +327,15 @@ export function AgentTerminal({
             className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] disabled:opacity-40"
           >
             <Plus size={12} />
+          </button>
+          <span className="mx-0.5 h-3.5 w-px bg-[var(--color-border)]" aria-hidden />
+          <button
+            type="button"
+            onClick={restart}
+            title="Reconnect terminal"
+            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)]"
+          >
+            <RotateCw size={12} />
           </button>
         </div>
       )}
