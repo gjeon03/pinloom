@@ -23,6 +23,7 @@ import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec
 import { claudeTransport } from '../services/agents/index.js';
 import { killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
 import { killCodexTerminal, removeCodexHome } from '../services/codex-pty/agent-terminal.js';
+import { sweepDispatchesForDeletedWorker } from '../services/dispatches.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
 import {
   convertSessionTransport,
@@ -557,6 +558,11 @@ export async function sessionRoutes(app: FastifyInstance) {
       killAgentTerminal(sessionId);
       killCodexTerminal(sessionId);
       removeCodexHome(sessionId);
+      // Fail over any dispatch in flight to this worker — its completion
+      // signal vanishes with the session, so a team_wait would otherwise
+      // hang. Dispatches have no FK to sessions (they're audit/handle rows
+      // that outlive the ephemeral session), so this won't cascade away.
+      sweepDispatchesForDeletedWorker(sessionId);
       const row = db
         .prepare('SELECT project_id FROM sessions WHERE id = ?')
         .get(sessionId) as { project_id: string } | undefined;

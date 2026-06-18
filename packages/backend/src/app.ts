@@ -34,6 +34,7 @@ import {
 } from './services/codex-pty/agent-terminal.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
+import { sweepStrandedDispatchesOnBoot } from './services/dispatches.js';
 import { startEventLoopMonitor } from './services/event-loop-monitor.js';
 
 // Guard the WebSocket routes against cross-site hijacking. The terminal
@@ -91,6 +92,14 @@ export async function createApp() {
   // each session's drain triggers are bound to a live AgentRun, so a
   // restart with stranded items would otherwise leave them stuck.
   drainStrandedQueuesOnBoot();
+
+  // Fail over any dispatch that was mid-flight when the previous process
+  // died — its completion signal (runner turn / terminal Stop) can never
+  // arrive now, so a team_wait on it would otherwise hang forever.
+  const stranded = sweepStrandedDispatchesOnBoot();
+  if (stranded > 0) {
+    app.log.info(`[dispatches] swept ${stranded} stranded dispatch(es) on boot`);
+  }
 
   await app.register(cors, { origin: true });
   await app.register(websocket);
