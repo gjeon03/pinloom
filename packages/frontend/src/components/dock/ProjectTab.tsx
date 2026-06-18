@@ -10,7 +10,23 @@ import type { IDockviewPanelHeaderProps } from 'dockview-react';
 import { AgentBadge } from '../AgentBadge.js';
 import { TeamRoleBadge } from '../tabs/teamRoles.js';
 import { useDock, usePanelActive } from './DockContext.js';
+import { useSessionRunning } from '../../stores/sessionRunning.js';
 import type { DockPanelParams } from './panels.js';
+
+// A small pulsing dot shown on a session tab while its agent is mid-turn, so a
+// background run you've navigated away from is easy to spot and jump back to.
+function RunningDot() {
+  return (
+    <span
+      title="Agent is working…"
+      className="relative flex h-2 w-2 shrink-0"
+      aria-label="running"
+    >
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-accent)] opacity-60" />
+      <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-accent)]" />
+    </span>
+  );
+}
 
 export function ProjectTab(props: IDockviewPanelHeaderProps) {
   const params = props.params as DockPanelParams;
@@ -18,6 +34,11 @@ export function ProjectTab(props: IDockviewPanelHeaderProps) {
   const active = usePanelActive(props.api);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
+  // Hooks must run unconditionally; '' is never a running session id, so
+  // non-session tabs just get `false`.
+  const sessionRunning = useSessionRunning(
+    params.kind === 'session' ? params.sessionId : '',
+  );
 
   // While the rename input is up, swallow drag starts so selecting text
   // doesn't yank the whole tab into a dockview drag. The input is marked
@@ -59,6 +80,7 @@ export function ProjectTab(props: IDockviewPanelHeaderProps) {
       >
         <AgentBadge agent={s.agent} size="xs" />
         <TeamRoleBadge role={ctx.rolesBySessionId.get(s.id) ?? null} />
+        {sessionRunning && <RunningDot />}
         {editing ? (
           <input
             autoFocus
