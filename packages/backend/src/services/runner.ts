@@ -19,6 +19,11 @@ import {
 import { mintTeamToken } from './team-tokens.js';
 import { emitDispatchEvent } from './team-events.js';
 import {
+  cancelLiveDispatchForWorker,
+  completeLiveDispatchForWorker,
+  failLiveDispatchForWorker,
+} from './dispatches.js';
+import {
   broadcastQueueState,
   drainQueue,
   enqueueMessage,
@@ -1408,6 +1413,12 @@ async function runAttempt(
           // ends, the canvas keeps "running" indefinitely.
           notifySessionIdle(ctx.id);
           emitWorkerStatusIfMember(ctx.id);
+          // Close out the dispatch record for this worker (no-op if this
+          // session has no live dispatch). turn_complete is the reliable
+          // completion signal — the assistant reply is already persisted
+          // by the closeStream() above, so the record's reply matches the
+          // chat history exactly (immune to the idle-check race).
+          completeLiveDispatchForWorker(ctx.id);
           break;
         case 'final_text_fallback': {
           const id = ensureStream();
@@ -1613,6 +1624,10 @@ async function runAssistant(
         content: '[cancelled by user]',
       });
       emitRunStatus(ctx.id, 'error', 'cancelled');
+      // A user-cancelled turn ends any live dispatch for this worker as
+      // cancelled (no-op if none). Silent cancels are skipped above — the
+      // run restarts, so the dispatch stays live until its real turn ends.
+      cancelLiveDispatchForWorker(ctx.id);
       return;
     }
     // Run-level `finished` covers the case where the agent's event stream
@@ -1630,5 +1645,8 @@ async function runAssistant(
       content: `[runner error] ${errorMsg}`,
     });
     emitRunStatus(ctx.id, 'error', errorMsg);
+    // Surface the failure on the dispatch record so a team_ask/team_wait
+    // resolves instead of hanging to its ceiling (no-op if no live dispatch).
+    failLiveDispatchForWorker(ctx.id, errorMsg);
   }
 }

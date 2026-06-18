@@ -137,6 +137,30 @@ export function createDispatch(args: CreateDispatchArgs): DispatchRow {
   const now = new Date().toISOString();
   const state: DispatchState = args.state ?? 'running';
   const startedAt = state === 'running' ? now : null;
+  // Enforce the one-live-dispatch-per-worker invariant: a worker runs one turn
+  // at a time, and the queue drain interrupts any in-flight turn anyway, so a
+  // new dispatch supersedes a still-live prior one. Without this, the prior row
+  // would orphan as a permanent 'running' (prune only reclaims terminal rows)
+  // and getLiveDispatchForWorker would mis-resolve. Waiters on the superseded
+  // dispatch wake with state=cancelled.
+  const prior = getDb()
+    .prepare(
+      `SELECT id FROM dispatches
+       WHERE worker_session_id = ? AND state IN ('queued','running')`,
+    )
+    .all(args.workerSessionId) as Array<{ id: string }>;
+  if (prior.length > 0) {
+    getDb()
+      .prepare(
+        `UPDATE dispatches
+           SET state = 'cancelled', stop_reason = 'aborted',
+               error = COALESCE(error, 'superseded by a newer dispatch'),
+               ended_at = ?, updated_at = ?
+         WHERE worker_session_id = ? AND state IN ('queued','running')`,
+      )
+      .run(now, now, args.workerSessionId);
+    for (const p of prior) notifyTerminal(p.id);
+  }
   getDb()
     .prepare(
       `INSERT INTO dispatches
@@ -302,6 +326,52 @@ export function waitForTerminal(
     }
     if (isTerminalState(current.state)) settle(current);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Worker turn completion (SDK writer wiring, P1-c). The runner calls these
+// from its turn-boundary chokepoints; they no-op when the worker has no live
+// dispatch (a human typing directly into a worker chat, an orchestrator's own
+// turn, a generalist session), so they're safe to call on every turn end.
+//
+// Reply authority is the messages table — the same rows the worker's chat UI
+// shows — read at completion, so the dispatch reply always matches history.
+// ---------------------------------------------------------------------------
+function latestAssistantReply(
+  workerSessionId: string,
+  sinceISO: string,
+): string | null {
+  const row = getDb()
+    .prepare(
+      `SELECT content FROM messages
+       WHERE session_id = ? AND role = 'assistant' AND created_at >= ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+    )
+    .get(workerSessionId, sinceISO) as { content: string } | undefined;
+  return row?.content ?? null;
+}
+
+export function completeLiveDispatchForWorker(workerSessionId: string): void {
+  const live = getLiveDispatchForWorker(workerSessionId);
+  if (!live) return;
+  const since = live.started_at ?? live.created_at;
+  markDone(live.id, { reply: latestAssistantReply(workerSessionId, since) });
+}
+
+export function failLiveDispatchForWorker(
+  workerSessionId: string,
+  error: string,
+): void {
+  const live = getLiveDispatchForWorker(workerSessionId);
+  if (!live) return;
+  markFailed(live.id, { error });
+}
+
+export function cancelLiveDispatchForWorker(workerSessionId: string): void {
+  const live = getLiveDispatchForWorker(workerSessionId);
+  if (!live) return;
+  markCancelled(live.id);
 }
 
 // ---------------------------------------------------------------------------

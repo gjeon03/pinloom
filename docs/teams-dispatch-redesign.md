@@ -220,6 +220,14 @@ the #110 reservation lock into the row itself — but **`team_status` keeps one
 union** (human-driven workers) and idempotency is schema-only (§4). mcp-server shim
 + orchestrator restart are part of this PR (§5).
 
+**P1 boundary — tag broadcasts (`team_send_tag`/`team_ask_tag`) keep their old
+path in P1.** They don't create dispatch records yet: `team_send_tag` doesn't even
+inject into terminal TUIs today (a separate pre-existing gap), so recording it would
+mean fixing that first. They degrade gracefully — `team_status` still reports
+`running` via the union, and `team_ask_tag` still returns inline replies as before.
+Folding the broadcasts onto records (and fixing terminal fan-out) is a focused
+follow-up, not part of P1's single-worker rewiring.
+
 **P2 — progress event stream ("what is the worker doing").**
 Emit `dispatch_progress`: SDK wiring (cheap, data already flows) + the terminal
 live-tail (the one substantial new capture — surface transcript/rollout increments
