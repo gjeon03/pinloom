@@ -15,8 +15,10 @@ const SETTLE_MS = 1200;
 // ends (and that session isn't the one you're actively looking at), raise a
 // top-right notification whose click jumps to the session's tab.
 // Stable id for a session's "in progress" entry, so multi-turn runs reuse one
-// row and the finish can dismiss exactly it.
-const runningNotifId = (sessionId: string) => `chat-run:${sessionId}`;
+// row and the finish can dismiss exactly it. Exported so the session-delete
+// path can dismiss it too — a delete swallows the terminal run_activity, so
+// this row would otherwise be stranded in "In progress".
+export const runningNotifId = (sessionId: string) => `chat-run:${sessionId}`;
 
 export function ChatDoneNotifier() {
   const { notify, start, dismiss } = useNotifications();
