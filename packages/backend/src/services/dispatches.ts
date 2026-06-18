@@ -92,7 +92,7 @@ export function getLatestDispatchForWorker(
     .prepare(
       `SELECT * FROM dispatches
        WHERE worker_session_id = ?
-       ORDER BY created_at DESC, id DESC
+       ORDER BY created_at DESC, rowid DESC
        LIMIT 1`,
     )
     .get(workerSessionId) as DispatchRow | undefined;
@@ -107,7 +107,7 @@ export function getLiveDispatchForWorker(
     .prepare(
       `SELECT * FROM dispatches
        WHERE worker_session_id = ? AND state IN ('queued','running')
-       ORDER BY created_at DESC, id DESC
+       ORDER BY created_at DESC, rowid DESC
        LIMIT 1`,
     )
     .get(workerSessionId) as DispatchRow | undefined;
@@ -345,7 +345,7 @@ function latestAssistantReply(
     .prepare(
       `SELECT content FROM messages
        WHERE session_id = ? AND role = 'assistant' AND created_at >= ?
-       ORDER BY created_at DESC, id DESC
+       ORDER BY created_at DESC, rowid DESC
        LIMIT 1`,
     )
     .get(workerSessionId, sinceISO) as { content: string } | undefined;
@@ -429,7 +429,7 @@ export function pruneWorkerDispatches(
          AND id NOT IN (
            SELECT id FROM dispatches
            WHERE worker_session_id = ?
-           ORDER BY created_at DESC, id DESC
+           ORDER BY created_at DESC, rowid DESC
            LIMIT ?
          )`,
     )
