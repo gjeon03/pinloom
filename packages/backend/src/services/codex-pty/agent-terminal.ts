@@ -15,11 +15,13 @@ import type { IPty } from 'node-pty';
 import { buildSessionLaunchInput, emitRunStatus, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
 
-// Emit `started` on the false→true edge of turnInFlight so a codex terminal
-// session shows as running (tab dot + bell In progress); pairs with the
-// capture's `finished`. See the claude terminal's beginTurn for rationale.
+// Emit `started` so a codex terminal session shows as running (tab dot + bell
+// In progress); the rollout poller's `finished` (transcript-capture) clears it
+// per turn. Unlike claude, codex has no Stop hook, so turnInFlight is never
+// reset — guarding on it would emit `started` only ONCE per session. It's not
+// read for gating anyway (codex dispatch waits on awaitCodexTurn), so we emit
+// unconditionally; a duplicate `started` is a frontend no-op (idempotent).
 function beginCodexTurn(session: { turnInFlight: boolean }, sessionId: string): void {
-  if (session.turnInFlight) return;
   session.turnInFlight = true;
   emitRunStatus(sessionId, 'started');
 }
