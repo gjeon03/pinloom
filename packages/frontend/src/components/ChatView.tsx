@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import useSWR from 'swr';
 import {
@@ -8,6 +9,9 @@ import {
   ChevronRight,
   ChevronUp,
   ImagePlus,
+  Minus,
+  Plus,
+  RotateCw,
   Send,
   Square,
   Terminal,
@@ -238,6 +242,35 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
 
+  // Per-session chat text zoom (independent of app/browser zoom), mirroring the
+  // terminal's +/- control. Drives the --chat-font-size CSS var the message
+  // bubbles read, so scaling never re-renders the message list.
+  const chatFontKey = `pinloom:chatFontSize:${session.id}`;
+  const [chatFontSize, setChatFontSize] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem(chatFontKey));
+      return v >= 11 && v <= 24 ? v : 14;
+    } catch {
+      return 14;
+    }
+  });
+  const changeChatFontSize = useCallback(
+    (delta: number) => {
+      setChatFontSize((prev) => {
+        const next = Math.max(11, Math.min(24, prev + delta));
+        if (next !== prev) {
+          try {
+            localStorage.setItem(chatFontKey, String(next));
+          } catch {
+            // localStorage unavailable; the change still applies this session
+          }
+        }
+        return next;
+      });
+    },
+    [chatFontKey],
+  );
+
   // Mention autocomplete: fetch the team this session orchestrates (if
   // any) so we can suggest workers when the user types "@". Goes through
   // SWR so multiple ChatView instances share one inflight per endpoint
@@ -461,6 +494,11 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     cacheKeys.runStatus(session.id),
     () => api.getRunStatus(session.id),
   );
+  // "Refresh" re-fetches the conversation from the backend — recovers from a
+  // dropped WebSocket / out-of-sync local copy without reloading the whole app.
+  const refreshConversation = useCallback(() => {
+    void mutateMessages();
+  }, [mutateMessages]);
 
   // When SWR delivers a payload (initial or revalidate), replace the local
   // working copy. Mid-turn WS streams continue mutating from there.
@@ -937,8 +975,53 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   }
 
   return (
-    <div className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full">
-      <div className="flex-1 min-h-0 relative flex flex-col">
+    <div
+      className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full"
+      style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}
+    >
+      <div className="group/chrome flex-1 min-h-0 relative flex flex-col">
+        {/* Per-session chat zoom + refresh — appears on hover (or keyboard
+            focus), top-right. Mirrors the terminal's control; zoom is
+            independent of app/browser zoom so the conversation can be sized on
+            its own. Named group so it doesn't entangle the message bubbles'
+            own group-hover actions. */}
+        <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-200 group-hover/chrome:opacity-100 group-focus-within/chrome:opacity-100">
+          <button
+            type="button"
+            onClick={() => changeChatFontSize(-1)}
+            disabled={chatFontSize <= 11}
+            title="Smaller text"
+            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] disabled:opacity-40"
+          >
+            <Minus size={12} />
+          </button>
+          <span className="w-6 text-center text-[10px] tabular-nums text-[var(--color-ink-muted)]">
+            {chatFontSize}
+          </span>
+          <button
+            type="button"
+            onClick={() => changeChatFontSize(1)}
+            disabled={chatFontSize >= 24}
+            title="Larger text"
+            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] disabled:opacity-40"
+          >
+            <Plus size={12} />
+          </button>
+          <span className="mx-0.5 h-3.5 w-px bg-[var(--color-border)]" aria-hidden />
+          <button
+            type="button"
+            onClick={refreshConversation}
+            disabled={aiRunning || streamingIds.size > 0}
+            title={
+              aiRunning || streamingIds.size > 0
+                ? 'Refresh disabled while the agent is replying'
+                : 'Refresh conversation'
+            }
+            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--color-ink-muted)]"
+          >
+            <RotateCw size={12} />
+          </button>
+        </div>
         <Virtuoso
           ref={virtuosoRef}
           className="flex-1 text-sm"
@@ -1441,11 +1524,12 @@ function MessageBubbleInner({
         {message.role === 'tool' ? (
           <ToolMessage message={message} />
         ) : renderAsMarkdown ? (
-          <div className="text-sm">
-            <Markdown content={message.content} />
-          </div>
+          <Markdown content={message.content} />
         ) : (
-          <div className="whitespace-pre-wrap break-words text-sm">
+          <div
+            className="whitespace-pre-wrap break-words"
+            style={{ fontSize: 'var(--chat-font-size, 0.875rem)', lineHeight: 1.55 }}
+          >
             {message.content}
             {streaming && (
               <span className="inline-block w-1.5 h-3.5 ml-0.5 align-middle bg-[var(--color-ink-muted)] animate-pulse" />

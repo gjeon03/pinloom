@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  ArrowLeft,
   BookOpen,
   BookPlus,
   ChevronDown,
@@ -9,6 +10,7 @@ import {
   ChevronUp,
   History,
   LayoutGrid,
+  Maximize2,
   PanelBottom,
   PanelLeft,
   PanelRight,
@@ -26,6 +28,7 @@ import {
 import { useNotifications } from '../stores/notifications.js';
 import { ActionIconButton, CopyMarkdownButton, PinToggleButton } from './MessageActions.js';
 import { PinnedPanel } from './PinnedPanel.js';
+import { Markdown } from './Markdown.js';
 
 // Right rail for a session, shared by terminal AND structured (SDK) sessions:
 //   - History: the captured turns, with a quick pin toggle. TERMINAL ONLY —
@@ -123,6 +126,9 @@ export function TerminalSidePanel({
   const [limit, setLimit] = useState(WINDOW);
   // Per-message "show full content" toggles (history rows truncate by default).
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // A history row opened into the full-panel detail reader (like a pin's
+  // expand), so a long captured turn can be read in full without pinning it.
+  const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   // Drag-resizable size (clamped, persisted globally). Width for vertical
   // rails, height for horizontal slabs.
   const [width, setWidth] = useState(() => {
@@ -148,6 +154,11 @@ export function TerminalSidePanel({
   // record the pre-grow scrollHeight so a layout effect can re-anchor and keep
   // the rows the user is looking at from jumping.
   const prependAnchor = useRef<number | null>(null);
+  // The detail reader overlay — focused on open so Esc closes it.
+  const focusedReaderRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focusedMessageId) focusedReaderRef.current?.focus();
+  }, [focusedMessageId]);
 
   useEffect(() => {
     if (!hasHistory) return; // SDK sessions: ChatView owns the conversation
@@ -262,6 +273,11 @@ export function TerminalSidePanel({
   // Render only the newest `limit` rows; older history pages in on scroll-up.
   const hasOlder = rows.length > limit;
   const windowed = hasOlder ? rows.slice(rows.length - limit) : rows;
+  // The history row currently opened in the full-panel detail reader, resolved
+  // from the full row set so it survives the message scrolling out of `windowed`.
+  const focusedMessage = focusedMessageId
+    ? rows.find((m) => m.id === focusedMessageId) ?? null
+    : null;
 
   // Stick to the bottom on open and on new live turns — unless the user has
   // scrolled up to read history. Runs after the windowed list paints. No-ops
@@ -508,7 +524,7 @@ export function TerminalSidePanel({
           sticky-bottom refs survive tab switches; Pins/Wiki mount on demand.
           Omitted entirely for SDK sessions (no 'history' tab). */}
       {hasHistory && (
-      <div className={`flex min-h-0 flex-1 flex-col ${tab === 'history' ? '' : 'hidden'}`}>
+      <div className={`relative flex min-h-0 flex-1 flex-col ${tab === 'history' ? '' : 'hidden'}`}>
           <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto px-2 py-2">
             {rows.length === 0 ? (
               <p className="px-2 py-6 text-center text-xs text-[var(--color-ink-muted)]">
@@ -572,6 +588,15 @@ export function TerminalSidePanel({
                               {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                             </ActionIconButton>
                           )}
+                          <span className="opacity-0 transition-opacity group-hover:opacity-100">
+                            <ActionIconButton
+                              onClick={() => setFocusedMessageId(m.id)}
+                              title="View in detail"
+                              size="sm"
+                            >
+                              <Maximize2 size={12} />
+                            </ActionIconButton>
+                          </span>
                           <PinToggleButton
                             pinned={m.pinned}
                             onClick={() => togglePin(m)}
@@ -592,6 +617,44 @@ export function TerminalSidePanel({
           <footer className="border-t border-[var(--color-border)]/50 px-3 py-1.5 text-[9px] text-[var(--color-ink-muted)]">
             Pins apply on the session's next launch (the live TUI keeps its launch-time prompt).
           </footer>
+          {/* Full-panel detail reader for a captured turn — overlays the list
+              (which stays mounted to keep its scroll position) so a long turn
+              can be read in full without pinning it first. */}
+          {focusedMessage && (
+            <div
+              ref={focusedReaderRef}
+              tabIndex={-1}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setFocusedMessageId(null);
+              }}
+              className="absolute inset-0 z-10 flex min-h-0 flex-col bg-[var(--color-surface)] outline-none"
+            >
+              <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-1.5">
+                <ActionIconButton
+                  onClick={() => setFocusedMessageId(null)}
+                  title="Back to history (Esc)"
+                  size="sm"
+                >
+                  <ArrowLeft size={14} />
+                </ActionIconButton>
+                <span className="flex-1 truncate text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+                  {focusedMessage.role === 'assistant' ? 'Assistant' : 'You'}
+                  <span className="ml-1.5 normal-case opacity-70">
+                    {new Date(focusedMessage.createdAt).toLocaleString()}
+                  </span>
+                </span>
+                <CopyMarkdownButton content={focusedMessage.content} size="sm" />
+                <PinToggleButton
+                  pinned={focusedMessage.pinned}
+                  onClick={() => togglePin(focusedMessage)}
+                  size="sm"
+                />
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-3 text-sm text-[var(--color-ink)]">
+                <Markdown content={focusedMessage.content} />
+              </div>
+            </div>
+          )}
       </div>
       )}
 

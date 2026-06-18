@@ -39,7 +39,13 @@ function PreWithCopy(props: ComponentProps<'pre'>) {
 
 export function Markdown({ content }: { content: string }) {
   return (
-    <div className="md-body text-sm leading-relaxed">
+    // Body font-size reads --chat-font-size when an ancestor sets it (the SDK
+    // chat zoom); everywhere else the var is unset and it falls back to 0.875rem
+    // (= the old text-sm), so pins / wiki / detail readers are unaffected.
+    <div
+      className="md-body leading-relaxed"
+      style={{ fontSize: 'var(--chat-font-size, 0.875rem)' }}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

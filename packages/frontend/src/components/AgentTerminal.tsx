@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { Minus, Plus } from 'lucide-react';
+import { Minus, Plus, RotateCw } from 'lucide-react';
 import type { WsEvent } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 
@@ -306,7 +306,7 @@ export function AgentTerminal({
       {/* Per-terminal font zoom — appears on hover, top-right. Independent of
           the app/browser zoom so you can size the TUI on its own. */}
       {status === 'open' && (
-        <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100">
+        <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
           <button
             type="button"
             onClick={() => changeFontSize(-1)}
@@ -316,7 +316,7 @@ export function AgentTerminal({
           >
             <Minus size={12} />
           </button>
-          <span className="w-6 text-center text-[10px] tabular-nums text-[var(--color-ink-muted)]">
+          <span className="w-6 text-center text-[10px] tabular-nums text-[var(--color-ink-muted)] select-none">
             {fontSize}
           </span>
           <button
@@ -327,6 +327,15 @@ export function AgentTerminal({
             className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] disabled:opacity-40"
           >
             <Plus size={12} />
+          </button>
+          <span className="mx-0.5 h-3.5 w-px bg-[var(--color-border)]" aria-hidden />
+          <button
+            type="button"
+            onClick={restart}
+            title="Reconnect terminal"
+            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)]"
+          >
+            <RotateCw size={12} />
           </button>
         </div>
       )}
