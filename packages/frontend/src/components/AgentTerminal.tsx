@@ -306,7 +306,7 @@ export function AgentTerminal({
       {/* Per-terminal font zoom — appears on hover, top-right. Independent of
           the app/browser zoom so you can size the TUI on its own. */}
       {status === 'open' && (
-        <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100">
+        <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
           <button
             type="button"
             onClick={() => changeFontSize(-1)}
@@ -316,7 +316,7 @@ export function AgentTerminal({
           >
             <Minus size={12} />
           </button>
-          <span className="w-6 text-center text-[10px] tabular-nums text-[var(--color-ink-muted)]">
+          <span className="w-6 text-center text-[10px] tabular-nums text-[var(--color-ink-muted)] select-none">
             {fontSize}
           </span>
           <button

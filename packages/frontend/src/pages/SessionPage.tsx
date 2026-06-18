@@ -114,6 +114,7 @@ export function SessionPage() {
           }
           right={
             <ChatView
+              key={session.id}
               session={session}
               onPinChange={handlePinsChange}
               onSessionUpdate={setSession}

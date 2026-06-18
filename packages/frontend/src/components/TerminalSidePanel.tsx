@@ -154,6 +154,11 @@ export function TerminalSidePanel({
   // record the pre-grow scrollHeight so a layout effect can re-anchor and keep
   // the rows the user is looking at from jumping.
   const prependAnchor = useRef<number | null>(null);
+  // The detail reader overlay — focused on open so Esc closes it.
+  const focusedReaderRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focusedMessageId) focusedReaderRef.current?.focus();
+  }, [focusedMessageId]);
 
   useEffect(() => {
     if (!hasHistory) return; // SDK sessions: ChatView owns the conversation
@@ -583,13 +588,15 @@ export function TerminalSidePanel({
                               {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                             </ActionIconButton>
                           )}
-                          <ActionIconButton
-                            onClick={() => setFocusedMessageId(m.id)}
-                            title="View in detail"
-                            size="sm"
-                          >
-                            <Maximize2 size={12} />
-                          </ActionIconButton>
+                          <span className="opacity-0 transition-opacity group-hover:opacity-100">
+                            <ActionIconButton
+                              onClick={() => setFocusedMessageId(m.id)}
+                              title="View in detail"
+                              size="sm"
+                            >
+                              <Maximize2 size={12} />
+                            </ActionIconButton>
+                          </span>
                           <PinToggleButton
                             pinned={m.pinned}
                             onClick={() => togglePin(m)}
@@ -614,17 +621,27 @@ export function TerminalSidePanel({
               (which stays mounted to keep its scroll position) so a long turn
               can be read in full without pinning it first. */}
           {focusedMessage && (
-            <div className="absolute inset-0 z-10 flex min-h-0 flex-col bg-[var(--color-surface)]">
+            <div
+              ref={focusedReaderRef}
+              tabIndex={-1}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setFocusedMessageId(null);
+              }}
+              className="absolute inset-0 z-10 flex min-h-0 flex-col bg-[var(--color-surface)] outline-none"
+            >
               <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-1.5">
                 <ActionIconButton
                   onClick={() => setFocusedMessageId(null)}
-                  title="Back to history"
+                  title="Back to history (Esc)"
                   size="sm"
                 >
                   <ArrowLeft size={14} />
                 </ActionIconButton>
-                <span className="flex-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+                <span className="flex-1 truncate text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
                   {focusedMessage.role === 'assistant' ? 'Assistant' : 'You'}
+                  <span className="ml-1.5 normal-case opacity-70">
+                    {new Date(focusedMessage.createdAt).toLocaleString()}
+                  </span>
                 </span>
                 <CopyMarkdownButton content={focusedMessage.content} size="sm" />
                 <PinToggleButton

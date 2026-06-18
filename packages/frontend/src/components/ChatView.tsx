@@ -979,11 +979,13 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
       className="flex flex-col min-h-0 bg-[var(--color-surface)] h-full"
       style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}
     >
-      <div className="group flex-1 min-h-0 relative flex flex-col">
-        {/* Per-session chat zoom + refresh — appears on hover, top-right.
-            Mirrors the terminal's control; zoom is independent of app/browser
-            zoom so the conversation can be sized on its own. */}
-        <div className="absolute right-3 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100">
+      <div className="group/chrome flex-1 min-h-0 relative flex flex-col">
+        {/* Per-session chat zoom + refresh — appears on hover (or keyboard
+            focus), top-right. Mirrors the terminal's control; zoom is
+            independent of app/browser zoom so the conversation can be sized on
+            its own. Named group so it doesn't entangle the message bubbles'
+            own group-hover actions. */}
+        <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-200 group-hover/chrome:opacity-100 group-focus-within/chrome:opacity-100">
           <button
             type="button"
             onClick={() => changeChatFontSize(-1)}
@@ -1009,8 +1011,13 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
           <button
             type="button"
             onClick={refreshConversation}
-            title="Refresh conversation"
-            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)]"
+            disabled={aiRunning || streamingIds.size > 0}
+            title={
+              aiRunning || streamingIds.size > 0
+                ? 'Refresh disabled while the agent is replying'
+                : 'Refresh conversation'
+            }
+            className="flex h-5 w-5 items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--color-ink-muted)]"
           >
             <RotateCw size={12} />
           </button>
@@ -1517,9 +1524,7 @@ function MessageBubbleInner({
         {message.role === 'tool' ? (
           <ToolMessage message={message} />
         ) : renderAsMarkdown ? (
-          <div style={{ fontSize: 'var(--chat-font-size, 0.875rem)', lineHeight: 1.55 }}>
-            <Markdown content={message.content} />
-          </div>
+          <Markdown content={message.content} />
         ) : (
           <div
             className="whitespace-pre-wrap break-words"
