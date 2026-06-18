@@ -17,7 +17,7 @@
 import { existsSync } from 'node:fs';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
-import { buildSessionLaunchInput, emitWorkerStatusIfMember } from '../runner.js';
+import { buildSessionLaunchInput, emitRunStatus, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
 import {
   buildClaudeLaunch,
@@ -192,6 +192,18 @@ function teardownSession(sessionId: string): void {
   }
 }
 
+// Mark a turn as started on the false→true edge of turnInFlight, emitting a
+// `started` run_activity so the session lights up as "running" (tab dot + the
+// notification bell's In progress list) — terminal turns otherwise only ever
+// emit `finished`, so they never showed as running. Paired with the capture's
+// signalTurnComplete (`finished`); a stray Enter that produces no turn self-
+// heals on the next real turn's finish.
+function beginTurn(session: { turnInFlight: boolean }, sessionId: string): void {
+  if (session.turnInFlight) return;
+  session.turnInFlight = true;
+  emitRunStatus(sessionId, 'started');
+}
+
 export async function attachAgentTerminal(
   sessionId: string,
   cols: number,
@@ -240,7 +252,7 @@ export async function attachAgentTerminal(
       // a dispatch waits for it (cleared on the turn's Stop hook). Heuristic, but
       // catches the "human just submitted, claude not yet streaming" window that
       // output-quiescence misses.
-      if (data.includes('\r') || data.includes('\n')) bound.turnInFlight = true;
+      if (data.includes('\r') || data.includes('\n')) beginTurn(bound, sessionId);
       try {
         bound.pty.write(data);
       } catch {
@@ -440,7 +452,7 @@ export function dispatchToWorker(
         const spawned = await spawnAgentTerminal(sessionId, 120, 40, text);
         if ('reason' in spawned) return { ok: false, error: spawned.reason };
         setLock(spawned, sessionId, 'dispatch');
-        spawned.turnInFlight = true;
+        beginTurn(spawned, sessionId);
         try {
           const payload = await stop;
           return { ok: true, reply: payload.lastAssistantMessage ?? '' };
@@ -458,7 +470,7 @@ export function dispatchToWorker(
         // keystrokes are dropped and the prompt never submits.
         await waitTuiQuiescent(existing, signal);
         const stop = awaitNextStop(sessionId, signal, timeoutMs);
-        existing.turnInFlight = true;
+        beginTurn(existing, sessionId);
         await submitToTui(existing.pty, text);
         const payload = await stop;
         return { ok: true, reply: payload.lastAssistantMessage ?? '' };

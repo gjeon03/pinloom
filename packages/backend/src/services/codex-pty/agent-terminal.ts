@@ -12,8 +12,19 @@
 import { existsSync, rmSync } from 'node:fs';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
-import { buildSessionLaunchInput, emitWorkerStatusIfMember } from '../runner.js';
+import { buildSessionLaunchInput, emitRunStatus, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
+
+// Emit `started` so a codex terminal session shows as running (tab dot + bell
+// In progress); the rollout poller's `finished` (transcript-capture) clears it
+// per turn. Unlike claude, codex has no Stop hook, so turnInFlight is never
+// reset — guarding on it would emit `started` only ONCE per session. It's not
+// read for gating anyway (codex dispatch waits on awaitCodexTurn), so we emit
+// unconditionally; a duplicate `started` is a frontend no-op (idempotent).
+function beginCodexTurn(session: { turnInFlight: boolean }, sessionId: string): void {
+  session.turnInFlight = true;
+  emitRunStatus(sessionId, 'started');
+}
 import { submitToTui } from '../claude-pty/tui-input.js';
 import { buildCodexLaunch, codexHomeFor, type BuiltCodexLaunch } from './launch-spec.js';
 import { startCodexCapture, stopCodexCapture, awaitCodexTurn } from './transcript-capture.js';
@@ -174,7 +185,7 @@ export async function attachCodexTerminal(
       // (the client shows a "busy" overlay via the terminal_lock event).
       if (bound.lockedBy === 'dispatch') return;
       // An Enter submits a turn — flag it so a dispatch waits for it.
-      if (data.includes('\r') || data.includes('\n')) bound.turnInFlight = true;
+      if (data.includes('\r') || data.includes('\n')) beginCodexTurn(bound, sessionId);
       try {
         bound.pty.write(data);
       } catch {
@@ -296,7 +307,7 @@ export function dispatchToCodexWorker(
         const spawned = await spawnCodexTerminal(sessionId, 120, 40, text);
         if ('reason' in spawned) return { ok: false, error: spawned.reason };
         setCodexLock(spawned, sessionId, 'dispatch');
-        spawned.turnInFlight = true;
+        beginCodexTurn(spawned, sessionId);
         try {
           const reply = await awaitCodexTurn(sessionId, signal, timeoutMs);
           return { ok: true, reply };
@@ -310,7 +321,7 @@ export function dispatchToCodexWorker(
       try {
         await waitCodexQuiescent(existing, signal);
         const turn = awaitCodexTurn(sessionId, signal, timeoutMs);
-        existing.turnInFlight = true;
+        beginCodexTurn(existing, sessionId);
         await submitToTui(existing.pty, text);
         const reply = await turn;
         return { ok: true, reply };
