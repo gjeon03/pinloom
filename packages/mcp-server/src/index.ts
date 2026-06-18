@@ -356,9 +356,18 @@ server.registerTool(
     if (args.timeoutMs !== undefined) params.timeoutMs = args.timeoutMs;
     const r = await call<Reply>('POST', teamUrl('/ask'), params);
     if (!r.idle) {
-      // Not a hard failure: the dispatch keeps running. Hand back the handle so
-      // the orchestrator can reconnect instead of losing the work to the wall.
       const handle = r.dispatchId ? ` (dispatchId ${r.dispatchId})` : '';
+      if (r.state === 'cancelled') {
+        // Superseded: a newer dispatch to this same worker replaced this one.
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `@${args.alias}'s dispatch was superseded by a newer one${handle} before it returned. Re-send if you still need this answer.`,
+            },
+          ],
+        };
+      }
       if (r.state === 'failed' || r.error) {
         return {
           content: [
@@ -369,6 +378,8 @@ server.registerTool(
           ],
         };
       }
+      // Still running: the dispatch keeps going past this wait. Hand back the
+      // handle so the orchestrator can reconnect instead of losing the work.
       return {
         content: [
           {
@@ -550,7 +561,7 @@ server.registerTool(
   'team_read',
   {
     description:
-      "Read a worker's output. Pass dispatchId to get that specific dispatch's final reply straight from its record — race-free (it never depends on the async transcript capture landing). Otherwise pass alias for recent chat: most recent N messages (chronological), or messages newer than sinceMessageId. Returns user + assistant messages only.",
+      "Read a worker's output. Pass dispatchId to get that specific dispatch's final reply straight from its record (the reply captured at completion) — more reliable than the live chat for terminal workers, whose chat rows land via an async capture that can briefly lag. Otherwise pass alias for recent chat: most recent N messages (chronological), or messages newer than sinceMessageId. Returns user + assistant messages only.",
     inputSchema: {
       alias: z
         .string()

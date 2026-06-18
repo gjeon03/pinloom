@@ -62,6 +62,7 @@ import {
   getDispatch,
   getLatestDispatchForWorker,
   getLiveDispatchForWorker,
+  isTerminalState,
   markDone,
   markFailed,
   pruneWorkerDispatches,
@@ -219,11 +220,16 @@ async function waitForCapturedAssistant(
   signal?: AbortSignal,
 ): Promise<string | null> {
   const deadline = Date.now() + ceilingMs;
+  // Strict `>`: terminal replies are captured asynchronously (the transcript
+  // rescan), so a *prior* turn's reply can still be flushing when this dispatch
+  // is created. `>` excludes a same-millisecond prior row; this dispatch's own
+  // reply always lands well after creation (injection + a full model turn), so
+  // it's never excluded. (Full prompt↔reply correlation is a P2 concern.)
   const read = () =>
     getDb()
       .prepare(
         `SELECT content FROM messages
-         WHERE session_id = ? AND role = 'assistant' AND created_at >= ?
+         WHERE session_id = ? AND role = 'assistant' AND created_at > ?
          ORDER BY created_at DESC, id DESC
          LIMIT 1`,
       )
@@ -512,8 +518,8 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       // Fire-and-forget, but the dispatch record still finalizes when the TUI
       // turn settles — so a later team_status/team_wait/team_read(dispatchId)
       // sees the real outcome instead of a stale flag.
-      void dispatchTerminalWorker(member.sessionId, text, new AbortController().signal).then(
-        (r) => {
+      void dispatchTerminalWorker(member.sessionId, text, new AbortController().signal)
+        .then((r) => {
           void finalizeTerminalDispatch(
             dispatch.id,
             member.sessionId,
@@ -528,8 +534,14 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
           if (!r.ok) {
             console.warn(`[team-dispatch] /send to @${member.alias} failed: ${r.error}`);
           }
-        },
-      );
+        })
+        .catch((err) => {
+          // dispatchTerminalWorker normally resolves {ok:false}; a hard reject
+          // (e.g. PTY spawn throw) would otherwise orphan the row as 'running'.
+          const msg = err instanceof Error ? err.message : String(err);
+          markFailed(dispatch.id, { error: msg });
+          console.warn(`[team-dispatch] /send to @${member.alias} threw: ${msg}`);
+        });
       emitDispatchEvent({
         type: 'dispatch_send',
         teamId: req.params.teamId,
@@ -866,14 +878,18 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         result,
         ac.signal,
       );
-      if (row && row.state === 'failed') {
+      // Anything but a clean `done` (failed, or `cancelled` because a newer
+      // dispatch superseded this one mid-finalize) is NOT a reply — returning
+      // ok:true with an empty message would mislead the orchestrator into
+      // thinking the worker answered.
+      if (!row || row.state !== 'done') {
         return {
           ok: false,
           idle: false,
           alias: member.alias,
           sessionId: member.sessionId,
-          ...dispatchPublic(row),
-          error: row.error,
+          ...(row ? dispatchPublic(row) : { dispatchId: dispatch.id, state: 'running' }),
+          error: row?.error ?? null,
         };
       }
       return {
@@ -881,10 +897,10 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
         idle: true,
         alias: member.alias,
         sessionId: member.sessionId,
-        ...(row ? dispatchPublic(row) : { dispatchId: dispatch.id }),
+        ...dispatchPublic(row),
         message: {
           id: dispatch.id,
-          content: row?.reply ?? '',
+          content: row.reply ?? '',
           createdAt: new Date().toISOString(),
         },
       };
@@ -933,21 +949,29 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
       req.raw.off('close', onSocketClose);
     }
     if (!row) {
-      // Didn't finish within the budget — return the dispatch as a handle so
-      // the orchestrator can reconnect via team_status/team_wait/team_read
-      // instead of losing the work to a hard 5-min wall.
-      return {
-        ok: false,
-        idle: false,
-        alias: member.alias,
-        sessionId: member.sessionId,
-        dispatchId: dispatch.id,
-        state: 'running',
-        queueItemId,
-      };
+      // waitForTerminal timed out/aborted. Re-read in case the row reached a
+      // terminal state in the same tick the timer fired — otherwise return the
+      // dispatch as a handle so the orchestrator can reconnect via
+      // team_status/team_wait/team_read instead of losing it to the wall.
+      const latest = getDispatch(dispatch.id);
+      if (!latest || !isTerminalState(latest.state)) {
+        return {
+          ok: false,
+          idle: false,
+          alias: member.alias,
+          sessionId: member.sessionId,
+          dispatchId: dispatch.id,
+          state: latest?.state ?? 'running',
+          queueItemId,
+        };
+      }
+      row = latest;
     }
     pruneWorkerDispatches(member.sessionId);
-    if (row.state === 'failed') {
+    // Only a clean `done` carries a reply. `failed` (worker/runner error) and
+    // `cancelled` (this dispatch was superseded by a newer one) are explicit
+    // non-replies — returning ok:true would hand back a false empty answer.
+    if (row.state !== 'done') {
       return {
         ok: false,
         idle: false,

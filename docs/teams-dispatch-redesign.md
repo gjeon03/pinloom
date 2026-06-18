@@ -262,6 +262,35 @@ separate features built on this substrate.
    the value `team_ask` returns are the same capture-sourced string, so they can't
    diverge.
 
+## Known limitations / accepted caveats (P1)
+
+A second multi-agent review of the *implementation* surfaced these. The reachable
+correctness bugs (false-success when a dispatch is superseded; terminal capture
+over-capturing a same-ms prior reply; a fire-and-forget terminal reject orphaning a
+row; the timeout path synthesizing `running` instead of re-reading) are **fixed**.
+These remaining items are inherent to P1's "no prompt↔reply correlation" model and
+match limitations the pre-redesign `team_ask` already had — accepted and documented,
+not fixed in P1:
+
+- **Interleaved human turn (reply attribution).** A worker is a first-class session a
+  human can type into. If a human turn is in flight when a dispatch arrives, the queue
+  drain interrupts and *combines* it with the dispatched prompt into one turn (this is
+  pre-existing runner behavior). The dispatch's recorded reply is then "the newest
+  assistant message since the dispatch started," which may reflect the combined turn.
+  The old `team_ask` had the same heuristic; P1 carries it into the record. Clean
+  prompt↔reply correlation (tagging the queue item with the dispatch id) is a P2
+  improvement.
+- **Back-to-back dispatches supersede.** Two `team_send`s to one worker in quick
+  succession: the first is `cancelled` (superseded), but its queued prompt may still
+  execute (combined into the surviving dispatch's turn). The work isn't lost — it's
+  attributed to the newer dispatch — but the superseded handle reports `cancelled`.
+  The supersede error says so; the shim tells the orchestrator to re-send if needed.
+- **Stuck-turn zombie.** If an SDK turn never emits `turn_complete` and never errors
+  (a hung agent), its dispatch stays `running` until the backend restarts (boot sweep)
+  or the worker session is deleted (delete sweep) — there's no runtime stale-sweep in
+  P1. `team_status` reports it `running`, which is truthful (the turn really is
+  unresolved). A periodic ceiling-based reclaim is a P3 polish item.
+
 ## 6. Review findings (v2) — what the design review changed
 
 A multi-agent review against the live code (critic + Codex) accepted the direction

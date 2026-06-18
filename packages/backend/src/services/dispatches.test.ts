@@ -242,6 +242,29 @@ describe('waitForTerminal', () => {
   });
 });
 
+describe('supersede semantics (review H1/scenario-4)', () => {
+  it('a waiter on the superseded dispatch wakes with cancelled, not done', async () => {
+    const a = newDispatch();
+    const waiting = waitForTerminal(a.id, 2000);
+    const b = newDispatch(); // supersedes a
+    const row = await waiting;
+    expect(row?.state).toBe('cancelled');
+    expect(row?.reply).toBeNull();
+    expect(row?.error).toMatch(/superseded/);
+    // and b is the live one
+    expect(getLiveDispatchForWorker(WORKER)?.id).toBe(b.id);
+  });
+
+  it('markDone on an already-superseded dispatch is a no-op (reply not resurrected)', () => {
+    const a = newDispatch();
+    newDispatch(); // supersedes a -> cancelled
+    markDone(a.id, { reply: 'late terminal reply' });
+    const row = getDispatch(a.id)!;
+    expect(row.state).toBe('cancelled');
+    expect(row.reply).toBeNull();
+  });
+});
+
 describe('getLatestDispatchForWorker', () => {
   it('returns the most recent dispatch regardless of state', () => {
     const a = newDispatch();
