@@ -985,7 +985,7 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
             independent of app/browser zoom so the conversation can be sized on
             its own. Named group so it doesn't entangle the message bubbles'
             own group-hover actions. */}
-        <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-200 group-hover/chrome:opacity-100 group-focus-within/chrome:opacity-100">
+        <div className="absolute left-2 top-2 z-20 flex items-center gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity duration-200 group-hover/chrome:opacity-100 group-focus-within/chrome:opacity-100">
           <button
             type="button"
             onClick={() => changeChatFontSize(-1)}
