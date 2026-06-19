@@ -5,7 +5,7 @@ import { defineConfig } from '@playwright/test';
 // user's production server on 4747/4748. No webServer block on purpose.
 export default defineConfig({
   testDir: '.',
-  testMatch: /inprogress\.spec\.ts$/,
+  testMatch: /(inprogress|pwa-update)\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
   reporter: 'list',

@@ -70,6 +70,20 @@ export default defineConfig({
               url.pathname.startsWith('/ws'),
             handler: 'NetworkOnly',
           },
+          {
+            // Serve the app shell network-first: pinloom is a localhost app
+            // that's always online, so a navigation should fetch the freshest
+            // index.html (pointing at the newest hashed assets) instead of the
+            // precached one. The cache is only a fallback if the local server
+            // is briefly unreachable. Pairs with the SW auto-reload so a new
+            // build is picked up with minimal staleness.
+            urlPattern: ({ request }) => request.mode === 'navigate',
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'app-shell',
+              networkTimeoutSeconds: 3,
+            },
+          },
         ],
         // A new pinloom build should take over immediately rather than waiting
         // for every tab to close — pairs with `registerType: 'autoUpdate'`.
