@@ -7,6 +7,9 @@ import { applyTheme, getStoredPreference, watchSystem } from './theme.js';
 // Side-effect import: attach the PWA `beforeinstallprompt` listener at startup
 // so the deferred install prompt is captured before the user opens Settings.
 import './stores/pwaInstall.js';
+// Side-effect import: register the service worker and auto-reload the tab when
+// a new build's SW activates, so updates don't get stuck behind a stale cache.
+import './stores/pwaUpdate.js';
 import 'dockview-react/dist/styles/dockview.css';
 import './styles/index.css';
 
