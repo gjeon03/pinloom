@@ -66,6 +66,7 @@ describe('generateAutostartUnit', () => {
       repoRoot: '/Users/me/pinloom',
       shell: '/bin/zsh',
       logDir: '/Users/me/.pinloom/logs',
+      pathEnv: '/Users/me/.asdf/shims:/opt/homebrew/bin:/usr/bin',
     });
     expect(unit).not.toBeNull();
     expect(unit!.platform).toBe('darwin');
@@ -78,6 +79,13 @@ describe('generateAutostartUnit', () => {
     expect(unit!.content).toContain('<string>-lc</string>');
     // No-build serve command, path-free (cwd comes from WorkingDirectory).
     expect(unit!.content).toContain('<string>exec pnpm start:served</string>');
+    // The enabling backend's PATH is baked in so a login (non-interactive)
+    // shell still resolves pnpm/node/claude even when the toolchain is set up
+    // in .zshrc rather than a login file.
+    expect(unit!.content).toContain('<key>EnvironmentVariables</key>');
+    expect(unit!.content).toContain(
+      '<key>PATH</key>\n    <string>/Users/me/.asdf/shims:/opt/homebrew/bin:/usr/bin</string>',
+    );
     expect(unit!.content).toContain(
       '<key>WorkingDirectory</key>\n  <string>/Users/me/pinloom</string>',
     );
@@ -96,6 +104,7 @@ describe('generateAutostartUnit', () => {
       repoRoot: '/home/me/pinloom',
       shell: '/bin/bash',
       logDir: '/home/me/.pinloom/logs',
+      pathEnv: '/home/me/.asdf/shims:/usr/bin',
     });
     expect(unit).not.toBeNull();
     expect(unit!.platform).toBe('linux');
@@ -108,11 +117,32 @@ describe('generateAutostartUnit', () => {
     expect(unit!.content).toContain(
       `ExecStart=/bin/bash -lc 'exec pnpm start:served'`,
     );
+    // PATH baked in via systemd Environment= (double-quoted).
+    expect(unit!.content).toContain(
+      `Environment="PATH=/home/me/.asdf/shims:/usr/bin"`,
+    );
     expect(unit!.content).toContain('Restart=no');
   });
 
   it('returns null on unsupported platforms', () => {
     expect(generateAutostartUnit({ platform: 'win32' })).toBeNull();
+  });
+
+  it('omits the PATH env block when PATH is empty', () => {
+    const darwin = generateAutostartUnit({
+      platform: 'darwin',
+      homeDir: home,
+      repoRoot: '/Users/me/pinloom',
+      pathEnv: '',
+    });
+    expect(darwin!.content).not.toContain('EnvironmentVariables');
+    const linux = generateAutostartUnit({
+      platform: 'linux',
+      homeDir: home,
+      repoRoot: '/home/me/pinloom',
+      pathEnv: '',
+    });
+    expect(linux!.content).not.toContain('Environment=');
   });
 
   it('passes an awkward repo path literally via WorkingDirectory', () => {
