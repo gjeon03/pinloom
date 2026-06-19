@@ -128,6 +128,39 @@ describe('generateAutostartUnit', () => {
     expect(generateAutostartUnit({ platform: 'win32' })).toBeNull();
   });
 
+  it('preserves a space-containing PATH segment on both platforms', () => {
+    const pathEnv =
+      '/Applications/Visual Studio Code.app/Contents/Resources/app/bin:/usr/bin';
+    const darwin = generateAutostartUnit({
+      platform: 'darwin',
+      homeDir: home,
+      repoRoot: '/Users/me/pinloom',
+      pathEnv,
+    });
+    // launchd: the value lives in an XML element body — spaces are literal.
+    expect(darwin!.content).toContain(`<string>${pathEnv}</string>`);
+    const linux = generateAutostartUnit({
+      platform: 'linux',
+      homeDir: home,
+      repoRoot: '/home/me/pinloom',
+      pathEnv,
+    });
+    // systemd: spaces survive because the value is double-quoted.
+    expect(linux!.content).toContain(`Environment="PATH=${pathEnv}"`);
+  });
+
+  it('escapes backslash and quote in the systemd PATH value', () => {
+    const unit = generateAutostartUnit({
+      platform: 'linux',
+      homeDir: home,
+      repoRoot: '/home/me/pinloom',
+      pathEnv: '/weird/a"b\\c:/usr/bin',
+    });
+    expect(unit!.content).toContain(
+      'Environment="PATH=/weird/a\\"b\\\\c:/usr/bin"',
+    );
+  });
+
   it('omits the PATH env block when PATH is empty', () => {
     const darwin = generateAutostartUnit({
       platform: 'darwin',

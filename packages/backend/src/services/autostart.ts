@@ -152,6 +152,13 @@ function xmlEscape(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
+// Escape a value for a systemd double-quoted setting (Environment="KEY=val").
+// systemd treats `\` and `"` specially inside the quotes; spaces are already
+// covered by the surrounding quotes. Backslash first so we don't double-escape.
+function systemdQuoteValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 // The shell command launchd/systemd executes. Deliberately path-free: the repo
 // directory is supplied via the unit's WorkingDirectory (taken literally by
 // both launchd and systemd, no shell quoting), which sidesteps systemd's
@@ -214,7 +221,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${d.repoRoot}
-${d.pathEnv ? `Environment="PATH=${d.pathEnv}"\n` : ''}ExecStart=${d.shell} -lc ${shQuote(LAUNCH_COMMAND)}
+${d.pathEnv ? `Environment="PATH=${systemdQuoteValue(d.pathEnv)}"\n` : ''}ExecStart=${d.shell} -lc ${shQuote(LAUNCH_COMMAND)}
 Restart=no
 StandardOutput=append:${outLog(d)}
 StandardError=append:${errLog(d)}
