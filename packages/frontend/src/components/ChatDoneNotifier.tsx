@@ -11,17 +11,12 @@ import { setSessionRunning } from '../stores/sessionRunning.js';
 // follow-up `started` means we only notify when the session is genuinely idle.
 const SETTLE_MS = 1200;
 
-// App-wide listener on the global runs channel. When any session's agent turn
-// ends (and that session isn't the one you're actively looking at), raise a
-// top-right notification whose click jumps to the session's tab.
-// Stable id for a session's "in progress" entry, so multi-turn runs reuse one
-// row and the finish can dismiss exactly it. Exported so the session-delete
-// path can dismiss it too — a delete swallows the terminal run_activity, so
-// this row would otherwise be stranded in "In progress".
-export const runningNotifId = (sessionId: string) => `chat-run:${sessionId}`;
-
+// App-wide listener on the global runs channel. It does two things:
+//  - maintain the sessionRunning store (drives the tab dot AND the bell's
+//    "In progress" tab — a complete, cross-project view of what's running),
+//  - on genuine idle, raise a "done" notification you can click to jump back.
 export function ChatDoneNotifier() {
-  const { notify, start, dismiss } = useNotifications();
+  const { notify } = useNotifications();
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   useWebSocket(WS_RUNS_CHANNEL, (ev) => {
@@ -32,20 +27,14 @@ export function ChatDoneNotifier() {
     const agentName = agent === 'codex' ? 'Codex' : 'Claude';
 
     if (phase === 'started') {
-      // Light up the session's tab as "working now".
-      setSessionRunning(sessionId, true);
-      // Surface it in the bell's "In progress" section so a run you've
-      // navigated away from is findable + one click away. Skip the session
-      // you're already looking at (no point listing it). start() is
-      // idempotent on the id, so successive turns reuse the one row.
-      if (!isSessionVisible(sessionId)) {
-        start({
-          id: runningNotifId(sessionId),
-          kind: 'chat-done',
-          title: `${label} — ${agentName} is working…`,
-          meta: { sessionId, projectId, sessionTitle: title },
-        });
-      }
+      // Record it as running (tab dot + bell In-progress tab). We list EVERY
+      // running session, including one you're viewing, so the In-progress tab
+      // is a complete picture of what's working across all projects.
+      setSessionRunning(sessionId, {
+        projectId,
+        title,
+        agent: agent === 'codex' ? 'codex' : 'claude',
+      });
       const t = pending.get(sessionId);
       if (t) {
         clearTimeout(t);
@@ -54,14 +43,12 @@ export function ChatDoneNotifier() {
       return;
     }
 
-    // phase === 'finished' | 'error' — turn ended, clear the tab dot.
-    setSessionRunning(sessionId, false);
+    // phase === 'finished' | 'error' — turn ended, clear running.
+    setSessionRunning(sessionId, null);
     const existing = pending.get(sessionId);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
       pending.delete(sessionId);
-      // Idle now — drop the "in progress" entry (no-op if none was created).
-      dismiss(runningNotifId(sessionId));
       // Skip the done toast for a chat that's on screen in ANY dock pane
       // (focused or a side-by-side split); if the window is hidden/blurred,
       // notify anyway (you're not watching it).
