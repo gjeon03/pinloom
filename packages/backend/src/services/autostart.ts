@@ -9,10 +9,16 @@
 //     `prestart: pnpm build` that would rebuild the whole monorepo on every
 //     login (and on every KeepAlive restart). `start:served` serves the
 //     existing build, so login is fast and a crash-restart can't build-storm.
-//   - We run it through a LOGIN shell (`zsh -lc` / `bash -lc`). launchd and
-//     systemd start with a bare environment; pnpm/node and the agent CLIs
-//     (claude/codex) live on the user's PATH, so without `-l` every spawn
-//     would ENOENT.
+//   - We run it through a LOGIN shell (`zsh -lc` / `bash -lc`) AND bake the
+//     enabling backend's own PATH into the unit. launchd and systemd start
+//     with a bare environment; pnpm/node and the agent CLIs (claude/codex)
+//     live on the user's PATH. A login shell only sources login files
+//     (.zprofile/.zshenv) — NOT .zshrc/.bashrc — yet asdf/nvm/fnm/volta etc.
+//     install their PATH setup into the *interactive* rc file by default, so
+//     `-l` alone leaves pnpm unresolved and every spawn ENOENTs (the unit
+//     dies at login with code 127). Capturing `process.env.PATH` at enable
+//     time — the PATH that already lets THIS backend find pnpm/claude/codex —
+//     sidesteps the version-manager-in-.zshrc trap regardless of shell setup.
 //   - RunAtLoad only, no KeepAlive. This mirrors "the user starts it once at
 //     login and leaves it running" — the current manual behavior — and can't
 //     enter a restart loop. Crash-supervision can be a later opt-in.
@@ -73,6 +79,13 @@ export interface AutostartDeps {
   uid: number;
   /** Login shell used to inherit the user's PATH. */
   shell: string;
+  /**
+   * PATH baked into the unit's environment so login (non-interactive) shells
+   * resolve pnpm/node/claude/codex even when the toolchain is set up in the
+   * interactive rc file (.zshrc/.bashrc) rather than a login file. Defaults to
+   * the enabling backend's own PATH, which by definition already works.
+   */
+  pathEnv: string;
   logDir: string;
   run: CommandRunner;
   /**
@@ -96,6 +109,7 @@ function resolveDeps(overrides: Partial<AutostartDeps> = {}): AutostartDeps {
     repoRoot,
     uid: overrides.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0),
     shell: overrides.shell ?? defaultShell,
+    pathEnv: overrides.pathEnv ?? process.env.PATH ?? '',
     logDir: overrides.logDir ?? path.join(homeDir, '.pinloom', 'logs'),
     run: overrides.run ?? defaultRunner,
     skipBuildCheck: overrides.skipBuildCheck ?? false,
@@ -138,6 +152,13 @@ function xmlEscape(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
+// Escape a value for a systemd double-quoted setting (Environment="KEY=val").
+// systemd treats `\` and `"` specially inside the quotes; spaces are already
+// covered by the surrounding quotes. Backslash first so we don't double-escape.
+function systemdQuoteValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 // The shell command launchd/systemd executes. Deliberately path-free: the repo
 // directory is supplied via the unit's WorkingDirectory (taken literally by
 // both launchd and systemd, no shell quoting), which sidesteps systemd's
@@ -150,6 +171,18 @@ function outLog(d: AutostartDeps): string {
 }
 function errLog(d: AutostartDeps): string {
   return path.join(d.logDir, 'autostart.err.log');
+}
+
+// A launchd <key>EnvironmentVariables</key> dict carrying PATH, emitted only
+// when we actually have one to bake (empty PATH would clobber, not help).
+function plistEnvironment(d: AutostartDeps): string {
+  if (!d.pathEnv) return '';
+  return `  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${xmlEscape(d.pathEnv)}</string>
+  </dict>
+`;
 }
 
 function plistContent(d: AutostartDeps): string {
@@ -165,7 +198,7 @@ function plistContent(d: AutostartDeps): string {
     <string>-lc</string>
     <string>${xmlEscape(LAUNCH_COMMAND)}</string>
   </array>
-  <key>WorkingDirectory</key>
+${plistEnvironment(d)}  <key>WorkingDirectory</key>
   <string>${xmlEscape(d.repoRoot)}</string>
   <key>RunAtLoad</key>
   <true/>
@@ -188,7 +221,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${d.repoRoot}
-ExecStart=${d.shell} -lc ${shQuote(LAUNCH_COMMAND)}
+${d.pathEnv ? `Environment="PATH=${systemdQuoteValue(d.pathEnv)}"\n` : ''}ExecStart=${d.shell} -lc ${shQuote(LAUNCH_COMMAND)}
 Restart=no
 StandardOutput=append:${outLog(d)}
 StandardError=append:${errLog(d)}
