@@ -20,4 +20,6 @@ export const cacheKeys = {
   teams: () => ['teams'] as const,
   allSessions: () => ['sessions-all'] as const,
   projects: () => ['projects'] as const,
+  search: (query: string, projectId: string | null) =>
+    ['search', query, projectId] as const,
 };

@@ -18,6 +18,7 @@
 // with only short tokens we drive from `messages` directly.
 
 import type { Database } from 'better-sqlite3';
+import type { MessageRole, MessageSearchResult } from '@pinloom/shared';
 
 const TRIGRAM_MIN = 3;
 const DEFAULT_LIMIT = 50;
@@ -25,19 +26,8 @@ const MAX_LIMIT = 200;
 const EXCERPT_WINDOW = 160;
 const EXCERPT_LEAD = 48;
 
-export interface SearchResult {
-  messageId: string;
-  sessionId: string;
-  sessionTitle: string | null;
-  projectId: string;
-  projectName: string;
-  role: string;
-  createdAt: string;
-  /** A short window of content around the first match, with an ellipsis when truncated. */
-  excerpt: string;
-  /** [start, end) offsets into `excerpt` to highlight, merged + sorted. */
-  highlights: [number, number][];
-}
+// The wire shape lives in @pinloom/shared (MessageSearchResult) so the route
+// and the frontend agree on one contract.
 
 interface Row {
   id: string;
@@ -141,7 +131,7 @@ export function searchMessages(
   db: Database,
   rawQuery: string,
   opts: SearchOptions = {},
-): SearchResult[] {
+): MessageSearchResult[] {
   const { matchTokens, likeTokens } = tokenizeQuery(rawQuery);
   if (matchTokens.length === 0 && likeTokens.length === 0) return [];
 
@@ -198,7 +188,10 @@ export function searchMessages(
       sessionTitle: r.session_title,
       projectId: r.project_id,
       projectName: r.project_name,
-      role: r.role,
+      // Safe cast: tool/system rows can't reach here — the MATCH path only sees
+      // messages_fts (which migration 29 populates with user/assistant rows
+      // only), and the LIKE path filters role IN ('user','assistant').
+      role: r.role as MessageRole,
       createdAt: r.created_at,
       excerpt,
       highlights,

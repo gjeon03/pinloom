@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { SWRConfig, mutate } from 'swr';
+import { Search } from 'lucide-react';
 import { AppShell } from './components/AppShell.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
+import { GlobalSearchModal } from './components/GlobalSearchModal.js';
 import { GithubLink } from './components/GithubLink.js';
 import { NotepadToggle, NotepadPanel } from './components/Notepad.js';
 import { ChatDoneNotifier } from './components/ChatDoneNotifier.js';
@@ -31,6 +33,19 @@ const swrConfig = {
 
 export function App() {
   const [notepadOpen, setNotepadOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Global ⌘K / Ctrl+K opens history search from anywhere.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   // Central listener for the `pinloom:teams-changed` window event.
   // SessionTabs / ChatView / TeamsPage all used to attach their own
   // listener and re-fetch teams + sessions raw — N×3 calls per mutation.
@@ -56,6 +71,15 @@ export function App() {
               content edge and never overlaps the docked notepad. */}
           <div className="relative flex-1 min-w-0">
           <div className="absolute top-3 right-3 z-40 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              title="Search history (⌘K)"
+              aria-label="Search history"
+              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+            >
+              <Search size={16} />
+            </button>
             <GithubLink />
             <NotepadToggle
               open={notepadOpen}
@@ -129,6 +153,7 @@ export function App() {
           {notepadOpen && <NotepadPanel onClose={() => setNotepadOpen(false)} />}
         </div>
       </div>
+      {searchOpen && <GlobalSearchModal onClose={() => setSearchOpen(false)} />}
     </SWRConfig>
   );
 }

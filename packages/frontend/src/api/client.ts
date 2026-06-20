@@ -2,6 +2,7 @@ import type {
   AgentKind,
   HealthResponse,
   Message,
+  MessageSearchResult,
   Plan,
   PlanItem,
   Project,
@@ -74,6 +75,16 @@ export const api = {
     return request<BrowseResponse>(`/api/fs/browse?${params}`);
   },
   homeDir: () => request<{ home: string }>('/api/fs/home'),
+
+  // Full-text search over conversation history (knowledge-system v2 Phase 1).
+  search: (query: string, opts?: { projectId?: string; limit?: number }) => {
+    const params = new URLSearchParams({ q: query });
+    if (opts?.projectId) params.set('projectId', opts.projectId);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    return request<{ results: MessageSearchResult[] }>(
+      `/api/search?${params}`,
+    ).then((r) => r.results);
+  },
 
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>
