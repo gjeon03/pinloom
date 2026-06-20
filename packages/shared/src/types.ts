@@ -132,6 +132,22 @@ export interface Message {
   createdAt: string;
 }
 
+// One hit from GET /api/search (full-text session search, knowledge-system v2
+// Phase 1). `excerpt` is a content window around the first match; `highlights`
+// are [start, end) offsets into `excerpt` to emphasise (may be empty when a
+// trigram/diacritic-normalised match has no literal substring).
+export interface MessageSearchResult {
+  messageId: string;
+  sessionId: string;
+  sessionTitle: string | null;
+  projectId: string;
+  projectName: string;
+  role: MessageRole;
+  createdAt: string;
+  excerpt: string;
+  highlights: [number, number][];
+}
+
 // User-managed environment variable. Stored locally in pinloom's SQLite and
 // merged into the backend's process.env so every agent's Bash tool inherits
 // it. The list endpoint omits `value` (replaced by `hasValue`) so masked
