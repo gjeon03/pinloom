@@ -15,6 +15,7 @@ import { notepadRoutes } from './routes/notepad.js';
 import { projectNotepadRoutes } from './routes/project-notepads.js';
 import { teamRoutes } from './routes/teams.js';
 import { teamDispatchRoutes } from './routes/team-dispatch.js';
+import { searchRoutes } from './routes/search.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
 import {
   attachTerminal,
@@ -140,6 +141,7 @@ export async function createApp() {
   await app.register(projectNotepadRoutes);
   await app.register(teamRoutes);
   await app.register(teamDispatchRoutes);
+  await app.register(searchRoutes);
 
   app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket, request) => {
