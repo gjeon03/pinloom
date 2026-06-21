@@ -148,6 +148,20 @@ export interface MessageSearchResult {
   highlights: [number, number][];
 }
 
+// A reusable prompt the user registers once and inserts into the chat composer
+// (a "/" slash trigger or a toolbar button). User-level / global — applies to
+// every session regardless of project, like user env vars. Distinct from the
+// wiki (agent project memory injected into the system prompt): a template is a
+// user-side composer seed only. Manually ordered via `orderIndex`.
+export interface PromptTemplate {
+  id: string;
+  title: string;
+  body: string;
+  orderIndex: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // User-managed environment variable. Stored locally in pinloom's SQLite and
 // merged into the backend's process.env so every agent's Bash tool inherits
 // it. The list endpoint omits `value` (replaced by `hasValue`) so masked

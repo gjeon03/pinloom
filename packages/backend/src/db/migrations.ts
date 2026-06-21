@@ -515,6 +515,26 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       INSERT INTO messages_fts(messages_fts) VALUES ('optimize');
     `,
   },
+  {
+    id: 30,
+    // Reusable prompt templates the user registers once and inserts into the
+    // chat composer. User-level / global (no project_id, no FK) — like
+    // user_env/app_settings, they apply to every session regardless of project,
+    // and global means deleting a project never silently drops templates.
+    // Manually ordered via order_index (no usage tracking in v1).
+    sql: `
+      CREATE TABLE IF NOT EXISTS prompt_templates (
+        id           TEXT PRIMARY KEY,
+        title        TEXT NOT NULL,
+        body         TEXT NOT NULL,
+        order_index  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_prompt_templates_order
+        ON prompt_templates(order_index);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

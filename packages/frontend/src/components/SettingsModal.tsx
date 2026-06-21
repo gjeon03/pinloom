@@ -1,7 +1,21 @@
 import { type CSSProperties, useEffect, useState } from 'react';
-import { Download, Pencil, Plus, Trash2, X } from 'lucide-react';
-import type { HealthResponse, UserEnvVar } from '@pinloom/shared';
+import {
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-react';
+import type {
+  HealthResponse,
+  PromptTemplate,
+  UserEnvVar,
+} from '@pinloom/shared';
+import useSWR from 'swr';
 import { api, type AutostartStatus } from '../api/client.js';
+import { cacheKeys } from '../api/cacheKeys.js';
 import { usePwaInstall } from '../hooks/usePwaInstall.js';
 
 type CliStatus = HealthResponse['agents']['claude'];
@@ -303,6 +317,220 @@ function EnvVarsSection() {
   );
 }
 
+interface DraftTemplate {
+  id?: string;
+  title: string;
+  body: string;
+}
+
+function PromptTemplatesSection() {
+  // Shared SWR key with the composer's template popup, so edits here and a
+  // "Save draft" from the composer stay consistent in both directions.
+  const { data: items, mutate: refresh } = useSWR(
+    cacheKeys.promptTemplates(),
+    () => api.listPromptTemplates(),
+  );
+  const [draft, setDraft] = useState<DraftTemplate | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (!draft) return;
+    if (!draft.title.trim()) return setError('Title is required');
+    if (!draft.body.trim()) return setError('Body is required');
+    setBusy(true);
+    try {
+      if (draft.id) {
+        await api.updatePromptTemplate(draft.id, {
+          title: draft.title.trim(),
+          body: draft.body,
+        });
+      } else {
+        await api.createPromptTemplate({
+          title: draft.title.trim(),
+          body: draft.body,
+        });
+      }
+      setDraft(null);
+      setError(null);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string, title: string) {
+    if (!confirm(`Delete template “${title}”?`)) return;
+    setBusy(true);
+    try {
+      await api.deletePromptTemplate(id);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function move(index: number, dir: -1 | 1) {
+    if (!items) return;
+    const next = index + dir;
+    if (next < 0 || next >= items.length) return;
+    const ids = items.map((t) => t.id);
+    [ids[index], ids[next]] = [ids[next], ids[index]];
+    setBusy(true);
+    try {
+      await refresh(api.reorderPromptTemplates(ids), {
+        revalidate: false,
+      });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
+          Prompt Templates
+        </h3>
+        {!draft && (
+          <button
+            onClick={() => {
+              setError(null);
+              setDraft({ title: '', body: '' });
+            }}
+            className="text-xs flex items-center gap-1 px-2 py-1 rounded border border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+          >
+            <Plus size={12} />
+            Add
+          </button>
+        )}
+      </div>
+
+      <p className="text-xs text-[var(--color-ink-muted)] mb-3">
+        Your reusable prompts. Insert one into the chat composer with the
+        toolbar button or by typing <code>/</code>. Stored locally; never sent
+        to the model until you Send.
+      </p>
+
+      {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
+
+      {items === undefined && (
+        <p className="text-[var(--color-ink-muted)] text-sm">Loading…</p>
+      )}
+
+      {items && items.length === 0 && !draft && (
+        <p className="text-[var(--color-ink-muted)] text-sm py-2">
+          No templates yet.
+        </p>
+      )}
+
+      {items && items.length > 0 && (
+        <div className="border border-[var(--color-border)] rounded divide-y divide-[var(--color-border)]">
+          {items.map((t, i) => (
+            <div key={t.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+              <div className="flex flex-col">
+                <button
+                  onClick={() => move(i, -1)}
+                  disabled={busy || i === 0}
+                  className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-30"
+                  title="Move up"
+                >
+                  <ChevronUp size={12} />
+                </button>
+                <button
+                  onClick={() => move(i, 1)}
+                  disabled={busy || i === items.length - 1}
+                  className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-30"
+                  title="Move down"
+                >
+                  <ChevronDown size={12} />
+                </button>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium truncate">{t.title}</div>
+                <div className="text-xs text-[var(--color-ink-muted)] truncate">
+                  {t.body.replace(/\s+/g, ' ').trim()}
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setError(null);
+                  setDraft({ id: t.id, title: t.title, body: t.body });
+                }}
+                className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-1 rounded hover:bg-[var(--color-surface-3)]"
+                title="Edit"
+              >
+                <Pencil size={14} />
+              </button>
+              <button
+                onClick={() => remove(t.id, t.title)}
+                disabled={busy}
+                className="text-[var(--color-ink-muted)] hover:text-red-400 p-1 rounded hover:bg-[var(--color-surface-3)]"
+                title="Delete"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {draft && (
+        <div className="mt-3 border border-[var(--color-border)] rounded p-3 bg-[var(--color-surface-3)] space-y-2">
+          <div>
+            <label className="text-xs text-[var(--color-ink-muted)] block mb-1">
+              Title
+            </label>
+            <input
+              autoFocus
+              value={draft.title}
+              onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+              placeholder="Review this diff"
+              className="w-full text-sm px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-[var(--color-ink-muted)] block mb-1">
+              Prompt
+            </label>
+            <textarea
+              value={draft.body}
+              onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+              placeholder="Review the following diff for correctness bugs and edge cases…"
+              rows={4}
+              className="w-full text-sm px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] resize-y"
+            />
+          </div>
+          <div className="flex items-center gap-2 justify-end">
+            <button
+              onClick={() => {
+                setDraft(null);
+                setError(null);
+              }}
+              className="text-xs px-3 py-1.5 rounded border border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={save}
+              disabled={busy}
+              className="text-xs px-3 py-1.5 rounded bg-[var(--color-accent)] text-black font-medium disabled:opacity-50"
+            >
+              {draft.id ? 'Save' : 'Add'}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -357,6 +585,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <AutostartSection />
 
           <EnvVarsSection />
+
+          <PromptTemplatesSection />
 
           <BackupSection />
 

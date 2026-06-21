@@ -6,6 +6,7 @@ import type {
   Plan,
   PlanItem,
   Project,
+  PromptTemplate,
   ProjectGroup,
   ProjectNotepad,
   ProjectNotepadSummary,
@@ -85,6 +86,30 @@ export const api = {
       `/api/search?${params}`,
     ).then((r) => r.results);
   },
+
+  // Reusable prompt templates (global, manually ordered).
+  listPromptTemplates: () =>
+    request<PromptTemplate[]>('/api/prompt-templates'),
+  createPromptTemplate: (body: { title: string; body: string }) =>
+    request<PromptTemplate>('/api/prompt-templates', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updatePromptTemplate: (
+    id: string,
+    body: { title?: string; body?: string },
+  ) =>
+    request<PromptTemplate>(`/api/prompt-templates/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deletePromptTemplate: (id: string) =>
+    request<{ ok: true }>(`/api/prompt-templates/${id}`, { method: 'DELETE' }),
+  reorderPromptTemplates: (ids: string[]) =>
+    request<PromptTemplate[]>('/api/prompt-templates/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
 
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>

@@ -120,6 +120,14 @@ export function AppShell({ children }: Props) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
   const [pickerTarget, setPickerTarget] = useState<{ groupId: string | null } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  // Let any component (e.g. the composer's template popup) open Settings.
+  useEffect(() => {
+    function open() {
+      setShowSettings(true);
+    }
+    window.addEventListener('pinloom:open-settings', open);
+    return () => window.removeEventListener('pinloom:open-settings', open);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragSource>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);

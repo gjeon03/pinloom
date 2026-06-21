@@ -1,13 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import useSWR from 'swr';
+import useSWR, { mutate } from 'swr';
 import {
   ArrowDown,
   BookPlus,
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  FileText,
   ImagePlus,
   Minus,
   Plus,
@@ -20,6 +21,7 @@ import {
 import type {
   AgentKind,
   Message,
+  PromptTemplate,
   QueueItem,
   Session,
 } from '@pinloom/shared';
@@ -33,6 +35,7 @@ import { ModelPicker, findModelLabel } from './ModelPicker.js';
 import { EffortPicker } from './EffortPicker.js';
 import { AgentBadge } from './AgentBadge.js';
 import { MentionPopup, type MentionWorker } from './MentionPopup.js';
+import { TemplatePopup } from './TemplatePopup.js';
 import { useNotifications } from '../stores/notifications.js';
 import { Markdown } from './Markdown.js';
 import {
@@ -322,6 +325,28 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   } | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
+  // "/" prompt-template trigger — mirrors the @-mention state. `slash` is the
+  // active trigger span; `templatesOpen` is the toolbar-button popup (full
+  // list, no filter). They never co-exist with a mention (mutually exclusive).
+  const [slash, setSlash] = useState<{
+    start: number;
+    end: number;
+    query: string;
+  } | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const { data: promptTemplates = [] } = useSWR(
+    cacheKeys.promptTemplates(),
+    () => api.listPromptTemplates(),
+  );
+  const filteredTemplates = useMemo(() => {
+    if (!slash) return promptTemplates;
+    const q = slash.query.toLowerCase();
+    return promptTemplates.filter((t) => t.title.toLowerCase().includes(q));
+  }, [slash, promptTemplates]);
+  const templatePopupOpen =
+    templatesOpen || (slash !== null && filteredTemplates.length > 0);
+
   const filteredMentions = useMemo(() => {
     if (!mention) return [];
     const q = mention.query.toLowerCase();
@@ -336,6 +361,11 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
       setMentionIndex(Math.max(0, filteredMentions.length - 1));
     }
   }, [filteredMentions, mentionIndex]);
+  useEffect(() => {
+    if (slashIndex >= filteredTemplates.length) {
+      setSlashIndex(Math.max(0, filteredTemplates.length - 1));
+    }
+  }, [filteredTemplates, slashIndex]);
 
   function detectMentionAtCursor(value: string, cursor: number) {
     // Walk back from the cursor to find a "@" preceded by start-of-text
@@ -360,6 +390,28 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     return null;
   }
 
+  // Same walk-back as mentions but for "/" — start-of-line or after
+  // whitespace, aborting on whitespace or a second "/" so a path like
+  // "/Users/foo" never triggers the template picker.
+  function detectSlashAtCursor(value: string, cursor: number) {
+    let i = cursor - 1;
+    while (i >= 0) {
+      const ch = value[i];
+      if (ch === '/') {
+        const prev = i > 0 ? value[i - 1] : '';
+        if (i === 0 || /\s/.test(prev)) {
+          const query = value.slice(i + 1, cursor);
+          if (/\s/.test(query) || query.includes('/')) return null;
+          return { start: i, end: cursor, query };
+        }
+        return null;
+      }
+      if (/\s/.test(ch)) return null;
+      i -= 1;
+    }
+    return null;
+  }
+
   // True while the IME is composing (Korean/Japanese/Chinese). We
   // suppress mention updates during composition because aliases are
   // strict ASCII — any preedit char in the query is noise — and because
@@ -367,38 +419,62 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   // race the popup's keydown handler.
   const composingRef = useRef(false);
 
+  // Recompute both autocomplete triggers from the caret. @-mention takes
+  // precedence (team sessions only); the "/" template trigger fills in when no
+  // mention is active. They're mutually exclusive by construction.
   function updateMentionFromTextarea() {
-    if (mentionWorkers.length === 0) {
-      if (mention) setMention(null);
-      return;
-    }
     if (composingRef.current) return;
     const el = textareaRef.current;
     if (!el) return;
     // A range selection is a deliberate user gesture (selecting text to
-    // overtype etc.) — don't pop up a mention picker over it.
-    if (
+    // overtype etc.) — don't pop a picker over it.
+    const rangeSelected =
       typeof el.selectionEnd === 'number' &&
-      el.selectionEnd !== el.selectionStart
-    ) {
-      if (mention) setMention(null);
-      return;
-    }
+      el.selectionEnd !== el.selectionStart;
     const cursor = el.selectionStart ?? input.length;
-    const next = detectMentionAtCursor(input, cursor);
-    if (!next) {
-      if (mention) setMention(null);
-      return;
+
+    if (mentionWorkers.length > 0 && !rangeSelected) {
+      const m = detectMentionAtCursor(input, cursor);
+      if (m) {
+        if (
+          !mention ||
+          m.start !== mention.start ||
+          m.end !== mention.end ||
+          m.query !== mention.query
+        ) {
+          setMention(m);
+          setMentionIndex(0);
+        }
+        if (slash) setSlash(null);
+        if (templatesOpen) setTemplatesOpen(false);
+        return;
+      }
     }
-    if (
-      !mention ||
-      next.start !== mention.start ||
-      next.end !== mention.end ||
-      next.query !== mention.query
-    ) {
-      setMention(next);
-      setMentionIndex(0);
+    if (mention) setMention(null);
+
+    // Skip the "/" trigger in shell mode (input starts with "!") so a path arg
+    // like `!ls /tmp` doesn't pop the picker and let Enter inject a template
+    // instead of running the command — mirrors the toolbar button's guard.
+    const shellMode = input.trimStart().startsWith('!');
+    if (!rangeSelected && !shellMode) {
+      const s = detectSlashAtCursor(input, cursor);
+      if (s) {
+        if (
+          !slash ||
+          s.start !== slash.start ||
+          s.end !== slash.end ||
+          s.query !== slash.query
+        ) {
+          setSlash(s);
+          setSlashIndex(0);
+        }
+        return;
+      }
     }
+    if (slash) setSlash(null);
+    // Reaching here = ordinary text (no mention, no slash). Dismiss the
+    // toolbar-button popup so it can't silently steal the next Enter-to-send.
+    if (templatesOpen) setTemplatesOpen(false);
   }
 
   function pickMention(worker: MentionWorker) {
@@ -417,6 +493,44 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
       el.focus();
       el.setSelectionRange(pos, pos);
     });
+  }
+
+  // Insert a template's body. Slash path replaces the "/query" span; the
+  // toolbar-button path inserts at the caret, preserving the draft. Never
+  // auto-sends — templates are draft seeds the user reviews before Send.
+  function pickTemplate(t: PromptTemplate) {
+    if (slash) {
+      const before = input.slice(0, slash.start);
+      const after = input.slice(slash.end);
+      setInput(before + t.body + after);
+      setSlash(null);
+      queueMicrotask(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        const pos = before.length + t.body.length;
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      });
+    } else {
+      insertAtCursor(t.body);
+      setTemplatesOpen(false);
+    }
+  }
+
+  async function saveDraftAsTemplate() {
+    if (input.length > 8000) {
+      setError('Draft is too long to save as a template (max 8000 chars).');
+      return;
+    }
+    const title = window.prompt('Save current draft as a template — title:');
+    if (!title || !title.trim()) return;
+    try {
+      await api.createPromptTemplate({ title: title.trim(), body: input });
+      await mutate(cacheKeys.promptTemplates());
+      setTemplatesOpen(false);
+    } catch (e) {
+      setError(String(e));
+    }
   }
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1270,6 +1384,18 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
           >
             <ImagePlus size={14} />
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSlash(null);
+              setTemplatesOpen((v) => !v);
+            }}
+            title="Insert a prompt template (or type /)"
+            disabled={isShellMode}
+            className="shrink-0 h-9 w-9 flex items-center justify-center rounded border border-[var(--color-border)] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <FileText size={14} />
+          </button>
           <div className="flex-1 relative">
             {mention && filteredMentions.length > 0 && (
               <MentionPopup
@@ -1277,6 +1403,21 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
                 highlightIndex={mentionIndex}
                 onPick={pickMention}
                 onHover={setMentionIndex}
+              />
+            )}
+            {templatePopupOpen && (
+              <TemplatePopup
+                templates={filteredTemplates}
+                highlightIndex={slashIndex}
+                onPick={pickTemplate}
+                onHover={setSlashIndex}
+                onManage={() => {
+                  setTemplatesOpen(false);
+                  setSlash(null);
+                  window.dispatchEvent(new CustomEvent('pinloom:open-settings'));
+                }}
+                canSaveDraft={input.trim().length > 0}
+                onSaveDraft={saveDraftAsTemplate}
               />
             )}
           <textarea
@@ -1298,8 +1439,13 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
               queueMicrotask(updateMentionFromTextarea);
             }}
             onBlur={() => {
-              // Delay so a click on a popup row still fires.
-              setTimeout(() => setMention(null), 100);
+              // Delay so a click on a popup row still fires. (The toolbar
+              // template popup persists — it's toggled by its own button, not
+              // tied to textarea focus.)
+              setTimeout(() => {
+                setMention(null);
+                setSlash(null);
+              }, 100);
             }}
             onPaste={(e) => {
               if (isShellMode) return;
@@ -1345,6 +1491,37 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
                   e.preventDefault();
                   setMention(null);
                   return;
+                }
+              }
+              // Template popup ("/" trigger or toolbar button) — same
+              // precedence over send. Mutually exclusive with the mention popup.
+              if (templatePopupOpen) {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setSlash(null);
+                  setTemplatesOpen(false);
+                  return;
+                }
+                if (filteredTemplates.length > 0) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setSlashIndex((i) =>
+                      Math.min(i + 1, filteredTemplates.length - 1),
+                    );
+                    return;
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setSlashIndex((i) => Math.max(i - 1, 0));
+                    return;
+                  }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    if (e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    const t = filteredTemplates[slashIndex];
+                    if (t) pickTemplate(t);
+                    return;
+                  }
                 }
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {

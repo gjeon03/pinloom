@@ -22,4 +22,5 @@ export const cacheKeys = {
   projects: () => ['projects'] as const,
   search: (query: string, projectId: string | null) =>
     ['search', query, projectId] as const,
+  promptTemplates: () => ['prompt-templates'] as const,
 };
