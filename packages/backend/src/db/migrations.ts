@@ -446,6 +446,75 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         WHERE idempotency_key IS NOT NULL;
     `,
   },
+  {
+    id: 29,
+    // Full-text search over conversation history (docs/knowledge-system-v2.md,
+    // Phase 1). External-content FTS5 mirroring messages.content — keeps the
+    // index lean (no second copy of the text on disk) while still serving
+    // snippet()/highlight() (a contentless table cannot).
+    //
+    // Tokenizer = trigram: the only viable choice for a Korean+English user.
+    // ICU is not compiled into the bundled better-sqlite3, and unicode61
+    // cannot segment Korean (returns 0 rows for Korean substring queries).
+    // Trigram only matches at >= 3 chars; 1-2 char Korean terms (배포, 인증)
+    // are served by a base-table LIKE in the query layer (see message-search.ts).
+    //
+    // The triggers are deliberately GUARDED to mirror exactly what gets
+    // indexed, because an external-content FTS5 'delete' must correspond to a
+    // real prior insert or it corrupts the index:
+    //  - index ONLY role IN ('user','assistant') with non-empty content. Skip
+    //    tool rows (noise + privacy) and the empty-content placeholder rows
+    //    persistMessage creates (runner.ts then UPDATEs content on every
+    //    closeStream flush — the AFTER UPDATE OF content trigger handles the
+    //    empty->real transition without ever issuing a stray 'delete').
+    //  - AFTER DELETE / the delete half of AFTER UPDATE only fire when the OLD
+    //    row was actually indexed, so cascade-deletes (a session delete cascades
+    //    to its messages with foreign_keys=ON, set in connection.ts) leave the
+    //    index empty and passing FTS5 integrity-check.
+    // Verified empirically against SQLite 3.53.0 (the bundled build).
+    sql: `
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        content,
+        content='messages',
+        content_rowid='rowid',
+        tokenize='trigram remove_diacritics 1'
+      );
+
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages
+        WHEN new.content <> '' AND new.role IN ('user', 'assistant')
+      BEGIN
+        INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages
+        WHEN old.content <> '' AND old.role IN ('user', 'assistant')
+      BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content)
+          VALUES ('delete', old.rowid, old.content);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE OF content ON messages
+      BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content)
+          SELECT 'delete', old.rowid, old.content
+          WHERE old.content <> '' AND old.role IN ('user', 'assistant');
+        INSERT INTO messages_fts(rowid, content)
+          SELECT new.rowid, new.content
+          WHERE new.content <> '' AND new.role IN ('user', 'assistant');
+      END;
+
+      -- External-content tables start empty; backfill existing history.
+      -- NOT the FTS5 'rebuild' command: rebuild repopulates from the WHOLE
+      -- content table, so it would index the very tool/empty rows the triggers
+      -- skip — and those rows can never be removed cleanly later (the guarded
+      -- AFTER DELETE trigger won't fire for them), leaving stale index entries.
+      -- Mirror the trigger filter exactly instead.
+      INSERT INTO messages_fts(rowid, content)
+        SELECT rowid, content FROM messages
+        WHERE content <> '' AND role IN ('user', 'assistant');
+      INSERT INTO messages_fts(messages_fts) VALUES ('optimize');
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
@@ -464,9 +533,17 @@ export function runMigrations(db: Database.Database) {
     'INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)',
   );
 
-  for (const migration of MIGRATIONS) {
-    if (applied.has(migration.id)) continue;
+  // Apply each migration + record it atomically: a multi-statement migration
+  // (e.g. 29's vtable + triggers + data backfill) that dies mid-exec must roll
+  // back entirely rather than leave a half-applied, unrecorded migration that
+  // re-runs (and double-applies its non-idempotent backfill) on next boot.
+  const applyOne = db.transaction((migration: { id: number; sql: string }) => {
     db.exec(migration.sql);
     insertMigration.run(migration.id, new Date().toISOString());
+  });
+
+  for (const migration of MIGRATIONS) {
+    if (applied.has(migration.id)) continue;
+    applyOne(migration);
   }
 }
