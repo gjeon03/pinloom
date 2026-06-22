@@ -16,6 +16,7 @@ import { TeamsPage } from './pages/TeamsPage.js';
 import { TeamCanvasPage } from './pages/TeamCanvasPage.js';
 import { WikiPage } from './pages/WikiPage.js';
 import { WikiDetailPage } from './pages/WikiDetailPage.js';
+import { WikiProposalsPage } from './pages/WikiProposalsPage.js';
 import { cacheKeys } from './api/cacheKeys.js';
 
 // SWR defaults: revalidate on browser focus + network reconnect so a tab
@@ -117,6 +118,14 @@ export function App() {
               element={
                 <AppShell>
                   {() => <TeamCanvasPage />}
+                </AppShell>
+              }
+            />
+            <Route
+              path="/wiki/proposals"
+              element={
+                <AppShell>
+                  {() => <WikiProposalsPage />}
                 </AppShell>
               }
             />

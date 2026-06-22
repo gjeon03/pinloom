@@ -23,4 +23,7 @@ export const cacheKeys = {
   search: (query: string, projectId: string | null) =>
     ['search', query, projectId] as const,
   promptTemplates: () => ['prompt-templates'] as const,
+  wikiProposals: (status: string | null) =>
+    ['wiki-proposals', status] as const,
+  wikiProposalDiff: (id: string) => ['wiki-proposal-diff', id] as const,
 };

@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import useSWR from 'swr';
 import {
   ChevronDown,
   ChevronUp,
   Download,
   FolderOpen,
+  Inbox,
   RefreshCw,
   Sparkles,
   Upload,
 } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
+import { cacheKeys } from '../api/cacheKeys.js';
 import {
   api,
   type WikiImportSummary,
@@ -64,6 +67,10 @@ function groupByTopic(pages: WikiPage[]): { topic: string; pages: WikiPage[] }[]
 }
 
 export function WikiPage() {
+  const { data: pendingProposals = [] } = useSWR(
+    cacheKeys.wikiProposals('pending'),
+    () => api.listWikiProposals('pending'),
+  );
   const [overview, setOverview] = useState<WikiOverview | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [scope, setScope] = useState<ScopeFilter>(null);
@@ -244,6 +251,20 @@ export function WikiPage() {
                   <Sparkles size={12} />
                   Analyze
                 </button>
+              </Tooltip>
+              <Tooltip label="Review gardener proposals" side="bottom">
+                <Link
+                  to="/wiki/proposals"
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
+                >
+                  <Inbox size={12} />
+                  Proposals
+                  {pendingProposals.length > 0 && (
+                    <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-[10px] font-semibold text-black">
+                      {pendingProposals.length}
+                    </span>
+                  )}
+                </Link>
               </Tooltip>
               <Tooltip label="Open wiki folder" side="bottom">
                 <button
