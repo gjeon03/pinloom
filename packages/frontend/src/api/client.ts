@@ -134,6 +134,15 @@ export const api = {
       method: 'POST',
     }),
 
+  // User profile (~/.pinloom/wiki/USER.md) — inlined into every system prompt.
+  getUserProfile: () =>
+    request<{ profile: string; maxChars: number }>('/api/user-profile'),
+  setUserProfile: (profile: string) =>
+    request<{ profile: string; maxChars: number }>('/api/user-profile', {
+      method: 'PUT',
+      body: JSON.stringify({ profile }),
+    }),
+
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
