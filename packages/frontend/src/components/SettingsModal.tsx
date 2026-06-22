@@ -323,6 +323,82 @@ interface DraftTemplate {
   body: string;
 }
 
+function UserProfileSection() {
+  const [text, setText] = useState<string | null>(null);
+  const [maxChars, setMaxChars] = useState(4000);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getUserProfile()
+      .then((r) => {
+        setText(r.profile);
+        setMaxChars(r.maxChars);
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  async function save() {
+    if (text === null) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.setUserProfile(text);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        About You
+      </h3>
+      <p className="text-xs text-[var(--color-ink-muted)] mb-3">
+        Your preferences and working style — included in <strong>every</strong>{' '}
+        agent's system prompt, across all projects (distinct from the
+        project-scoped wiki). Stored locally at{' '}
+        <code>~/.pinloom/wiki/USER.md</code>;{' '}
+        <strong>it is sent to the model on every turn</strong>, so keep it
+        concise and free of secrets.
+      </p>
+      {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
+      {text === null ? (
+        <p className="text-[var(--color-ink-muted)] text-sm">Loading…</p>
+      ) : (
+        <>
+          <textarea
+            value={text}
+            maxLength={maxChars}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="e.g. I prefer pnpm + TypeScript strict. Conventional commits. Be terse. Ask before large refactors."
+            rows={6}
+            className="w-full text-sm px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] resize-y"
+          />
+          <div className="mt-2 flex items-center justify-between">
+            <span className="text-[10px] tabular-nums text-[var(--color-ink-muted)]">
+              {text.length}/{maxChars}
+            </span>
+            <button
+              onClick={save}
+              disabled={saving}
+              className="text-xs px-3 py-1.5 rounded bg-[var(--color-accent)] text-black font-medium disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function PromptTemplatesSection() {
   // Shared SWR key with the composer's template popup, so edits here and a
   // "Save draft" from the composer stay consistent in both directions.
@@ -585,6 +661,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <AutostartSection />
 
           <EnvVarsSection />
+
+          <UserProfileSection />
 
           <PromptTemplatesSection />
 

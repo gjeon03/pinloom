@@ -5,6 +5,7 @@ import { WS_RUNS_CHANNEL } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
+import { buildUserProfileContext } from './user-profile.js';
 import { getAgentAdapter } from './agents/index.js';
 import type {
   AgentRun,
@@ -1198,6 +1199,7 @@ export function buildSessionLaunchInput(sessionId: string): SessionLaunchInput |
   const pinsContext = buildPinsContext(ctx.id);
   const systemPrompt =
     SYSTEM_PROMPT +
+    buildUserProfileContext() +
     buildWikiContext(ctx.projectId) +
     buildEnvVarsContext() +
     buildPlanContext(planItems) +
@@ -1509,7 +1511,10 @@ async function runAssistant(
   // changes happen when the user re-syncs, which is an explicit action
   // and worth a re-cache. Env vars almost never change at runtime.
   const systemPrompt =
-    SYSTEM_PROMPT + buildWikiContext(ctx.projectId) + envVarsContext;
+    SYSTEM_PROMPT +
+    buildUserProfileContext() +
+    buildWikiContext(ctx.projectId) +
+    envVarsContext;
   // Dynamic suffix: plan + team + worker instructions + pins. These
   // are the surfaces a user actively mutates between turns of the same
   // session, so they go after the cache boundary.
