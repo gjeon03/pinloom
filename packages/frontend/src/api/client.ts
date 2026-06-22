@@ -7,6 +7,8 @@ import type {
   PlanItem,
   Project,
   PromptTemplate,
+  WikiProposal,
+  WikiProposalDiff,
   ProjectGroup,
   ProjectNotepad,
   ProjectNotepadSummary,
@@ -109,6 +111,22 @@ export const api = {
     request<PromptTemplate[]>('/api/prompt-templates/reorder', {
       method: 'POST',
       body: JSON.stringify({ ids }),
+    }),
+
+  // Wiki gardener proposals (Phase 2).
+  listWikiProposals: (status?: WikiProposal['status']) =>
+    request<WikiProposal[]>(
+      `/api/wiki/proposals${status ? `?status=${status}` : ''}`,
+    ),
+  getWikiProposalDiff: (id: string) =>
+    request<WikiProposalDiff>(`/api/wiki/proposals/${id}`),
+  acceptWikiProposal: (id: string) =>
+    request<WikiProposal>(`/api/wiki/proposals/${id}/accept`, {
+      method: 'POST',
+    }),
+  rejectWikiProposal: (id: string) =>
+    request<WikiProposal>(`/api/wiki/proposals/${id}/reject`, {
+      method: 'POST',
     }),
 
   listProjects: () => request<Project[]>('/api/projects'),
