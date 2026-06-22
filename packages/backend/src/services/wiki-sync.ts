@@ -628,6 +628,19 @@ export function getSyncQueueState(): SyncQueueState {
   };
 }
 
+// Run `fn` exclusively on the shared wiki write chain, so a gardener
+// proposal-apply never races a concurrent session sync (or another apply) —
+// both mutate ~/.pinloom/wiki/pages + index.md. Mirrors how runWikiSync
+// serializes onto syncChain.
+export function runOnWikiChain<T>(fn: () => Promise<T>): Promise<T> {
+  const ourTurn = syncChain.then(fn, fn);
+  syncChain = ourTurn.then(
+    () => undefined,
+    () => undefined,
+  );
+  return ourTurn;
+}
+
 export async function runWikiSync(args: {
   sessionId: string;
   model?: string;

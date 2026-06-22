@@ -148,6 +148,42 @@ export interface MessageSearchResult {
   highlights: [number, number][];
 }
 
+// A staged wiki gardener change (knowledge-system v2 Phase 2). The gardener
+// proposes; the user reviews + accepts/rejects. Applying routes through the
+// deterministic curation primitives — the agent never writes pages directly.
+export type WikiProposalKind = 'edit_section' | 'archive_page';
+export type WikiProposalStatus = 'pending' | 'applied' | 'rejected';
+
+export interface WikiProposal {
+  id: string;
+  kind: WikiProposalKind;
+  status: WikiProposalStatus;
+  /** One-line human summary of what the proposal does. */
+  title: string;
+  /** Target page, relative to the wiki pages/ dir. */
+  relPath: string;
+  /** kind-specific: edit_section → { newSectionContent }; archive_page → { reason, supersededBy? }. */
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// A proposal plus the before/after the review UI renders as a diff. `after` is
+// null for a page being archived. `stale` = the page changed since the
+// proposal was computed, so accepting it is blocked.
+export interface WikiProposalDiff {
+  proposal: WikiProposal;
+  before: string | null;
+  after: string | null;
+  stale: boolean;
+  /**
+   * Non-null when the proposal can't be computed/applied (e.g. malformed
+   * markers). Distinguishes an un-applyable edit from a legitimate archive,
+   * which has after=null + error=null.
+   */
+  error: string | null;
+}
+
 // A reusable prompt the user registers once and inserts into the chat composer
 // (a "/" slash trigger or a toolbar button). User-level / global — applies to
 // every session regardless of project, like user env vars. Distinct from the

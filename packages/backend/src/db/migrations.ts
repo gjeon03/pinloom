@@ -535,6 +535,31 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         ON prompt_templates(order_index);
     `,
   },
+  {
+    id: 31,
+    // Wiki gardener proposals (docs/knowledge-system-v2.md, Phase 2a). A
+    // durable staging table: the gardener (Phase 2b) writes proposed changes
+    // here; the user reviews and accepts/rejects them. Applying a proposal
+    // routes through the deterministic wiki-curation primitives (#125) — the
+    // agent never writes pages directly. base_hash pins the page version the
+    // proposal was computed against, so a stale proposal is rejected at accept
+    // time rather than clobbering an intervening edit.
+    sql: `
+      CREATE TABLE IF NOT EXISTS wiki_proposals (
+        id          TEXT PRIMARY KEY,
+        kind        TEXT NOT NULL,                    -- edit_section | archive_page
+        status      TEXT NOT NULL DEFAULT 'pending',  -- pending | applied | rejected
+        title       TEXT NOT NULL,
+        rel_path    TEXT NOT NULL,
+        payload     TEXT NOT NULL,                    -- JSON, kind-specific
+        base_hash   TEXT,                             -- sha256 of the target page at proposal time
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_wiki_proposals_status
+        ON wiki_proposals(status, created_at);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
