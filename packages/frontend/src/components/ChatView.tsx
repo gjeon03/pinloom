@@ -226,6 +226,25 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   const [verb, setVerb] = useState<string>(() => pickVerb());
   const [thinkingText, setThinkingText] = useState<string>('');
   const [wikiSyncing, setWikiSyncing] = useState(false);
+  // "Sync to wiki?" nudge: count assistant turns since the last sync; once a
+  // few accrue, suggest capturing them (never auto-syncs). Dismiss is "not
+  // now" — it re-appears as more turns pile up. Per-session by remount key.
+  const [syncNudgeDismissedAt, setSyncNudgeDismissedAt] = useState(0);
+  const unsyncedTurns = useMemo(() => {
+    // Count assistant messages after the last-synced message. If the boundary
+    // isn't in the loaded window we conservatively count nothing (no over-nudge).
+    let counting = !session.lastSyncedMessageId;
+    let n = 0;
+    for (const m of messages) {
+      if (!counting) {
+        if (m.id === session.lastSyncedMessageId) counting = true;
+        continue;
+      }
+      if (m.role === 'assistant') n += 1;
+    }
+    return n;
+  }, [messages, session.lastSyncedMessageId]);
+  const SYNC_NUDGE_THRESHOLD = 3;
   // Model + Effort live on the session row in the DB, so they survive
   // the GitHub backup → other-machine import path. Local state mirrors
   // the session prop and writes back through PATCH /api/sessions/:id.
@@ -1349,6 +1368,32 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
             )}
           </div>
         )}
+        {unsyncedTurns >= SYNC_NUDGE_THRESHOLD &&
+          unsyncedTurns > syncNudgeDismissedAt &&
+          !wikiSyncing &&
+          !aiRunning && (
+            <div className="mb-1.5 flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-[11px]">
+              <BookPlus size={12} className="shrink-0 text-[var(--color-accent)]" />
+              <span className="flex-1 text-[var(--color-ink-muted)]">
+                {unsyncedTurns} turns since the last wiki sync — capture them?
+              </span>
+              <button
+                type="button"
+                onClick={syncWiki}
+                className="rounded bg-[var(--color-accent)] px-2 py-0.5 text-[11px] font-medium text-black"
+              >
+                Sync
+              </button>
+              <button
+                type="button"
+                onClick={() => setSyncNudgeDismissedAt(unsyncedTurns)}
+                title="Not now"
+                className="rounded p-0.5 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
         <div className="flex gap-2 items-end">
           <input
             ref={fileInputRef}
