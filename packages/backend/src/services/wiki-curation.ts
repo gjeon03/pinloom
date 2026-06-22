@@ -139,7 +139,7 @@ export interface ArchiveEntry {
 
 // Reject anything that would escape pages/ (zip-slip style) or isn't a plain
 // relative file path.
-function assertSafeRelPath(relPath: string): void {
+export function assertSafeRelPath(relPath: string): void {
   if (
     !relPath ||
     path.isAbsolute(relPath) ||
