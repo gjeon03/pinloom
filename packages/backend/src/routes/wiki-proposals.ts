@@ -8,6 +8,7 @@ import {
   rejectProposal,
 } from '../services/wiki-proposals.js';
 import { CurationError } from '../services/wiki-curation.js';
+import { GardenerError, runGardener } from '../services/wiki-gardener.js';
 
 // Map a thrown error to an HTTP reply. ProposalError carries its own status;
 // a CurationError (e.g. malformed markers) is a 400; anything else re-throws.
@@ -72,4 +73,29 @@ export async function wikiProposalRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  // Run a gardening pass: the agent reads the wiki and stages proposals (it
+  // never writes pages). Returns how many were staged / skipped. A single
+  // in-flight run at a time — a concurrent request gets 409 (avoids duplicate
+  // inbox entries + double LLM cost).
+  let gardening = false;
+  app.post('/api/wiki/garden', async (_req, reply) => {
+    if (gardening) {
+      reply.code(409);
+      return { error: 'a gardening pass is already running' };
+    }
+    gardening = true;
+    try {
+      const { created, skipped, truncated } = await runGardener();
+      return { created: created.length, skipped, truncated };
+    } catch (err) {
+      if (err instanceof GardenerError) {
+        reply.code(502);
+        return { error: err.message };
+      }
+      return fail(reply, err);
+    } finally {
+      gardening = false;
+    }
+  });
 }
