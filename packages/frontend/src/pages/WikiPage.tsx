@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import useSWR from 'swr';
+import useSWR, { mutate } from 'swr';
 import {
   ChevronDown,
   ChevronUp,
@@ -9,6 +9,7 @@ import {
   Inbox,
   RefreshCw,
   Sparkles,
+  Sprout,
   Upload,
 } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
@@ -71,6 +72,39 @@ export function WikiPage() {
     cacheKeys.wikiProposals('pending'),
     () => api.listWikiProposals('pending'),
   );
+  const [gardening, setGardening] = useState(false);
+  const [gardenMsg, setGardenMsg] = useState<string | null>(null);
+  // A gardening pass can take minutes; ignore its result if we've unmounted.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  async function runGarden() {
+    setGardening(true);
+    setGardenMsg(null);
+    try {
+      const { created, skipped, truncated } = await api.runGardener();
+      await mutate(cacheKeys.wikiProposals('pending'));
+      if (!mountedRef.current) return;
+      const trunc = truncated ? ' (wiki was large — some pages not reviewed)' : '';
+      setGardenMsg(
+        created === 0
+          ? `Gardener found nothing to propose.${trunc}`
+          : `Staged ${created} proposal${created === 1 ? '' : 's'}${skipped ? ` (${skipped} skipped)` : ''} — review them under Proposals.${trunc}`,
+      );
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setGardenMsg(
+        `Gardener failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      if (mountedRef.current) setGardening(false);
+    }
+  }
   const [overview, setOverview] = useState<WikiOverview | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [scope, setScope] = useState<ScopeFilter>(null);
@@ -229,6 +263,11 @@ export function WikiPage() {
               <p className="mt-0.5 text-[11px] text-[var(--color-ink-muted)] font-mono">
                 {overview?.wikiRoot ?? '~/.pinloom/wiki'}
               </p>
+              {gardenMsg && (
+                <p className="mt-1 text-[11px] text-[var(--color-accent)]">
+                  {gardenMsg}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-1.5">
               <Tooltip label="Sync from a session" side="bottom">
@@ -250,6 +289,16 @@ export function WikiPage() {
                 >
                   <Sparkles size={12} />
                   Analyze
+                </button>
+              </Tooltip>
+              <Tooltip label="Let the gardener propose cleanups" side="bottom">
+                <button
+                  onClick={runGarden}
+                  disabled={gardening}
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+                >
+                  <Sprout size={12} className={gardening ? 'animate-pulse' : ''} />
+                  {gardening ? 'Gardening…' : 'Garden'}
                 </button>
               </Tooltip>
               <Tooltip label="Review gardener proposals" side="bottom">
