@@ -109,9 +109,20 @@ in-process model vs cloud) is deferred to the build phase, not decided here.
 - The project's git commits / dates → WHAT. *(new input)*
 
 **② It organizes itself (background, no buttons)**
-- When a session ends, an agent distills that day's work — *what, why, which
-  decisions* — and correlates the relevant commits → writes a **Work Timeline
-  entry (L1)**. Intent comes from the conversation; changes come from git.
+- Capture is **passive — the user never closes/finishes anything by hand.** It
+  rides signals that happen anyway: a session going **idle** (debounced, the
+  primary trigger), a **daily roll-up** sweep (safety net), and/or a **git
+  commit** (the natural WHAT-done moment). It must NEVER trigger on tab-close —
+  in pinloom closing a tab *deletes* the session (`deleteSession`), so capture
+  has to happen continuously, before any disposal. (This is what makes
+  pinloom's "sessions are disposable, the durable layer is the wiki/timeline"
+  design actually safe: knowledge is distilled out before a session is thrown
+  away.)
+- On those triggers an agent distills that day's work — *what, why, which
+  decisions* — and correlates the relevant commits → writes/updates a **Work
+  Timeline entry (L1)** (incremental update of the day's entry, debounced +
+  deduped, so it's cheap). Intent comes from the conversation; changes come
+  from git.
 - The gardener pulls only *reusable conventions* into the wiki (L2). *(evolves
   the existing button-driven gardener toward automatic)*
 - Everything new is indexed into the **SQLite vector store** (RAG's R).
@@ -160,8 +171,9 @@ overlaps with L1. To avoid two competing journals:
 ## 8. Open decisions (PENDING — discuss before building; recommendation noted)
 
 - **Work Timeline = separate type** *(recommended)* vs mixed into the wiki.
-- **Capture trigger** = distill on session-end + daily roll-up *(recommended)*
-  vs git commit hook vs manual.
+- **Capture trigger** = passive only (never tab-close — it deletes). Primary =
+  idle-debounce + daily roll-up *(recommended)*; bonus = git commit; always-on =
+  manual ("정리해줘" / hand a session id). Pick the primary trigger(s).
 - **Schedule-bot relationship** = timeline-substrate + bot-surface
   *(recommended)* vs bot owns it entirely.
 - **Scope** = per-project timeline *(recommended)* + a global roll-up view.
