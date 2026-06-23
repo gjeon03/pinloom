@@ -9,6 +9,7 @@
 
 import type { BotKind } from '@pinloom/shared';
 import { SCHEDULE_SYSTEM_PROMPT, resolveScheduleCwd } from './schedule.js';
+import { SKILL_SYSTEM_PROMPT, resolveSkillCwd } from './skill.js';
 
 export interface BotDefinition {
   kind: BotKind;
@@ -25,6 +26,12 @@ const DEFINITIONS: Partial<Record<BotKind, BotDefinition>> = {
     title: '일정 봇',
     systemPrompt: SCHEDULE_SYSTEM_PROMPT,
     resolveCwd: resolveScheduleCwd,
+  },
+  skill: {
+    kind: 'skill',
+    title: '스킬 봇',
+    systemPrompt: SKILL_SYSTEM_PROMPT,
+    resolveCwd: resolveSkillCwd,
   },
 };
 

@@ -33,6 +33,7 @@ const TEAM_ID = process.env.PINLOOM_TEAM_ID;
 const TEAM_TOKEN = process.env.PINLOOM_TEAM_TOKEN;
 const BOT_TOKEN = process.env.PINLOOM_BOT_TOKEN;
 const BOT_SESSION_ID = process.env.PINLOOM_BOT_SESSION_ID;
+const BOT_KIND = process.env.PINLOOM_BOT_KIND;
 const BACKEND_URL =
   process.env.PINLOOM_BACKEND_URL?.replace(/\/$/, '') ?? 'http://localhost:4748';
 
@@ -103,6 +104,33 @@ async function botGet<T>(path: string): Promise<T> {
   const res = await fetch(`${BACKEND_URL}${path}`, {
     method: 'GET',
     headers: { 'X-Pinloom-Bot-Token': BOT_TOKEN! },
+  });
+  const text = await res.text();
+  let parsed: unknown;
+  try {
+    parsed = text.length > 0 ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!res.ok) {
+    const detail =
+      parsed && typeof parsed === 'object' && 'error' in parsed
+        ? (parsed as ApiError).error
+        : text || res.statusText;
+    throw new Error(`pinloom backend ${res.status}: ${detail}`);
+  }
+  return parsed as T;
+}
+
+// Bot-mode POST against /api/bots/dispatch/*, authenticated with the bot token.
+async function botPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'X-Pinloom-Bot-Token': BOT_TOKEN!,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
   });
   const text = await res.text();
   let parsed: unknown;
@@ -844,6 +872,103 @@ function registerBotTools() {
           { type: 'text', text: r.text ? `${header}\n\n${r.text}` : `${header}\n\n(empty session)` },
         ],
       };
+    },
+  );
+
+  // Skill-bot-only tools: list + save Claude/Codex skills.
+  if (BOT_KIND === 'skill') registerSkillTools();
+}
+
+interface SkillSummary {
+  name: string;
+  description: string;
+  scope: string;
+  linkedClaude?: boolean;
+  linkedCodex?: boolean;
+}
+
+interface SkillSaveResult {
+  name: string;
+  scope: string;
+  action: string;
+  path: string;
+  links?: { claude: string; codex: string };
+}
+
+function registerSkillTools() {
+  server.registerTool(
+    'pinloom_list_skills',
+    {
+      description:
+        'List existing Claude/Codex skills in a scope so you can decide whether to supplement an existing skill or create a new one. ALWAYS call this before saving. scope "global" lists ~/.pinloom/skills (with claude/codex link status); scope "project" lists a project\'s .claude/skills (pass the project name/slug/id).',
+      inputSchema: {
+        scope: z.enum(['global', 'project']).describe('global or project'),
+        project: z
+          .string()
+          .optional()
+          .describe('Project name/slug/id — required when scope is "project".'),
+      },
+    },
+    async (args) => {
+      const params = new URLSearchParams({ scope: args.scope });
+      if (args.project) params.set('project', args.project);
+      const skills = await botGet<SkillSummary[]>(
+        `/api/bots/dispatch/list-skills?${params.toString()}`,
+      );
+      if (skills.length === 0) {
+        return { content: [{ type: 'text', text: `No ${args.scope} skills yet.` }] };
+      }
+      const lines = skills.map((s) => {
+        const sync =
+          s.scope === 'global'
+            ? ` [claude:${s.linkedClaude ? 'ok' : 'no'} codex:${s.linkedCodex ? 'ok' : 'no'}]`
+            : '';
+        return `${s.name}\t${s.description || '(no description)'}${sync}`;
+      });
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
+    'pinloom_save_skill',
+    {
+      description:
+        'Create or update a Claude/Codex skill. The user must have confirmed the draft first. For scope "global" the skill is written once and symlinked into ~/.claude/skills and ~/.codex/skills (both agents see it); for "project" it is written into the project\'s .claude/skills. `description` is the discovery trigger — make it specific. `body` is the skill\'s markdown instructions (no frontmatter — it is added for you). Returns where it landed and, for global, the claude/codex link status (a "conflict" means a real dir already occupies that name and was NOT overwritten).',
+      inputSchema: {
+        name: z
+          .string()
+          .describe('kebab-case slug (a-z, 0-9, -), ≤ 64 chars.'),
+        scope: z.enum(['global', 'project']).describe('global or project'),
+        project: z
+          .string()
+          .optional()
+          .describe('Project name/slug/id — required when scope is "project".'),
+        description: z
+          .string()
+          .describe('One sharp line — the trigger Claude uses to decide when to apply the skill.'),
+        body: z
+          .string()
+          .describe('The skill body in markdown (purpose, when-to-use, steps/rules).'),
+      },
+    },
+    async (args) => {
+      const r = await botPost<SkillSaveResult>('/api/bots/dispatch/save-skill', {
+        name: args.name,
+        scope: args.scope,
+        project: args.project,
+        description: args.description,
+        body: args.body,
+      });
+      const lines = [`${r.action} ${r.scope} skill "${r.name}" → ${r.path}`];
+      if (r.links) {
+        lines.push(`claude: ${r.links.claude}, codex: ${r.links.codex}`);
+        if (r.links.claude === 'conflict' || r.links.codex === 'conflict') {
+          lines.push(
+            'A "conflict" means a real directory already occupies that name; it was left untouched. Pick a different name or resolve it with the user.',
+          );
+        }
+      }
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
     },
   );
 }

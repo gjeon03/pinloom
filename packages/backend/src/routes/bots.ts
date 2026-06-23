@@ -14,6 +14,13 @@ import {
   listRecentSessions,
   readSessionTranscript,
 } from '../services/session-transcript.js';
+import {
+  SkillError,
+  listSkills,
+  saveSkill,
+  type SkillScope,
+} from '../services/skills.js';
+import { getProjectWikiSlugByProjectId } from '../services/wiki-sync.js';
 import { toSession } from './sessions.js';
 
 interface SessionRow {
@@ -106,4 +113,86 @@ export async function botRoutes(app: FastifyInstance) {
       });
     },
   );
+
+  // Resolve a project selector (id | slug | name) to its cwd, excluding the
+  // hidden bot host. Returns null when no visible project matches.
+  function resolveProjectCwd(sel: string): string | null {
+    const rows = db
+      .prepare('SELECT id, name, cwd FROM projects WHERE hidden = 0')
+      .all() as { id: string; name: string; cwd: string }[];
+    const match =
+      rows.find((p) => p.id === sel) ??
+      rows.find((p) => getProjectWikiSlugByProjectId(p.id) === sel) ??
+      rows.find((p) => p.name === sel);
+    return match ? match.cwd : null;
+  }
+
+  app.get<{ Querystring: { scope?: string; project?: string } }>(
+    '/api/bots/dispatch/list-skills',
+    async (req, reply) => {
+      if (!requireBotToken(req, reply)) return reply;
+      const scope: SkillScope = req.query.scope === 'project' ? 'project' : 'global';
+      try {
+        if (scope === 'project') {
+          if (!req.query.project) {
+            reply.code(400);
+            return { error: 'project is required for project scope' };
+          }
+          const cwd = resolveProjectCwd(req.query.project);
+          if (!cwd) {
+            reply.code(404);
+            return { error: `no project matching "${req.query.project}"` };
+          }
+          return listSkills('project', { projectCwd: cwd });
+        }
+        return listSkills('global');
+      } catch (err) {
+        if (err instanceof SkillError) {
+          reply.code(err.status);
+          return { error: err.message };
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.post<{
+    Body: {
+      name?: string;
+      scope?: string;
+      project?: string;
+      description?: string;
+      body?: string;
+    };
+  }>('/api/bots/dispatch/save-skill', async (req, reply) => {
+    if (!requireBotToken(req, reply)) return reply;
+    const { name, description, body } = req.body ?? {};
+    const scope: SkillScope = req.body?.scope === 'project' ? 'project' : 'global';
+    if (typeof name !== 'string' || typeof description !== 'string' || typeof body !== 'string') {
+      reply.code(400);
+      return { error: 'name, description, and body are required strings' };
+    }
+    let projectCwd: string | undefined;
+    if (scope === 'project') {
+      if (!req.body?.project) {
+        reply.code(400);
+        return { error: 'project is required for project scope' };
+      }
+      const cwd = resolveProjectCwd(req.body.project);
+      if (!cwd) {
+        reply.code(404);
+        return { error: `no project matching "${req.body.project}"` };
+      }
+      projectCwd = cwd;
+    }
+    try {
+      return saveSkill({ name, scope, description, body, projectCwd });
+    } catch (err) {
+      if (err instanceof SkillError) {
+        reply.code(err.status);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
 }

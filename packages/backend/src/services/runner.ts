@@ -1195,6 +1195,7 @@ function buildBotMcpConfig(
       env: {
         PINLOOM_BOT_SESSION_ID: ctx.id,
         PINLOOM_BOT_TOKEN: token,
+        PINLOOM_BOT_KIND: ctx.botKind,
         ...(process.env.PINLOOM_MCP_BACKEND_URL
           ? { PINLOOM_BACKEND_URL: process.env.PINLOOM_MCP_BACKEND_URL }
           : {}),
