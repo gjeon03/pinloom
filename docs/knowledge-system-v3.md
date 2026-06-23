@@ -171,9 +171,11 @@ overlaps with L1. To avoid two competing journals:
 ## 8. Open decisions (PENDING — discuss before building; recommendation noted)
 
 - **Work Timeline = separate type** *(recommended)* vs mixed into the wiki.
-- **Capture trigger** = passive only (never tab-close — it deletes). Primary =
-  idle-debounce + daily roll-up *(recommended)*; bonus = git commit; always-on =
-  manual ("정리해줘" / hand a session id). Pick the primary trigger(s).
+- **Capture trigger** — ✅ **DECIDED**: passive only (never tab-close — it
+  deletes). Primary = **idle-debounce + daily roll-up**; bonus = git commit;
+  always-on = manual ("정리해줘" / hand a session id). Idle = incremental
+  drafting per session during the day; daily roll-up = once-a-day consolidation
+  + safety net.
 - **Schedule-bot relationship** = timeline-substrate + bot-surface
   *(recommended)* vs bot owns it entirely.
 - **Scope** = per-project timeline *(recommended)* + a global roll-up view.
