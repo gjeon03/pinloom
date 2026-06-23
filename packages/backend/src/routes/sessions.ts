@@ -80,6 +80,7 @@ interface SessionRow {
   model: string | null;
   reasoning_effort: string | null;
   transport: string | null;
+  bot_kind: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -136,6 +137,10 @@ export function toSession(row: SessionRow): Session {
     model: row.model,
     reasoningEffort: normalizeEffort(row.reasoning_effort),
     transport: normalizeTransport(row.transport),
+    botKind:
+      row.bot_kind === 'schedule' || row.bot_kind === 'skill'
+        ? row.bot_kind
+        : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -184,9 +189,11 @@ export async function sessionRoutes(app: FastifyInstance) {
   // Cross-project session list. Used by the Teams UI (and PR2's MCP
   // server) to resolve session metadata without iterating projects.
   app.get('/api/sessions', async () => {
+    // Bot sessions (bot_kind set) are reached only via the top-right launcher,
+    // never the global picker — keep them out of this flat list.
     const rows = db
       .prepare(
-        'SELECT * FROM sessions ORDER BY project_id ASC, order_index ASC, created_at ASC',
+        'SELECT * FROM sessions WHERE bot_kind IS NULL ORDER BY project_id ASC, order_index ASC, created_at ASC',
       )
       .all() as SessionRow[];
     return rows.map(toSession);
@@ -257,6 +264,49 @@ export async function sessionRoutes(app: FastifyInstance) {
       .all(req.params.projectId) as SessionRow[];
     return rows.map(toSession);
   });
+
+  // Single session + its project, regardless of the project's hidden flag — so
+  // the standalone session view (/s/:id) can resolve a bot session, whose host
+  // project is excluded from the normal project list.
+  app.get<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/context',
+    async (req, reply) => {
+      const row = db
+        .prepare('SELECT * FROM sessions WHERE id = ?')
+        .get(req.params.sessionId) as SessionRow | undefined;
+      if (!row) {
+        reply.code(404);
+        return { error: 'session not found' };
+      }
+      const projectRow = db
+        .prepare('SELECT * FROM projects WHERE id = ?')
+        .get(row.project_id) as
+        | {
+            id: string;
+            name: string;
+            cwd: string;
+            group_id: string | null;
+            created_at: string;
+            updated_at: string;
+          }
+        | undefined;
+      if (!projectRow) {
+        reply.code(404);
+        return { error: 'project not found' };
+      }
+      return {
+        session: toSession(row),
+        project: {
+          id: projectRow.id,
+          name: projectRow.name,
+          cwd: projectRow.cwd,
+          groupId: projectRow.group_id,
+          createdAt: projectRow.created_at,
+          updatedAt: projectRow.updated_at,
+        },
+      };
+    },
+  );
 
   app.get<{ Params: { sessionId: string } }>(
     '/api/sessions/:sessionId/messages',

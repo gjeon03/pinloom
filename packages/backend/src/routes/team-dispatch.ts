@@ -368,7 +368,9 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!authorize(req, reply)) return;
       const rows = db
-        .prepare('SELECT id, name, cwd FROM projects ORDER BY order_index ASC, created_at DESC')
+        .prepare(
+          'SELECT id, name, cwd FROM projects WHERE hidden = 0 ORDER BY order_index ASC, created_at DESC',
+        )
         .all() as { id: string; name: string; cwd: string }[];
       return rows.map((p) => ({
         id: p.id,
@@ -414,7 +416,7 @@ export async function teamDispatchRoutes(app: FastifyInstance) {
     const sel = req.body?.project?.trim();
     if (sel) {
       const projects = db
-        .prepare('SELECT id, name, cwd FROM projects')
+        .prepare('SELECT id, name, cwd FROM projects WHERE hidden = 0')
         .all() as { id: string; name: string; cwd: string }[];
       const match =
         projects.find((p) => p.id === sel) ??

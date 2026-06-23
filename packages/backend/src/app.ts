@@ -19,6 +19,7 @@ import { searchRoutes } from './routes/search.js';
 import { promptTemplateRoutes } from './routes/prompt-templates.js';
 import { wikiProposalRoutes } from './routes/wiki-proposals.js';
 import { userProfileRoutes } from './routes/user-profile.js';
+import { botRoutes } from './routes/bots.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
 import {
   attachTerminal,
@@ -145,6 +146,7 @@ export async function createApp() {
   await app.register(promptTemplateRoutes);
   await app.register(wikiProposalRoutes);
   await app.register(userProfileRoutes);
+  await app.register(botRoutes);
   await app.register(teamRoutes);
   await app.register(teamDispatchRoutes);
   await app.register(searchRoutes);

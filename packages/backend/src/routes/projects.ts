@@ -33,8 +33,11 @@ export async function projectRoutes(app: FastifyInstance) {
   const db = getDb();
 
   app.get('/api/projects', async () => {
+    // Hidden projects (the bot host) never surface in the sidebar / pickers.
     const rows = db
-      .prepare('SELECT * FROM projects ORDER BY order_index ASC, created_at DESC')
+      .prepare(
+        'SELECT * FROM projects WHERE hidden = 0 ORDER BY order_index ASC, created_at DESC',
+      )
       .all() as ProjectRow[];
     return rows.map(toProject);
   });
@@ -121,7 +124,7 @@ export async function projectRoutes(app: FastifyInstance) {
 
       const rows = db
         .prepare(
-          'SELECT * FROM projects ORDER BY order_index ASC, created_at DESC',
+          'SELECT * FROM projects WHERE hidden = 0 ORDER BY order_index ASC, created_at DESC',
         )
         .all() as ProjectRow[];
       return rows.map(toProject);

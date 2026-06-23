@@ -560,6 +560,20 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
         ON wiki_proposals(status, created_at);
     `,
   },
+  {
+    id: 32,
+    // Built-in bots (schedule / skill). A bot is a normal session with a fixed
+    // persona, hosted in a hidden project so it never clutters the project
+    // sidebar or session pickers. `sessions.bot_kind` flags the persona (NULL
+    // for ordinary sessions); `projects.hidden` keeps the bot host project out
+    // of the project list. Bot config (e.g. the schedule journal path) lives in
+    // files under ~/.pinloom/bots/, not the DB — user-inspectable and the same
+    // "memory on disk the user controls" convention as the wiki.
+    sql: `
+      ALTER TABLE sessions ADD COLUMN bot_kind TEXT;
+      ALTER TABLE projects ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
