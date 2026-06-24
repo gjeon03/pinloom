@@ -246,11 +246,15 @@ single-user local app does not need.
   unrecorded → re-throw every boot = prod startup crash. Instead: `loadExtension`
   in `connection.ts` inside try/catch → `vectorSearchAvailable` flag; when true,
   run an idempotent `ensureVecTables()` (CREATE IF NOT EXISTS) at startup.
-- **Inference runs in a `worker_thread`** (H2). better-sqlite3 is synchronous and
-  one stall serializes every HTTP/WS handshake (see `event-loop-monitor.ts`).
-  Model lives in a worker (text in / vectors out); vec0 writes stay on the main
-  connection but **batched with `setImmediate` yields**, concurrency cap 1, and
-  the backfill yields to live traffic.
+- **Inference does NOT block the event loop — worker_thread NOT needed** (H2,
+  re-tested). The review assumed inference is hundreds of ms of main-thread CPU;
+  an event-loop-lag spike showed otherwise: onnxruntime-node offloads matmuls to
+  its native thread pool, so `await extractor(text)` yields. Measured: **2.6
+  ms/embed, max event-loop lag 1.8 ms** over 30 in-process embeds. So the model
+  runs in-process; the provider's `embedPassages` is **sequential (not
+  Promise.all)** to bound memory, and the backfill still **yields to live
+  traffic** between batches as defense-in-depth. (If a future heavier model
+  changes this, the provider interface is unchanged — swap in a worker behind it.)
 - **Model pre-staged into the HF cache + `allowRemoteModels=false` /
   localFilesOnly** (H5) so the server never hits the network on a hot path.
   Provider is **lazy-loaded** so a broken/missing native addon throws into the
