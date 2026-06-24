@@ -13,6 +13,7 @@ import {
   PanelLeftOpen,
   Plus,
   Settings,
+  Sparkles,
   Sun,
   Users,
 } from 'lucide-react';
@@ -110,6 +111,7 @@ export function AppShell({ children }: Props) {
   const onWiki = location.pathname.startsWith('/wiki');
   const onTeams = location.pathname.startsWith('/teams');
   const onTimeline = location.pathname.startsWith('/timeline');
+  const onRecap = location.pathname.startsWith('/recap');
 
   const [sidebarHidden, setSidebarHidden] = useState(
     () => localStorage.getItem('pinloom:sidebarHidden') === '1',
@@ -659,6 +661,17 @@ export function AppShell({ children }: Props) {
           >
             <CalendarDays size={12} />
             Timeline
+          </button>
+          <button
+            onClick={() => navigate('/recap')}
+            className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
+              onRecap
+                ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
+            }`}
+          >
+            <Sparkles size={12} />
+            Recap
           </button>
           <div className="flex items-center gap-1">
             <button

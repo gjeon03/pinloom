@@ -21,6 +21,7 @@ import { wikiProposalRoutes } from './routes/wiki-proposals.js';
 import { userProfileRoutes } from './routes/user-profile.js';
 import { botRoutes } from './routes/bots.js';
 import { timelineRoutes } from './routes/timeline.js';
+import { recapRoutes } from './routes/recap.js';
 import { subscribe, unsubscribe } from './ws/hub.js';
 import {
   attachTerminal,
@@ -168,6 +169,7 @@ export async function createApp() {
   await app.register(userProfileRoutes);
   await app.register(botRoutes);
   await app.register(timelineRoutes);
+  await app.register(recapRoutes);
   await app.register(teamRoutes);
   await app.register(teamDispatchRoutes);
   await app.register(searchRoutes);
