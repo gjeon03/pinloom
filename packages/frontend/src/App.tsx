@@ -18,6 +18,7 @@ import { TeamCanvasPage } from './pages/TeamCanvasPage.js';
 import { WikiPage } from './pages/WikiPage.js';
 import { WikiDetailPage } from './pages/WikiDetailPage.js';
 import { WikiProposalsPage } from './pages/WikiProposalsPage.js';
+import { TimelinePage } from './pages/TimelinePage.js';
 import { cacheKeys } from './api/cacheKeys.js';
 
 // SWR defaults: revalidate on browser focus + network reconnect so a tab
@@ -144,6 +145,14 @@ export function App() {
               element={
                 <AppShell>
                   {() => <WikiPage />}
+                </AppShell>
+              }
+            />
+            <Route
+              path="/timeline"
+              element={
+                <AppShell>
+                  {() => <TimelinePage />}
                 </AppShell>
               }
             />
