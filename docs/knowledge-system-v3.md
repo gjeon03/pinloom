@@ -170,20 +170,33 @@ overlaps with L1. To avoid two competing journals:
 
 ## 8. Open decisions (PENDING — discuss before building; recommendation noted)
 
-- **Work Timeline = separate type** *(recommended)* vs mixed into the wiki.
+- **Work Timeline = separate type** — ✅ **DECIDED**: a distinct L1 type, NOT
+  pages mixed into the convention wiki (L2). (Both still in the one semantic
+  corpus, §4.)
 - **Capture trigger** — ✅ **DECIDED**: passive only (never tab-close — it
   deletes). Primary = **idle-debounce + daily roll-up**; bonus = git commit;
   always-on = manual ("정리해줘" / hand a session id). Idle = incremental
   drafting per session during the day; daily roll-up = once-a-day consolidation
   + safety net.
-- **Schedule-bot relationship** = timeline-substrate + bot-surface
-  *(recommended)* vs bot owns it entirely.
-- **Scope** = per-project timeline *(recommended)* + a global roll-up view.
-- **Embedding backend** = deferred to build phase (local daemon / in-process
+- **Per-project auto-timeline toggle** — ✅ **DECIDED**: each project has an
+  on/off switch for *automatic* timeline capture (idle + roll-up), **default
+  ON**. Off = that project gets no auto-capture; manual capture (bot /
+  "정리해줘") still works. Lets the user silence noisy/throwaway projects.
+- **Schedule-bot relationship** — ✅ **DECIDED**: timeline = automatic
+  *substrate* (in pinloom's corpus); schedule bot = human-facing *surface* that
+  reads/writes it. One timeline, two access modes. (No duplicate journal.)
+- **Scope / structure** — ✅ **DECIDED** (delegated): **per-project timeline**
+  (entries scoped to a project's own sessions + that repo's commits — work is
+  project-bound and commits are per-repo) + a **global cross-project date view**
+  that aggregates the day across all projects ("what did I do on 6/24,
+  everywhere"). The global view is a read-time aggregation, not a second store.
+  Exact on-disk layout (e.g. `~/.pinloom/timeline/<project>/YYYY-MM-DD.md` vs
+  inside the wiki tree) is a build-phase detail.
+- **Embedding backend** — ⏳ deferred to build phase (local daemon / in-process
   model / cloud), pluggable, degrade-to-FTS when absent.
 
-> The user has flagged **more to discuss** before locking these. This section is
-> the live agenda.
+> Status: all design decisions locked except the embedding backend (a build-time
+> pick). Ready to start Phase 1 (§7) when the user is.
 
 ## 9. Explicitly NOT doing
 
