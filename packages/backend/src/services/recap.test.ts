@@ -63,7 +63,7 @@ describe('generateRecap', () => {
   it('returns empty for a range with no timeline entries', async () => {
     db.prepare("INSERT INTO projects (id,name,cwd,created_at,updated_at) VALUES ('p','P','/tmp/p','t','t')").run();
     const r = await generateRecap(db, {
-      kind: 'portfolio',
+      kind: 'detailed',
       dateFrom: '2026-06-01',
       dateTo: '2026-06-30',
       runRecap: async () => 'should not be called',
@@ -78,7 +78,7 @@ describe('generateRecap', () => {
     writeEntry(slug, '2026-05-01', '# 5/01\n- 범위 밖 작업'); // out of range
     const cap = captureRun();
     const r = await generateRecap(db, {
-      kind: 'resume',
+      kind: 'concise',
       dateFrom: '2026-06-01',
       dateTo: '2026-06-30',
       runRecap: cap.run,
@@ -96,7 +96,7 @@ describe('generateRecap', () => {
     writeEntry(getProjectWikiSlugByProjectId('b'), '2026-06-24', 'beta 작업');
     const cap = captureRun();
     await generateRecap(db, {
-      kind: 'portfolio',
+      kind: 'detailed',
       dateFrom: '2026-06-01',
       dateTo: '2026-06-30',
       projectId: 'a',

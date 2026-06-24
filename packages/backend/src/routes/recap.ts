@@ -48,9 +48,9 @@ export async function recapRoutes(app: FastifyInstance) {
     };
   }>('/api/recap/generate', async (req, reply) => {
     const kind = req.body?.kind;
-    if (kind !== 'portfolio' && kind !== 'resume') {
+    if (kind !== 'detailed' && kind !== 'concise') {
       reply.code(400);
-      return { error: 'kind must be "portfolio" or "resume"' };
+      return { error: 'kind must be "detailed" or "concise"' };
     }
     const { dateFrom, dateTo } = req.body ?? {};
     if (!dateFrom || !dateTo || !DATE_RE.test(dateFrom) || !DATE_RE.test(dateTo)) {

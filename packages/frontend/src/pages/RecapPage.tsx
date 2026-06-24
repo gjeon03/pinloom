@@ -136,12 +136,12 @@ export function RecapPage() {
           <FileText size={15} /> Work highlights
         </h2>
         <p className="text-xs text-[var(--color-ink-muted)] mb-2">
-          Distill your key work from the Work Timeline over a date range — as a portfolio or résumé.
+          Distill your key work from the Work Timeline over a date range.
         </p>
         <div className="flex gap-2 items-center flex-wrap">
-          <select value={s.kind} onChange={(e) => setRecap({ kind: e.target.value as 'portfolio' | 'resume' })} className={inputCls}>
-            <option value="portfolio">Portfolio</option>
-            <option value="resume">Résumé bullets</option>
+          <select value={s.kind} onChange={(e) => setRecap({ kind: e.target.value as 'detailed' | 'concise' })} className={inputCls}>
+            <option value="detailed">Detailed</option>
+            <option value="concise">Concise</option>
           </select>
           <input type="date" value={s.from} onChange={(e) => setRecap({ from: e.target.value })} className={inputCls} />
           <span className="text-xs text-[var(--color-ink-muted)]">~</span>

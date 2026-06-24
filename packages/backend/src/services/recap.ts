@@ -157,15 +157,17 @@ export async function answerOverCorpus(
   return { answer: answer.trim(), sources };
 }
 
-// ------------------------------------------------- 4B: portfolio / résumé ----
+// ---------------------------------------------------- 4B: work highlights ----
+// One artifact ("Work highlights"), two depths — the old portfolio/résumé split
+// confused more than it helped (the user couldn't tell them apart).
 
-export type RecapKind = 'portfolio' | 'resume';
+export type RecapKind = 'detailed' | 'concise';
 
 function recapSystem(kind: RecapKind, lang: RecapLanguage): string {
-  if (kind === 'resume') {
-    return `You turn a developer's dated WORK JOURNAL entries into concise résumé bullet points — impact-first, action verbs, quantified where the entries support it. Group by project. Use ONLY what the entries state; never invent metrics. Output markdown bullets only. ${langLine(lang)}`;
+  if (kind === 'concise') {
+    return `You distill a developer's dated WORK JOURNAL entries into a tight, scannable highlights list — the notable work only, impact-first, action verbs, quantified where the entries support it. Group by project. Use ONLY what the entries state; never invent metrics. Output markdown bullets only, a few per project. ${langLine(lang)}`;
   }
-  return `You turn a developer's dated WORK JOURNAL entries into PORTFOLIO items — for each notable piece of work: a short title, what was built and why (the reasoning the entries captured), and the outcome. Use ONLY the entries; never invent. Output markdown. ${langLine(lang)}`;
+  return `You distill a developer's dated WORK JOURNAL entries into detailed work highlights — for each notable piece of work: a short title, what was built and WHY (the reasoning the entries captured), and the outcome. Group by project. Use ONLY the entries; never invent. Output markdown with a short paragraph or sub-bullets per item. ${langLine(lang)}`;
 }
 
 // Gather timeline markdown in a date range (newest first), char-budget bounded.

@@ -172,7 +172,7 @@ export const api = {
       body: JSON.stringify({ question, projectId, language }),
     }),
   recapGenerate: (body: {
-    kind: 'portfolio' | 'resume';
+    kind: 'detailed' | 'concise';
     dateFrom: string;
     dateTo: string;
     projectId?: string;

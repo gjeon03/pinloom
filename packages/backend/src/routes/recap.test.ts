@@ -49,7 +49,7 @@ describe('recap routes', () => {
       (await app.inject({ method: 'POST', url: '/api/recap/generate', payload: { kind: 'x', dateFrom: '2026-06-01', dateTo: '2026-06-30' } })).statusCode,
     ).toBe(400);
     expect(
-      (await app.inject({ method: 'POST', url: '/api/recap/generate', payload: { kind: 'portfolio', dateFrom: 'bad', dateTo: '2026-06-30' } })).statusCode,
+      (await app.inject({ method: 'POST', url: '/api/recap/generate', payload: { kind: 'detailed', dateFrom: 'bad', dateTo: '2026-06-30' } })).statusCode,
     ).toBe(400);
   });
 
@@ -57,7 +57,7 @@ describe('recap routes', () => {
     const r = await app.inject({
       method: 'POST',
       url: '/api/recap/generate',
-      payload: { kind: 'portfolio', dateFrom: '2026-06-01', dateTo: '2026-06-30' },
+      payload: { kind: 'detailed', dateFrom: '2026-06-01', dateTo: '2026-06-30' },
     });
     expect(r.statusCode).toBe(200);
     expect(r.json()).toMatchObject({ empty: true });

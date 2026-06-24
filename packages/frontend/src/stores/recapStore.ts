@@ -44,7 +44,7 @@ export interface RecapState {
   asking: boolean;
   askResult: AskResult;
   // generate
-  kind: 'portfolio' | 'resume';
+  kind: 'detailed' | 'concise';
   from: string;
   to: string;
   genProject: string;
@@ -59,7 +59,7 @@ let state: RecapState = {
   askLang: loadLang('pinloom:recap:askLang', 'ko'),
   asking: false,
   askResult: null,
-  kind: 'portfolio',
+  kind: 'detailed',
   from: monthsAgo(3),
   to: today(),
   genProject: '',
