@@ -18,17 +18,35 @@ function localToday(): string {
 // "capture now" trigger.
 export function TimelinePage() {
   const [mode, setMode] = useState<'project' | 'date'>('project');
-  const [projectId, setProjectId] = useState<string | null>(null);
+  // Persist the selected project so it survives navigating away and back (FIX4).
+  const [projectId, setProjectIdRaw] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('pinloom:timeline:project');
+    } catch {
+      return null;
+    }
+  });
+  function setProjectId(id: string) {
+    setProjectIdRaw(id);
+    try {
+      localStorage.setItem('pinloom:timeline:project', id);
+    } catch {
+      // ignore
+    }
+  }
   const [date, setDate] = useState<string>(localToday());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const { data: projects } = useSWR('timeline:projects', () => api.listProjects());
 
-  // default-select the first project
+  // Select the first project if none persisted, or the persisted one is gone.
   useEffect(() => {
-    if (!projectId && projects && projects.length > 0) setProjectId(projects[0].id);
-  }, [projects, projectId]);
+    if (!projects || projects.length === 0) return;
+    if (!projectId || !projects.some((p) => p.id === projectId)) {
+      setProjectId(projects[0].id);
+    }
+  }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const project = useMemo(
     () => projects?.find((p) => p.id === projectId) ?? null,
@@ -78,6 +96,26 @@ export function TimelinePage() {
     } finally {
       setBusy(false);
       setTimeout(() => setNotice(null), 4000);
+    }
+  }
+
+  async function captureAll() {
+    if (busy) return;
+    setBusy(true);
+    setNotice('전체 정리 중… (프로젝트마다 시간이 걸려요)');
+    try {
+      const r = await api.captureTimelineAll();
+      setNotice(`전체 정리 완료 — ${r.captured}/${r.projects} 프로젝트`);
+      if (projectId) {
+        void globalMutate(['timeline:dates', projectId]);
+        void globalMutate(['timeline:entry', projectId, r.date]);
+      }
+      void globalMutate(['timeline:date', r.date]);
+    } catch (e) {
+      setNotice(`실패: ${String(e)}`);
+    } finally {
+      setBusy(false);
+      setTimeout(() => setNotice(null), 6000);
     }
   }
 
@@ -143,6 +181,14 @@ export function TimelinePage() {
             className="text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1"
           />
         )}
+        <button
+          onClick={() => void captureAll()}
+          disabled={busy}
+          title="모든 프로젝트의 오늘 작업을 한 번에 정리"
+          className="flex items-center gap-1 text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-50"
+        >
+          <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> 전체 정리
+        </button>
         {notice && <span className="text-xs text-[var(--color-ink-muted)]">{notice}</span>}
       </header>
 

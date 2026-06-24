@@ -99,8 +99,9 @@ Output ONLY the markdown for this one day's entry (no code fences, no preamble).
 
 Rules:
 - Korean by default. Be factual and grounded ONLY in the provided transcripts/commits — never invent outcomes.
-- If an existing entry is provided, UPDATE it: merge in new work, keep prior content, don't duplicate. Return the full updated entry.
-- Keep it tight — a journal entry, not an essay.`;
+- **NEVER reproduce the raw transcript.** Do NOT copy [user]/[assistant]/[tool] tagged lines, tool outputs, command logs, code blocks, file paths dumps, or pasted skill/instruction text. SUMMARIZE everything in your own words. Your entire output is the structured entry above and nothing else — if you find yourself quoting transcript lines, stop and summarize instead.
+- If an existing entry is provided, UPDATE it: merge new work into the existing sections, keep prior content, don't duplicate. Return the full updated entry — but still only the clean structured summary, never raw logs.
+- Keep it tight — a journal entry, not an essay. A day should be at most a few dozen lines.`;
 
 function buildPrompt(input: DistillInput): string {
   const parts: string[] = [
@@ -109,7 +110,12 @@ function buildPrompt(input: DistillInput): string {
     '',
   ];
   if (input.existingEntry) {
-    parts.push('## Existing entry (update this):', input.existingEntry, '');
+    // Cap so a previously-ballooned entry can't feed its bloat back in.
+    const existing =
+      input.existingEntry.length > 8000
+        ? `${input.existingEntry.slice(0, 8000)}\n…(생략)`
+        : input.existingEntry;
+    parts.push('## Existing entry (update this):', existing, '');
   }
   parts.push('## Git commits this day:');
   parts.push(

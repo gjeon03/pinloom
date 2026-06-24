@@ -200,6 +200,16 @@ export async function runCaptureSweep(db: Database, opts: SweepOptions = {}): Pr
   return written;
 }
 
+// Per-message caps so a single giant message (e.g. a pasted skill-instruction
+// dump or a huge tool output) can't flood the distill input — that's what made
+// the model echo raw transcript instead of summarizing (the kso-backend bug).
+const MSG_CAP = 1500;
+const TOOL_CAP = 200;
+function capMsg(text: string, cap: number): string {
+  const t = text.trim();
+  return t.length > cap ? `${t.slice(0, cap)} …(생략)` : t;
+}
+
 // Format a session's messages for ONE local day into a transcript block.
 function dayTranscript(db: Database, sessionId: string, date: string): string {
   const rows = db
@@ -212,7 +222,11 @@ function dayTranscript(db: Database, sessionId: string, date: string): string {
     .all(sessionId) as { role: string; content: string; created_at: string }[];
   const lines = rows
     .filter((r) => localDateOf(r.created_at) === date && (r.content ?? '').trim() !== '')
-    .map((r) => (r.role === 'tool' ? `[tool] ${r.content.trim()}` : `[${r.role}] ${r.content.trim()}`));
+    .map((r) =>
+      r.role === 'tool'
+        ? `[tool] ${capMsg(r.content, TOOL_CAP)}`
+        : `[${r.role}] ${capMsg(r.content, MSG_CAP)}`,
+    );
   return lines.join('\n\n');
 }
 
@@ -312,9 +326,12 @@ export async function manualCaptureProjectDay(
       .filter((s) => s.transcript.trim() !== '');
     if (sessions.length === 0) return false;
     const commits = await gitCommitsForDay(project.cwd, date);
-    const existing = readEntry(slug, date, opts.home);
+    // Manual capture REGENERATES the day from scratch (existingEntry: null) — it
+    // reads ALL of the day's sessions, so a clean full rebuild both fixes a bad
+    // prior entry and is what "지금 정리" should mean (vs. the auto sweep's
+    // incremental merge).
     const md = await distillDay(
-      { projectName: project.name, date, sessions, commits, existingEntry: existing },
+      { projectName: project.name, date, sessions, commits, existingEntry: null },
       { runDistill: opts.runDistill },
     );
     if (!md) return false;

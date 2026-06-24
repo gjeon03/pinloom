@@ -156,7 +156,7 @@ export const api = {
     ),
 
   // Corpus recap (Phase 4)
-  recapAsk: (question: string, projectId?: string) =>
+  recapAsk: (question: string, projectId?: string, language?: 'ko' | 'en') =>
     request<{
       answer: string;
       sources: {
@@ -169,13 +169,14 @@ export const api = {
       }[];
     }>('/api/recap/ask', {
       method: 'POST',
-      body: JSON.stringify({ question, projectId }),
+      body: JSON.stringify({ question, projectId, language }),
     }),
   recapGenerate: (body: {
     kind: 'portfolio' | 'resume';
     dateFrom: string;
     dateTo: string;
     projectId?: string;
+    language?: 'ko' | 'en';
   }) =>
     request<{ markdown: string; empty: boolean }>('/api/recap/generate', {
       method: 'POST',
@@ -202,6 +203,11 @@ export const api = {
   captureTimeline: (projectId: string, date?: string) =>
     request<{ ok: true; date: string; written: boolean }>(
       `/api/timeline/projects/${projectId}/capture`,
+      { method: 'POST', body: JSON.stringify(date ? { date } : {}) },
+    ),
+  captureTimelineAll: (date?: string) =>
+    request<{ ok: true; date: string; captured: number; projects: number }>(
+      '/api/timeline/capture-all',
       { method: 'POST', body: JSON.stringify(date ? { date } : {}) },
     ),
 

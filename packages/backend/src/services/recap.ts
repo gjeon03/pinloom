@@ -83,7 +83,14 @@ export interface CorpusAnswer {
   sources: RecapSource[];
 }
 
-const ANSWER_SYSTEM = `You answer a developer's question using ONLY the numbered context excerpts from their own past coding conversations. Each excerpt is tagged [n]. Ground every claim in the excerpts and CITE the ones you use inline as [n]. If the excerpts don't contain the answer, say so plainly — never invent. Reply in Korean by default. Be concise.`;
+export type RecapLanguage = 'ko' | 'en';
+function langLine(lang: RecapLanguage): string {
+  return lang === 'en' ? 'Write your output in English.' : 'Write your output in Korean.';
+}
+
+function answerSystem(lang: RecapLanguage): string {
+  return `You answer a developer's question using ONLY the numbered context excerpts from their own past coding conversations. Each excerpt is tagged [n]. Ground every claim in the excerpts and CITE the ones you use inline as [n]. If the excerpts don't contain the answer, say so plainly — never invent. Be concise. ${langLine(lang)}`;
+}
 
 export async function answerOverCorpus(
   db: Database,
@@ -94,6 +101,7 @@ export async function answerOverCorpus(
     limit?: number;
     runRecap?: RunRecap;
     model?: string;
+    language?: RecapLanguage;
   } = {},
 ): Promise<CorpusAnswer> {
   const q = question.trim();
@@ -141,7 +149,7 @@ export async function answerOverCorpus(
 
   const answer = await (opts.runRecap ?? defaultRunRecap)(
     prompt,
-    ANSWER_SYSTEM,
+    answerSystem(opts.language ?? 'ko'),
     opts.model ?? DEFAULT_RECAP_MODEL,
   );
   // strip content from the returned sources (UI only needs the link metadata)
@@ -153,11 +161,11 @@ export async function answerOverCorpus(
 
 export type RecapKind = 'portfolio' | 'resume';
 
-function recapSystem(kind: RecapKind): string {
+function recapSystem(kind: RecapKind, lang: RecapLanguage): string {
   if (kind === 'resume') {
-    return `You turn a developer's dated WORK JOURNAL entries into concise résumé bullet points — impact-first, action verbs, quantified where the entries support it. Group by project. Use ONLY what the entries state; never invent metrics. Korean by default. Output markdown bullets only.`;
+    return `You turn a developer's dated WORK JOURNAL entries into concise résumé bullet points — impact-first, action verbs, quantified where the entries support it. Group by project. Use ONLY what the entries state; never invent metrics. Output markdown bullets only. ${langLine(lang)}`;
   }
-  return `You turn a developer's dated WORK JOURNAL entries into PORTFOLIO items — for each notable piece of work: a short title, what was built and why (the reasoning the entries captured), and the outcome. Use ONLY the entries; never invent. Korean by default. Output markdown.`;
+  return `You turn a developer's dated WORK JOURNAL entries into PORTFOLIO items — for each notable piece of work: a short title, what was built and why (the reasoning the entries captured), and the outcome. Use ONLY the entries; never invent. Output markdown. ${langLine(lang)}`;
 }
 
 // Gather timeline markdown in a date range (newest first), char-budget bounded.
@@ -213,6 +221,7 @@ export async function generateRecap(
     projectId?: string;
     runRecap?: RunRecap;
     model?: string;
+    language?: RecapLanguage;
   },
 ): Promise<RecapResult> {
   const { text, truncated } = gatherTimeline(db, opts.dateFrom, opts.dateTo, opts.projectId);
@@ -230,7 +239,7 @@ export async function generateRecap(
 
   const markdown = await (opts.runRecap ?? defaultRunRecap)(
     prompt,
-    recapSystem(opts.kind),
+    recapSystem(opts.kind, opts.language ?? 'ko'),
     opts.model ?? DEFAULT_RECAP_MODEL,
   );
   return { markdown: markdown.trim(), empty: false };

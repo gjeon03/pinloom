@@ -106,6 +106,33 @@ export async function timelineRoutes(app: FastifyInstance) {
     },
   );
 
+  // Manual "capture now" for ALL visible projects (a given date, default today).
+  // Sequential — each project is an LLM distill; the UI shows progress.
+  app.post<{ Body: { date?: string } }>(
+    '/api/timeline/capture-all',
+    async (req, reply) => {
+      const date = req.body?.date ?? localToday();
+      try {
+        assertDate(date);
+      } catch {
+        reply.code(400);
+        return { error: 'invalid date' };
+      }
+      const projects = db
+        .prepare('SELECT id FROM projects WHERE hidden = 0')
+        .all() as { id: string }[];
+      let captured = 0;
+      for (const p of projects) {
+        try {
+          if (await manualCaptureProjectDay(db, p.id, date)) captured += 1;
+        } catch {
+          // one project's failure must not abort the rest
+        }
+      }
+      return { ok: true as const, date, captured, projects: projects.length };
+    },
+  );
+
   // Manual "capture now" for a project + date (defaults to today, local).
   app.post<{ Params: { projectId: string }; Body: { date?: string } }>(
     '/api/timeline/projects/:projectId/capture',

@@ -1,75 +1,56 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import useSWR from 'swr';
 import { Sparkles, FileText, Copy, Check } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
 import { copyText } from '../utils/download.js';
+import { setRecap, useRecapStore, type Lang } from '../stores/recapStore.js';
+import { useState } from 'react';
 
-function monthsAgo(n: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - n);
-  return d.toISOString().slice(0, 10);
-}
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-type AskResult = Awaited<ReturnType<typeof api.recapAsk>>;
-
-// Phase 4 — RAG answers over the corpus + portfolio/résumé generation from the
-// Work Timeline. Two panels: Ask (grounded answer + citations) and Generate.
+// Phase 4 — RAG answers over the corpus + portfolio/résumé generation. State
+// lives in a module store (recapStore) so a long in-flight LLM call and its
+// result survive navigating away and back (FIX3).
 export function RecapPage() {
   const { data: projects } = useSWR('recap:projects', () => api.listProjects());
+  const s = useRecapStore();
+  const [copied, setCopied] = useState(false);
 
-  // --- Ask ---
-  const [question, setQuestion] = useState('');
-  const [askProject, setAskProject] = useState('');
-  const [asking, setAsking] = useState(false);
-  const [answer, setAnswer] = useState<AskResult | null>(null);
   async function ask() {
-    const q = question.trim();
-    if (!q || asking) return;
-    setAsking(true);
-    setAnswer(null);
+    const q = s.question.trim();
+    if (!q || s.asking) return;
+    setRecap({ asking: true, askResult: null });
     try {
-      setAnswer(await api.recapAsk(q, askProject || undefined));
+      const r = await api.recapAsk(q, s.askProject || undefined, s.askLang);
+      setRecap({ askResult: r });
     } catch (e) {
-      setAnswer({ answer: `오류: ${String(e)}`, sources: [] });
+      setRecap({ askResult: { answer: `오류: ${String(e)}`, sources: [] } });
     } finally {
-      setAsking(false);
+      setRecap({ asking: false });
     }
   }
 
-  // --- Generate ---
-  const [kind, setKind] = useState<'portfolio' | 'resume'>('portfolio');
-  const [from, setFrom] = useState(monthsAgo(3));
-  const [to, setTo] = useState(today());
-  const [genProject, setGenProject] = useState('');
-  const [generating, setGenerating] = useState(false);
-  const [output, setOutput] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   async function generate() {
-    if (generating) return;
-    setGenerating(true);
-    setOutput(null);
+    if (s.generating) return;
+    setRecap({ generating: true, genResult: null });
     try {
       const r = await api.recapGenerate({
-        kind,
-        dateFrom: from,
-        dateTo: to,
-        projectId: genProject || undefined,
+        kind: s.kind,
+        dateFrom: s.from,
+        dateTo: s.to,
+        projectId: s.genProject || undefined,
+        language: s.genLang,
       });
-      setOutput(r.empty ? '__EMPTY__' : r.markdown);
+      setRecap({ genResult: r.empty ? '__EMPTY__' : r.markdown });
     } catch (e) {
-      setOutput(`오류: ${String(e)}`);
+      setRecap({ genResult: `오류: ${String(e)}` });
     } finally {
-      setGenerating(false);
+      setRecap({ generating: false });
     }
   }
+
   async function copyOut() {
-    if (!output || output === '__EMPTY__') return;
-    await copyText(output);
+    if (!s.genResult || s.genResult === '__EMPTY__') return;
+    await copyText(s.genResult);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
@@ -78,6 +59,12 @@ export function RecapPage() {
     'text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1';
   const btnCls =
     'flex items-center gap-1 text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1.5 hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-50';
+  const LangSel = ({ value, onChange }: { value: Lang; onChange: (l: Lang) => void }) => (
+    <select value={value} onChange={(e) => onChange(e.target.value as Lang)} className={inputCls} title="출력 언어">
+      <option value="ko">한국어</option>
+      <option value="en">English</option>
+    </select>
+  );
 
   return (
     <div className="h-full min-h-0 overflow-y-auto p-4 space-y-6 max-w-3xl">
@@ -89,15 +76,19 @@ export function RecapPage() {
         <p className="text-xs text-[var(--color-ink-muted)] mb-2">
           과거 대화에서 근거를 찾아 답합니다. 예: "빌링 작업할 때 무슨 고민을 했지?"
         </p>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center flex-wrap">
           <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
+            value={s.question}
+            onChange={(e) => setRecap({ question: e.target.value })}
             onKeyDown={(e) => e.key === 'Enter' && void ask()}
             placeholder="질문…"
-            className={`${inputCls} flex-1`}
+            className={`${inputCls} flex-1 min-w-[200px]`}
           />
-          <select value={askProject} onChange={(e) => setAskProject(e.target.value)} className={inputCls}>
+          <select
+            value={s.askProject}
+            onChange={(e) => setRecap({ askProject: e.target.value })}
+            className={inputCls}
+          >
             <option value="">전체 프로젝트</option>
             {(projects ?? []).map((p) => (
               <option key={p.id} value={p.id}>
@@ -105,32 +96,35 @@ export function RecapPage() {
               </option>
             ))}
           </select>
-          <button onClick={() => void ask()} disabled={asking || !question.trim()} className={btnCls}>
-            {asking ? '찾는 중…' : '물어보기'}
+          <LangSel value={s.askLang} onChange={(l) => setRecap({ askLang: l })} />
+          <button onClick={() => void ask()} disabled={s.asking || !s.question.trim()} className={btnCls}>
+            {s.asking ? '찾는 중…' : '물어보기'}
           </button>
         </div>
-        {answer && (
+        {(s.asking || s.askResult) && (
           <div className="mt-3 rounded border border-[var(--color-border)] p-3">
-            <Markdown content={answer.answer} />
-            {answer.sources.length > 0 && (
-              <div className="mt-3 border-t border-[var(--color-border)] pt-2">
-                <div className="text-[11px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-                  근거
-                </div>
-                <ul className="space-y-0.5">
-                  {answer.sources.map((s) => (
-                    <li key={s.n} className="text-xs">
-                      <Link
-                        to={`/s/${s.sessionId}`}
-                        className="text-[var(--color-accent)] hover:underline"
-                      >
-                        [{s.n}] {s.projectName} · {s.sessionTitle ?? '세션'} ·{' '}
-                        {s.createdAt.slice(0, 10)}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {s.asking ? (
+              <div className="text-sm text-[var(--color-ink-muted)]">기록을 찾아 답을 만드는 중… (다른 페이지 다녀와도 됩니다)</div>
+            ) : (
+              <>
+                <Markdown content={s.askResult!.answer} />
+                {s.askResult!.sources.length > 0 && (
+                  <div className="mt-3 border-t border-[var(--color-border)] pt-2">
+                    <div className="text-[11px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
+                      근거
+                    </div>
+                    <ul className="space-y-0.5">
+                      {s.askResult!.sources.map((src) => (
+                        <li key={src.n} className="text-xs">
+                          <Link to={`/s/${src.sessionId}`} className="text-[var(--color-accent)] hover:underline">
+                            [{src.n}] {src.projectName} · {src.sessionTitle ?? '세션'} · {src.createdAt.slice(0, 10)}
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -145,14 +139,14 @@ export function RecapPage() {
           작업 타임라인(자동 기록)에서 기간 내 작업을 모아 작성합니다.
         </p>
         <div className="flex gap-2 items-center flex-wrap">
-          <select value={kind} onChange={(e) => setKind(e.target.value as 'portfolio' | 'resume')} className={inputCls}>
+          <select value={s.kind} onChange={(e) => setRecap({ kind: e.target.value as 'portfolio' | 'resume' })} className={inputCls}>
             <option value="portfolio">포트폴리오</option>
             <option value="resume">이력서 불릿</option>
           </select>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={inputCls} />
+          <input type="date" value={s.from} onChange={(e) => setRecap({ from: e.target.value })} className={inputCls} />
           <span className="text-xs text-[var(--color-ink-muted)]">~</span>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={inputCls} />
-          <select value={genProject} onChange={(e) => setGenProject(e.target.value)} className={inputCls}>
+          <input type="date" value={s.to} onChange={(e) => setRecap({ to: e.target.value })} className={inputCls} />
+          <select value={s.genProject} onChange={(e) => setRecap({ genProject: e.target.value })} className={inputCls}>
             <option value="">전체 프로젝트</option>
             {(projects ?? []).map((p) => (
               <option key={p.id} value={p.id}>
@@ -160,13 +154,18 @@ export function RecapPage() {
               </option>
             ))}
           </select>
-          <button onClick={() => void generate()} disabled={generating} className={btnCls}>
-            {generating ? '생성 중…' : '생성'}
+          <LangSel value={s.genLang} onChange={(l) => setRecap({ genLang: l })} />
+          <button onClick={() => void generate()} disabled={s.generating} className={btnCls}>
+            {s.generating ? '생성 중…' : '생성'}
           </button>
         </div>
-        {output && (
+        {(s.generating || s.genResult) && (
           <div className="mt-3 rounded border border-[var(--color-border)] p-3 relative">
-            {output === '__EMPTY__' ? (
+            {s.generating ? (
+              <div className="text-sm text-[var(--color-ink-muted)]">
+                작업 기록을 모아 작성하는 중… (시간이 걸려요. 다른 페이지 다녀와도 결과가 유지됩니다)
+              </div>
+            ) : s.genResult === '__EMPTY__' ? (
               <div className="text-sm text-[var(--color-ink-muted)]">
                 이 기간에 정리된 작업이 없어요. 타임라인이 쌓이면 다시 시도하세요.
               </div>
@@ -179,7 +178,7 @@ export function RecapPage() {
                 >
                   {copied ? <Check size={12} /> : <Copy size={12} />}
                 </button>
-                <Markdown content={output} />
+                <Markdown content={s.genResult!} />
               </>
             )}
           </div>
