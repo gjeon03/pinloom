@@ -37,11 +37,21 @@ const BOT_KIND = process.env.PINLOOM_BOT_KIND;
 const BACKEND_URL =
   process.env.PINLOOM_BACKEND_URL?.replace(/\/$/, '') ?? 'http://localhost:4748';
 
-// The same shim serves two personas. Team mode (orchestrator sessions) exposes
-// the team_* coordination tools; bot mode (schedule / skill bots) exposes the
-// pinloom_* tools that read pinloom's own session history. The runner injects
-// exactly one token set, which selects the mode.
-const MODE: 'team' | 'bot' = BOT_TOKEN ? 'bot' : 'team';
+// The same shim serves three personas:
+//  - team   (orchestrator sessions): team_* coordination tools (team token).
+//  - bot    (schedule / skill bots): pinloom_* tools over pinloom's own history
+//    (bot token), injected by the runner.
+//  - corpus (EXTERNAL agents — the user's IDE Claude Code / Codex): query tools
+//    over pinloom's knowledge (search / ask / recap / timeline). No token — it
+//    calls pinloom's PUBLIC local backend routes (single-user, localhost). The
+//    user registers this themselves via PINLOOM_CORPUS=1. (knowledge-system-v3
+//    Phase 5: "knowledge as MCP infrastructure".)
+const CORPUS = process.env.PINLOOM_CORPUS;
+const MODE: 'team' | 'bot' | 'corpus' = CORPUS
+  ? 'corpus'
+  : BOT_TOKEN
+    ? 'bot'
+    : 'team';
 
 if (MODE === 'team' && (!TEAM_ID || !TEAM_TOKEN)) {
   // eslint-disable-next-line no-console
@@ -973,8 +983,128 @@ function registerSkillTools() {
   );
 }
 
-if (MODE === 'team') registerTeamTools();
-else registerBotTools();
+// ---- corpus mode (external IDE agents): query pinloom's knowledge ----
+// No token: calls pinloom's PUBLIC localhost routes (single-user, local-only).
+async function publicCall<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let parsed: unknown;
+  try {
+    parsed = text.length > 0 ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!res.ok) {
+    const detail =
+      parsed && typeof parsed === 'object' && 'error' in parsed
+        ? (parsed as ApiError).error
+        : text || res.statusText;
+    throw new Error(`pinloom backend ${res.status}: ${detail}`);
+  }
+  return parsed as T;
+}
+
+interface CorpusSearchHit {
+  messageId: string;
+  sessionId: string;
+  sessionTitle: string | null;
+  projectName: string;
+  role: string;
+  createdAt: string;
+  excerpt: string;
+}
+
+function registerCorpusTools() {
+  server.registerTool(
+    'pinloom_search',
+    {
+      description:
+        "Search the user's own past pinloom coding conversations (hybrid semantic + keyword). Use this to recall how the user solved something before, prior decisions, or where a topic was discussed. Returns ranked excerpts with session/project/date. Korean queries work well.",
+      inputSchema: {
+        query: z.string().describe('What to look for.'),
+        limit: z.number().int().min(1).max(50).optional().describe('Max hits (default 20).'),
+      },
+    },
+    async (args) => {
+      const params = new URLSearchParams({ q: args.query });
+      if (args.limit) params.set('limit', String(args.limit));
+      const r = await publicCall<{ results: CorpusSearchHit[] }>(
+        'GET',
+        `/api/search?${params.toString()}`,
+      );
+      if (!r.results || r.results.length === 0) {
+        return { content: [{ type: 'text', text: 'No matches in pinloom history.' }] };
+      }
+      const lines = r.results.map(
+        (h) =>
+          `[${h.projectName} · ${h.sessionTitle ?? 'session'} · ${h.createdAt.slice(0, 10)}] ${h.excerpt}`,
+      );
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
+    'pinloom_ask',
+    {
+      description:
+        "Ask a question about the user's own past coding work and get a synthesized answer grounded in their pinloom history (RAG), with the source conversations cited. Use for 'what did I decide about X', 'how did I do Y before', 'what was I weighing when…'. Prefer this over pinloom_search when you want an answer, not raw hits.",
+      inputSchema: {
+        question: z.string().describe('The question about the user\'s past work.'),
+      },
+    },
+    async (args) => {
+      const r = await publicCall<{
+        answer: string;
+        sources: { n: number; projectName: string; sessionTitle: string | null; createdAt: string }[];
+      }>('POST', '/api/recap/ask', { question: args.question });
+      const cites =
+        r.sources.length > 0
+          ? '\n\nSources:\n' +
+            r.sources
+              .map(
+                (s) =>
+                  `[${s.n}] ${s.projectName} · ${s.sessionTitle ?? 'session'} · ${s.createdAt.slice(0, 10)}`,
+              )
+              .join('\n')
+          : '';
+      return { content: [{ type: 'text', text: r.answer + cites }] };
+    },
+  );
+
+  server.registerTool(
+    'pinloom_timeline',
+    {
+      description:
+        "Read the user's Work Timeline for a date — a per-project dated journal of what they did and why (auto-distilled from their sessions + git commits). Use to recall what the user worked on, on a given day, across projects.",
+      inputSchema: {
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('YYYY-MM-DD'),
+      },
+    },
+    async (args) => {
+      const r = await publicCall<{
+        date: string;
+        entries: { projectName: string; markdown: string }[];
+      }>('GET', `/api/timeline/date/${args.date}`);
+      if (!r.entries || r.entries.length === 0) {
+        return { content: [{ type: 'text', text: `No timeline entries for ${args.date}.` }] };
+      }
+      const blocks = r.entries.map((e) => `## ${e.projectName}\n\n${e.markdown}`);
+      return { content: [{ type: 'text', text: blocks.join('\n\n---\n\n') }] };
+    },
+  );
+}
+
+if (MODE === 'corpus') registerCorpusTools();
+else if (MODE === 'bot') registerBotTools();
+else registerTeamTools();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
