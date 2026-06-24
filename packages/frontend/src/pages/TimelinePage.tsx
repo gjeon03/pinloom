@@ -163,12 +163,14 @@ export function TimelinePage() {
         <div className="flex rounded border border-[var(--color-border)] overflow-hidden text-xs">
           <button
             onClick={() => setMode('project')}
+            title="Browse one project's entries — pick a project, then a date"
             className={`px-2 py-1 ${mode === 'project' ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]' : 'text-[var(--color-ink-muted)]'}`}
           >
             By project
           </button>
           <button
             onClick={() => setMode('date')}
+            title="See every project's entry for a single day"
             className={`px-2 py-1 ${mode === 'date' ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]' : 'text-[var(--color-ink-muted)]'}`}
           >
             By date (all)
@@ -177,14 +179,17 @@ export function TimelinePage() {
 
         {mode === 'project' && selected && (
           <>
-            <label className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)]">
+            <label
+              className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)] cursor-pointer"
+              title={`Auto-capture for ${selected.projectName}: automatically distill this project's work into a daily entry once a session has been idle ~15 min. Per-project — applies to the selected project.`}
+            >
               <input type="checkbox" checked={selected.auto} onChange={() => void toggleAuto()} />
               Auto-capture
             </label>
             <button
               onClick={() => void captureNow()}
               disabled={busy}
-              title={`Capture ${captureDate} for ${selected.projectName}`}
+              title={`Capture / regenerate ${captureDate} for ${selected.projectName} now (from that day's sessions + git commits)`}
               className={captureBtnCls}
             >
               <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> Capture now
@@ -210,7 +215,7 @@ export function TimelinePage() {
         <button
           onClick={() => void captureAll()}
           disabled={busy || capturingAll}
-          title={`Capture ${captureDate} for every project`}
+          title={`Capture / regenerate ${captureDate} for every project (runs in the background — progress shows here)`}
           className={captureBtnCls}
         >
           <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
