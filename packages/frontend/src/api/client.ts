@@ -1,5 +1,6 @@
 import type {
   AgentKind,
+  BotKind,
   HealthResponse,
   Message,
   MessageSearchResult,
@@ -142,6 +143,17 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ profile }),
     }),
+
+  // Open (find-or-create) a built-in bot session and return it for navigation.
+  openBot: (kind: BotKind) =>
+    request<Session>(`/api/bots/${kind}/open`, { method: 'POST' }),
+
+  // A session + its project in one call, resolving hidden-project (bot)
+  // sessions that the project list omits.
+  getSessionContext: (sessionId: string) =>
+    request<{ session: Session; project: Project }>(
+      `/api/sessions/${sessionId}/context`,
+    ),
 
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>

@@ -31,13 +31,29 @@ import { z } from 'zod';
 
 const TEAM_ID = process.env.PINLOOM_TEAM_ID;
 const TEAM_TOKEN = process.env.PINLOOM_TEAM_TOKEN;
+const BOT_TOKEN = process.env.PINLOOM_BOT_TOKEN;
+const BOT_SESSION_ID = process.env.PINLOOM_BOT_SESSION_ID;
+const BOT_KIND = process.env.PINLOOM_BOT_KIND;
 const BACKEND_URL =
   process.env.PINLOOM_BACKEND_URL?.replace(/\/$/, '') ?? 'http://localhost:4748';
 
-if (!TEAM_ID || !TEAM_TOKEN) {
+// The same shim serves two personas. Team mode (orchestrator sessions) exposes
+// the team_* coordination tools; bot mode (schedule / skill bots) exposes the
+// pinloom_* tools that read pinloom's own session history. The runner injects
+// exactly one token set, which selects the mode.
+const MODE: 'team' | 'bot' = BOT_TOKEN ? 'bot' : 'team';
+
+if (MODE === 'team' && (!TEAM_ID || !TEAM_TOKEN)) {
   // eslint-disable-next-line no-console
   console.error(
     '[pinloom-mcp] missing PINLOOM_TEAM_ID or PINLOOM_TEAM_TOKEN — shim cannot start',
+  );
+  process.exit(1);
+}
+if (MODE === 'bot' && !BOT_SESSION_ID) {
+  // eslint-disable-next-line no-console
+  console.error(
+    '[pinloom-mcp] bot mode missing PINLOOM_BOT_SESSION_ID — shim cannot start',
   );
   process.exit(1);
 }
@@ -81,6 +97,56 @@ async function call<T>(
 
 function teamUrl(suffix: string): string {
   return `/api/teams/${encodeURIComponent(TEAM_ID!)}/dispatch${suffix}`;
+}
+
+// Bot-mode GET against /api/bots/dispatch/*, authenticated with the bot token.
+async function botGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    method: 'GET',
+    headers: { 'X-Pinloom-Bot-Token': BOT_TOKEN! },
+  });
+  const text = await res.text();
+  let parsed: unknown;
+  try {
+    parsed = text.length > 0 ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!res.ok) {
+    const detail =
+      parsed && typeof parsed === 'object' && 'error' in parsed
+        ? (parsed as ApiError).error
+        : text || res.statusText;
+    throw new Error(`pinloom backend ${res.status}: ${detail}`);
+  }
+  return parsed as T;
+}
+
+// Bot-mode POST against /api/bots/dispatch/*, authenticated with the bot token.
+async function botPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'X-Pinloom-Bot-Token': BOT_TOKEN!,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let parsed: unknown;
+  try {
+    parsed = text.length > 0 ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!res.ok) {
+    const detail =
+      parsed && typeof parsed === 'object' && 'error' in parsed
+        ? (parsed as ApiError).error
+        : text || res.statusText;
+    throw new Error(`pinloom backend ${res.status}: ${detail}`);
+  }
+  return parsed as T;
 }
 
 interface MemberStatus {
@@ -129,6 +195,7 @@ const server = new McpServer({
   version: '0.0.1',
 });
 
+function registerTeamTools() {
 server.registerTool(
   'team_list',
   {
@@ -715,6 +782,199 @@ server.registerTool(
     };
   },
 );
+
+} // end registerTeamTools
+
+interface TranscriptResult {
+  sessionId: string;
+  title: string | null;
+  projectName: string | null;
+  includedMessages: number;
+  totalMessages: number;
+  truncated: boolean;
+  text: string;
+}
+
+interface SessionListItem {
+  id: string;
+  title: string | null;
+  projectName: string | null;
+  agent: string;
+  messageCount: number;
+  updatedAt: string;
+}
+
+function registerBotTools() {
+  server.registerTool(
+    'pinloom_list_sessions',
+    {
+      description:
+        "List recent pinloom chat sessions (most recent first) so you can help the user pick one to summarize or learn from. Returns id, title, project, agent, message count, and last-updated time. Use this when the user wants to reference a session but isn't sure of its id.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('Max sessions to return (default 30).'),
+      },
+    },
+    async (args) => {
+      const params = new URLSearchParams();
+      if (args.limit !== undefined) params.set('limit', String(args.limit));
+      const items = await botGet<SessionListItem[]>(
+        `/api/bots/dispatch/list-sessions${
+          params.toString() ? `?${params.toString()}` : ''
+        }`,
+      );
+      if (items.length === 0) {
+        return { content: [{ type: 'text', text: 'No sessions yet.' }] };
+      }
+      const lines = items.map(
+        (s) =>
+          `${s.id}\t${s.title ?? '(untitled)'}\tproject=${
+            s.projectName ?? '?'
+          }\t${s.agent}\t${s.messageCount} msgs\tupdated=${s.updatedAt}`,
+      );
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
+    'pinloom_read_session',
+    {
+      description:
+        "Read a pinloom session's full conversation transcript (user + assistant messages and a one-line summary of each tool action), so you can summarize what was actually done in it. Pass the session id (find it with pinloom_list_sessions if unsure). Large sessions are trimmed to the most recent messages; the response notes if it was truncated.",
+      inputSchema: {
+        sessionId: z.string().describe('The pinloom session id to read.'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe('Max messages to include (default 400, capped 1000).'),
+      },
+    },
+    async (args) => {
+      const params = new URLSearchParams({ sessionId: args.sessionId });
+      if (args.limit !== undefined) params.set('limit', String(args.limit));
+      const r = await botGet<TranscriptResult>(
+        `/api/bots/dispatch/read-session?${params.toString()}`,
+      );
+      const header =
+        `--- session ${r.sessionId} "${r.title ?? '(untitled)'}" ` +
+        `(project=${r.projectName ?? '?'}, ${r.includedMessages}/${r.totalMessages} messages` +
+        `${r.truncated ? ', older messages trimmed' : ''}) ---`;
+      return {
+        content: [
+          { type: 'text', text: r.text ? `${header}\n\n${r.text}` : `${header}\n\n(empty session)` },
+        ],
+      };
+    },
+  );
+
+  // Skill-bot-only tools: list + save Claude/Codex skills.
+  if (BOT_KIND === 'skill') registerSkillTools();
+}
+
+interface SkillSummary {
+  name: string;
+  description: string;
+  scope: string;
+  linkedClaude?: boolean;
+  linkedCodex?: boolean;
+}
+
+interface SkillSaveResult {
+  name: string;
+  scope: string;
+  action: string;
+  path: string;
+  links?: { claude: string; codex: string };
+}
+
+function registerSkillTools() {
+  server.registerTool(
+    'pinloom_list_skills',
+    {
+      description:
+        'List existing Claude/Codex skills in a scope so you can decide whether to supplement an existing skill or create a new one. ALWAYS call this before saving. scope "global" lists ~/.pinloom/skills (with claude/codex link status); scope "project" lists a project\'s .claude/skills (pass the project name/slug/id).',
+      inputSchema: {
+        scope: z.enum(['global', 'project']).describe('global or project'),
+        project: z
+          .string()
+          .optional()
+          .describe('Project name/slug/id — required when scope is "project".'),
+      },
+    },
+    async (args) => {
+      const params = new URLSearchParams({ scope: args.scope });
+      if (args.project) params.set('project', args.project);
+      const skills = await botGet<SkillSummary[]>(
+        `/api/bots/dispatch/list-skills?${params.toString()}`,
+      );
+      if (skills.length === 0) {
+        return { content: [{ type: 'text', text: `No ${args.scope} skills yet.` }] };
+      }
+      const lines = skills.map((s) => {
+        const sync =
+          s.scope === 'global'
+            ? ` [claude:${s.linkedClaude ? 'ok' : 'no'} codex:${s.linkedCodex ? 'ok' : 'no'}]`
+            : '';
+        return `${s.name}\t${s.description || '(no description)'}${sync}`;
+      });
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
+    'pinloom_save_skill',
+    {
+      description:
+        'Create or update a Claude/Codex skill. The user must have confirmed the draft first. For scope "global" the skill is written once and symlinked into ~/.claude/skills and ~/.codex/skills (both agents see it); for "project" it is written into the project\'s .claude/skills. `description` is the discovery trigger — make it specific. `body` is the skill\'s markdown instructions (no frontmatter — it is added for you). Returns where it landed and, for global, the claude/codex link status (a "conflict" means a real dir already occupies that name and was NOT overwritten).',
+      inputSchema: {
+        name: z
+          .string()
+          .describe('kebab-case slug (a-z, 0-9, -), ≤ 64 chars.'),
+        scope: z.enum(['global', 'project']).describe('global or project'),
+        project: z
+          .string()
+          .optional()
+          .describe('Project name/slug/id — required when scope is "project".'),
+        description: z
+          .string()
+          .describe('One sharp line — the trigger Claude uses to decide when to apply the skill.'),
+        body: z
+          .string()
+          .describe('The skill body in markdown (purpose, when-to-use, steps/rules).'),
+      },
+    },
+    async (args) => {
+      const r = await botPost<SkillSaveResult>('/api/bots/dispatch/save-skill', {
+        name: args.name,
+        scope: args.scope,
+        project: args.project,
+        description: args.description,
+        body: args.body,
+      });
+      const lines = [`${r.action} ${r.scope} skill "${r.name}" → ${r.path}`];
+      if (r.links) {
+        lines.push(`claude: ${r.links.claude}, codex: ${r.links.codex}`);
+        if (r.links.claude === 'conflict' || r.links.codex === 'conflict') {
+          lines.push(
+            'A "conflict" means a real directory already occupies that name; it was left untouched. Pick a different name or resolve it with the user.',
+          );
+        }
+      }
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    },
+  );
+}
+
+if (MODE === 'team') registerTeamTools();
+else registerBotTools();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

@@ -96,6 +96,13 @@ export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
  */
 export type ClaudeTransport = 'sdk' | 'pty' | 'terminal';
 
+/**
+ * A built-in assistant persona ("bot"). A bot is a normal pinloom session with
+ * a fixed system prompt + a curated toolset, opened from the top-right launcher
+ * rather than a project's session tabs. Null for ordinary sessions.
+ */
+export type BotKind = 'schedule' | 'skill';
+
 export interface Session {
   id: string;
   projectId: string;
@@ -111,6 +118,8 @@ export interface Session {
   reasoningEffort: ReasoningEffort | null;
   /** Transport this session was created under; null = legacy (treat as 'sdk'). */
   transport: ClaudeTransport | null;
+  /** Non-null when this session is a built-in bot persona. */
+  botKind: BotKind | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { nanoid } from 'nanoid';
-import type { Message, MessageRole } from '@pinloom/shared';
+import type { BotKind, Message, MessageRole } from '@pinloom/shared';
 import { WS_RUNS_CHANNEL } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
@@ -18,6 +18,8 @@ import {
   getTeamByOrchestratorSessionId,
 } from './teams.js';
 import { mintTeamToken } from './team-tokens.js';
+import { mintBotToken } from './bot-tokens.js';
+import { getBotDefinition } from './bots/registry.js';
 import { emitDispatchEvent } from './team-events.js';
 import {
   cancelLiveDispatchForWorker,
@@ -124,6 +126,8 @@ interface SessionContext {
   cwd: string;
   model: string | null;
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+  /** Non-null when this is a built-in bot session (schedule / skill). */
+  botKind: BotKind | null;
 }
 
 interface PlanItemLite {
@@ -316,7 +320,7 @@ function loadSession(sessionId: string): SessionContext | null {
     .prepare(
       `SELECT s.id, s.project_id, s.plan_id, s.agent,
               s.agent_session_id, s.claude_session_id, s.model,
-              s.reasoning_effort, p.cwd
+              s.reasoning_effort, s.bot_kind, p.cwd
        FROM sessions s
        JOIN projects p ON p.id = s.project_id
        WHERE s.id = ?`,
@@ -331,6 +335,7 @@ function loadSession(sessionId: string): SessionContext | null {
         claude_session_id: string | null;
         model: string | null;
         reasoning_effort: string | null;
+        bot_kind: string | null;
         cwd: string;
       }
     | undefined;
@@ -339,15 +344,22 @@ function loadSession(sessionId: string): SessionContext | null {
     row.reasoning_effort && VALID_EFFORTS_RUNNER.has(row.reasoning_effort)
       ? (row.reasoning_effort as SessionContext['reasoningEffort'])
       : null;
+  // Bot sessions run inside the bot's own working directory (e.g. the schedule
+  // journal vault), resolved per-turn from the bot's on-disk config — NOT the
+  // hidden host project's placeholder cwd. getBotDefinition returns null for any
+  // kind not yet implemented (so a future bot_kind row degrades to a plain
+  // session rather than crashing); the open route never creates such rows.
+  const botDef = row.bot_kind ? getBotDefinition(row.bot_kind) : null;
   return {
     id: row.id,
     projectId: row.project_id,
     planId: row.plan_id,
     agent: row.agent === 'codex' ? 'codex' : 'claude',
     claudeSessionId: row.agent_session_id ?? row.claude_session_id,
-    cwd: row.cwd,
+    cwd: botDef ? botDef.resolveCwd() : row.cwd,
     model: row.model,
     reasoningEffort: effort,
+    botKind: botDef ? botDef.kind : null,
   };
 }
 
@@ -1128,6 +1140,11 @@ interface AttemptResult {
 // resolve it, but a missing build shouldn't crash the runner).
 const requireFromHere = createRequire(import.meta.url);
 function resolveMcpServerEntry(): string | null {
+  // Test/escape hatch: point at a scratch-built mcp-server so isolated E2E runs
+  // exercise new tools WITHOUT rebuilding the production-shared dist.
+  if (process.env.PINLOOM_MCP_SERVER_ENTRY) {
+    return process.env.PINLOOM_MCP_SERVER_ENTRY;
+  }
   try {
     return requireFromHere.resolve('@pinloom/mcp-server');
   } catch {
@@ -1155,6 +1172,30 @@ function buildOrchestratorMcpConfig(
         PINLOOM_TEAM_TOKEN: token,
         // Default backend URL is fine for local dev; expose an override
         // hook in case the user runs pinloom on a non-standard port.
+        ...(process.env.PINLOOM_MCP_BACKEND_URL
+          ? { PINLOOM_BACKEND_URL: process.env.PINLOOM_MCP_BACKEND_URL }
+          : {}),
+      },
+    },
+  };
+}
+
+// Bot sessions get the pinloom MCP server in BOT mode: a fresh per-run token +
+// the bot's session id, which exposes pinloom_read_session / pinloom_list_sessions.
+// Mints once per turn (same lifecycle reasoning as the orchestrator token).
+function buildBotMcpConfig(
+  ctx: SessionContext,
+): Record<string, McpStdioServerConfig> | undefined {
+  if (!MCP_SERVER_ENTRY || !ctx.botKind) return undefined;
+  const token = mintBotToken(ctx.id);
+  return {
+    pinloom: {
+      command: process.execPath,
+      args: [MCP_SERVER_ENTRY],
+      env: {
+        PINLOOM_BOT_SESSION_ID: ctx.id,
+        PINLOOM_BOT_TOKEN: token,
+        PINLOOM_BOT_KIND: ctx.botKind,
         ...(process.env.PINLOOM_MCP_BACKEND_URL
           ? { PINLOOM_BACKEND_URL: process.env.PINLOOM_MCP_BACKEND_URL }
           : {}),
@@ -1195,6 +1236,17 @@ export interface SessionLaunchInput {
 export function buildSessionLaunchInput(sessionId: string): SessionLaunchInput | null {
   const ctx = loadSession(sessionId);
   if (!ctx) return null;
+  const botDef = ctx.botKind ? getBotDefinition(ctx.botKind) : null;
+  if (botDef) {
+    return {
+      cwd: ctx.cwd,
+      systemPrompt: botDef.systemPrompt + buildUserProfileContext(),
+      model: ctx.model,
+      reasoningEffort: ctx.reasoningEffort,
+      resume: ctx.claudeSessionId,
+      mcpServers: buildBotMcpConfig(ctx),
+    };
+  }
   const planItems = loadPlanItems(ctx.planId);
   const pinsContext = buildPinsContext(ctx.id);
   const systemPrompt =
@@ -1510,27 +1562,36 @@ async function runAssistant(
   // Static prefix: framework prompt + project wiki + env vars. Wiki
   // changes happen when the user re-syncs, which is an explicit action
   // and worth a re-cache. Env vars almost never change at runtime.
-  const systemPrompt =
-    SYSTEM_PROMPT +
-    buildUserProfileContext() +
-    buildWikiContext(ctx.projectId) +
-    envVarsContext;
+  // Bot sessions (schedule / skill) run a fixed persona: the bot's system
+  // prompt + the user profile, with NO wiki/plan/team/pins injection, and the
+  // pinloom MCP server in bot mode. Everything downstream (adapter, streaming,
+  // persistence) is the normal session path.
+  const botDef = ctx.botKind ? getBotDefinition(ctx.botKind) : null;
+  const systemPrompt = botDef
+    ? botDef.systemPrompt + buildUserProfileContext()
+    : SYSTEM_PROMPT +
+      buildUserProfileContext() +
+      buildWikiContext(ctx.projectId) +
+      envVarsContext;
   // Dynamic suffix: plan + team + worker instructions + pins. These
   // are the surfaces a user actively mutates between turns of the same
-  // session, so they go after the cache boundary.
-  const systemPromptDynamic =
-    buildPlanContext(planItems) +
-    teamContext +
-    workerInstructionsContext +
-    (pinsContext ? `\n\n${pinsContext}` : '');
+  // session, so they go after the cache boundary. (Empty for bots.)
+  const systemPromptDynamic = botDef
+    ? ''
+    : buildPlanContext(planItems) +
+      teamContext +
+      workerInstructionsContext +
+      (pinsContext ? `\n\n${pinsContext}` : '');
 
   // Mint the orchestrator's MCP token ONCE per turn (i.e. per
   // runAssistant call), not once per runAttempt. Resume + fallback
   // attempts share the same token so the still-spawned child process
   // from the first attempt — if any — keeps authenticating until it
   // exits. Per-attempt minting would 403 the first attempt's child the
-  // moment the fallback ran.
-  const mcpServers = buildOrchestratorMcpConfig(ctx.id);
+  // moment the fallback ran. Bot sessions get the bot-mode server instead.
+  const mcpServers = botDef
+    ? buildBotMcpConfig(ctx)
+    : buildOrchestratorMcpConfig(ctx.id);
 
   // Detect a mid-conversation model switch. The Claude SDK pins a resumed
   // thread to its original model and ignores a new `model` on a plain resume,

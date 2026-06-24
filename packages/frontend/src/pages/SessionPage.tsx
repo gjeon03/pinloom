@@ -24,19 +24,12 @@ export function SessionPage() {
 
     (async () => {
       try {
-        const projects = await api.listProjects();
-        for (const p of projects) {
-          const list = await api.listSessions(p.id);
-          const found = list.find((s) => s.id === sessionId);
-          if (found) {
-            if (cancelled) return;
-            setProject(p);
-            setSession(found);
-            document.title = found.title ?? 'pinloom session';
-            return;
-          }
-        }
-        if (!cancelled) setError('session not found');
+        const { session: found, project: p } =
+          await api.getSessionContext(sessionId);
+        if (cancelled) return;
+        setProject(p);
+        setSession(found);
+        document.title = found.title ?? 'pinloom session';
       } catch (e) {
         if (!cancelled) setError(String(e));
       }

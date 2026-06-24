@@ -16,6 +16,7 @@ interface SessionRow {
   model: string | null;
   reasoning_effort: string | null;
   transport: string | null;
+  bot_kind: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -65,6 +66,10 @@ function toSession(row: SessionRow): Session {
     transport:
       row.transport === 'pty' || row.transport === 'terminal' || row.transport === 'sdk'
         ? row.transport
+        : null,
+    botKind:
+      row.bot_kind === 'schedule' || row.bot_kind === 'skill'
+        ? row.bot_kind
         : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
