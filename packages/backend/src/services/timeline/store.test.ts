@@ -23,13 +23,16 @@ afterEach(async () => {
 
 describe('timeline path validation', () => {
   it('rejects traversal / bad slugs and dates', () => {
-    for (const bad of ['../evil', 'a/b', 'a.b', 'UP', '', 'x'.repeat(101)]) {
+    for (const bad of ['../evil', 'a/b', '.hidden', '', 'x'.repeat(101)]) {
       expect(() => assertSlug(bad)).toThrow(TimelineError);
     }
     for (const bad of ['2026-6-1', '2026/06/01', 'today', '20260601', '']) {
       expect(() => assertDate(bad)).toThrow(TimelineError);
     }
-    expect(() => assertSlug('my-proj-a1b2c3')).not.toThrow();
+    // slugify keeps [A-Za-z0-9._-] (uppercase/dot/underscore from a dir basename)
+    for (const ok of ['my-proj-a1b2c3', 'My_App.v2', 'UP']) {
+      expect(() => assertSlug(ok)).not.toThrow();
+    }
     expect(() => assertDate('2026-06-24')).not.toThrow();
   });
 });

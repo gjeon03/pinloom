@@ -25,10 +25,12 @@ export class TimelineError extends Error {
   }
 }
 
-// Project slugs come from getProjectWikiSlugByProjectId: lowercase alnum + dash,
-// optionally a `-<id6>` suffix. Validate to a flat token so a crafted slug can
-// never escape the timeline root.
-const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+// Project slugs come from getProjectWikiSlugByProjectId / wiki-sync's slugify,
+// which keeps [A-Za-z0-9._-] (so a dir basename like "My_App.v2" stays). Accept
+// that SAME charset, but require an alphanumeric first char and forbid "/" — so
+// a slug is always a single flat path segment that can't escape the root (a
+// leading "." / ".." is rejected by the first-char class; there's no separator).
+const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function assertSlug(slug: string): void {

@@ -15,6 +15,7 @@
 import type { Database } from 'better-sqlite3';
 import { getDb } from '../../db/connection.js';
 import { isAiRunning } from '../runner.js';
+import { listQueueItems } from '../message-queue.js';
 import { getProjectWikiSlugByProjectId } from '../wiki-sync.js';
 import { distillDay, gitCommitsForDay, type RunDistill } from './distill.js';
 import { readEntry, writeEntry } from './store.js';
@@ -22,6 +23,16 @@ import { readEntry, writeEntry } from './store.js';
 const IDLE_MS = 15 * 60_000;
 const MIN_REDISTILL_MS = 30 * 60_000;
 const SWEEP_INTERVAL_MS = 60_000;
+// Skip distilling a session-day whose new-since-cursor content is trivial (e.g.
+// a lone "ok") — bounds LLM cost (§12 M1). The cursor isn't advanced, so the day
+// is captured later if more substantive content arrives.
+const SUBSTANTIVE_MIN_CHARS = 80;
+
+// "busy" = mid-turn OR has a queued-but-not-yet-run message. Either means the
+// session's day isn't settled yet, so don't distill it (§12 M2).
+function defaultIsBusy(sessionId: string): boolean {
+  return isAiRunning(sessionId) || listQueueItems(sessionId).length > 0;
+}
 
 /** Local YYYY-MM-DD for an ISO timestamp (the user's "day"). */
 export function localDateOf(iso: string): string {
@@ -83,66 +94,107 @@ export interface SweepOptions {
   now?: number;
   home?: string;
   runDistill?: RunDistill;
-  /** Injectable for tests; defaults to the runner's live guard. */
-  isRunning?: (sessionId: string) => boolean;
+  /** Injectable for tests; defaults to running||queued. */
+  isBusy?: (sessionId: string) => boolean;
   idleMs?: number;
   minRedistillMs?: number;
 }
 
-interface PendingSession {
+interface DaySession {
   sessionId: string;
-  latestId: string;
+  /** Latest substantive message id for this session ON this day. */
+  dayLatestId: string;
 }
 interface ProjectDayGroup {
   projectId: string;
   cwd: string;
   projectName: string;
   date: string;
-  sessions: PendingSession[];
+  sessions: DaySession[];
 }
 
-/** One sweep: find idle sessions with new work, group by (project, local day),
- *  and (rate-limited) distill each group's entry. Returns the number of
- *  project-day entries written. */
+/** One sweep: find idle sessions with new work, split each session's new
+ *  messages by LOCAL day, group by (project, day), and (rate-limited) distill
+ *  each group's entry. Splitting by day (not just the last-activity day) means
+ *  cross-midnight work isn't dropped (§12 M1). Returns entries written. */
 export async function runCaptureSweep(db: Database, opts: SweepOptions = {}): Promise<number> {
   const now = opts.now ?? Date.now();
   const idleMs = opts.idleMs ?? IDLE_MS;
   const minRedistill = opts.minRedistillMs ?? MIN_REDISTILL_MS;
-  const isRunning = opts.isRunning ?? isAiRunning;
+  const isBusy = opts.isBusy ?? defaultIsBusy;
 
   const rows = db.prepare(CANDIDATE_SQL).all() as CandidateRow[];
   const cursorStmt = db.prepare(
     'SELECT last_captured_message_id AS id FROM timeline_capture_state WHERE session_id = ?',
   );
+  const msgTimeStmt = db.prepare('SELECT created_at AS t FROM messages WHERE id = ?');
+  const newMsgsStmt = db.prepare(
+    `SELECT id, content, created_at FROM messages
+     WHERE session_id = ? AND role IN ('user','assistant') AND content <> ''
+       AND source_message_id IS NULL AND created_at > ?
+     ORDER BY created_at ASC`,
+  );
 
-  // group pending sessions by (project, local-day-of-last-activity)
   const groups = new Map<string, ProjectDayGroup>();
   for (const r of rows) {
     if (!r.latest_id) continue;
-    if (now - new Date(r.last_at).getTime() < idleMs) continue; // not idle
-    if (isRunning(r.session_id)) continue; // mid-turn
+    if (now - new Date(r.last_at).getTime() < idleMs) continue; // session not idle
+    if (isBusy(r.session_id)) continue;
     const cur = cursorStmt.get(r.session_id) as { id: string | null } | undefined;
     if (cur?.id === r.latest_id) continue; // nothing new since last capture
-    const date = localDateOf(r.last_at);
-    const slug = getProjectWikiSlugByProjectId(r.project_id);
-    const key = `${slug}:${date}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = { projectId: r.project_id, cwd: r.cwd, projectName: r.project_name, date, sessions: [] };
-      groups.set(key, g);
+    // created_at of the cursor message (epoch if none / cursor message deleted).
+    let since = '';
+    if (cur?.id) {
+      since = (msgTimeStmt.get(cur.id) as { t: string } | undefined)?.t ?? '';
     }
-    g.sessions.push({ sessionId: r.session_id, latestId: r.latest_id });
+    const newMsgs = newMsgsStmt.all(r.session_id, since) as {
+      id: string;
+      content: string;
+      created_at: string;
+    }[];
+    // Split new content by local day → per-day latest id + char delta.
+    const perDay = new Map<string, { latestId: string; chars: number }>();
+    for (const m of newMsgs) {
+      const d = localDateOf(m.created_at);
+      const e = perDay.get(d) ?? { latestId: '', chars: 0 };
+      e.latestId = m.id; // ASC scan → last wins = latest of that day
+      e.chars += (m.content ?? '').length;
+      perDay.set(d, e);
+    }
+    const slug = getProjectWikiSlugByProjectId(r.project_id);
+    for (const [date, e] of perDay) {
+      if (e.chars < SUBSTANTIVE_MIN_CHARS) continue; // delta floor (§12 M1 cost bound)
+      const key = `${slug}:${date}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = { projectId: r.project_id, cwd: r.cwd, projectName: r.project_name, date, sessions: [] };
+        groups.set(key, g);
+      }
+      g.sessions.push({ sessionId: r.session_id, dayLatestId: e.latestId });
+    }
   }
 
+  // Process ascending by date so an earlier day commits its cursor before a
+  // later one — a later-day failure then can't skip the earlier day.
+  const ordered = [...groups.entries()].sort((a, b) => a[1].date.localeCompare(b[1].date));
   let written = 0;
-  for (const [key, g] of groups) {
+  for (const [key, g] of ordered) {
     if (now - (lastRun.get(key) ?? 0) < minRedistill) continue; // rate limit
-    const ok = await withDayLock(key, () =>
-      captureProjectDay(db, g, { now, home: opts.home, runDistill: opts.runDistill, isRunning }),
-    );
-    if (ok) {
-      lastRun.set(key, now);
-      written += 1;
+    try {
+      const ok = await withDayLock(key, () =>
+        captureProjectDay(db, g, { now, home: opts.home, runDistill: opts.runDistill, isBusy }),
+      );
+      if (ok) {
+        lastRun.set(key, now);
+        written += 1;
+      }
+    } catch (err) {
+      // H1: isolate per group — one project's failure must not starve the rest.
+      // eslint-disable-next-line no-console
+      console.error(
+        `[timeline] capture failed for ${key}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
   return written;
@@ -167,19 +219,24 @@ function dayTranscript(db: Database, sessionId: string, date: string): string {
 async function captureProjectDay(
   db: Database,
   g: ProjectDayGroup,
-  opts: { now: number; home?: string; runDistill?: RunDistill; isRunning: (id: string) => boolean },
+  opts: { now: number; home?: string; runDistill?: RunDistill; isBusy: (id: string) => boolean },
 ): Promise<boolean> {
   const slug = getProjectWikiSlugByProjectId(g.projectId);
-  // Re-check running at distill time (select→distill race) and build day blocks.
-  const contributing = g.sessions.filter((s) => !opts.isRunning(s.sessionId));
-  const sessions = contributing
+  // Re-check busy at distill time (select→distill race) and build day blocks.
+  const sessions = g.sessions
+    .filter((s) => !opts.isBusy(s.sessionId))
     .map((s) => {
       const title = (
         db.prepare('SELECT title FROM sessions WHERE id = ?').get(s.sessionId) as
           | { title: string | null }
           | undefined
       )?.title ?? null;
-      return { id: s.sessionId, title, transcript: dayTranscript(db, s.sessionId, g.date), latestId: s.latestId };
+      return {
+        id: s.sessionId,
+        title,
+        transcript: dayTranscript(db, s.sessionId, g.date),
+        dayLatestId: s.dayLatestId,
+      };
     })
     .filter((s) => s.transcript.trim() !== '');
   if (sessions.length === 0) return false; // nothing substantive to capture
@@ -199,7 +256,9 @@ async function captureProjectDay(
   if (!md) return false;
 
   // Write the entry, THEN advance cursors — in that order, so a crash before the
-  // write leaves the work to be re-picked-up (cursor unchanged).
+  // write leaves the work to be re-picked-up (cursor unchanged). Each cursor
+  // advances to THIS day's latest id (not the session's global latest), so an
+  // earlier day captured before a later one stays resumable.
   writeEntry(slug, g.date, md, opts.home);
   const nowIso = new Date(opts.now).toISOString();
   const advance = db.transaction(() => {
@@ -210,7 +269,7 @@ async function captureProjectDay(
          last_captured_message_id = excluded.last_captured_message_id,
          last_captured_at = excluded.last_captured_at`,
     );
-    for (const s of sessions) stmt.run(s.id, s.latestId, nowIso);
+    for (const s of sessions) stmt.run(s.id, s.dayLatestId, nowIso);
   });
   advance();
   return true;
@@ -227,9 +286,9 @@ export async function manualCaptureProjectDay(
   db: Database,
   projectId: string,
   date: string,
-  opts: { home?: string; runDistill?: RunDistill; isRunning?: (id: string) => boolean } = {},
+  opts: { home?: string; runDistill?: RunDistill; isBusy?: (id: string) => boolean } = {},
 ): Promise<boolean> {
-  const isRunning = opts.isRunning ?? isAiRunning;
+  const isBusy = opts.isBusy ?? defaultIsBusy;
   const project = db
     .prepare('SELECT name, cwd FROM projects WHERE id = ?')
     .get(projectId) as { name: string; cwd: string } | undefined;
@@ -241,7 +300,7 @@ export async function manualCaptureProjectDay(
 
   return withDayLock(`${slug}:${date}`, async () => {
     const sessions = sessionRows
-      .filter((s) => !isRunning(s.id))
+      .filter((s) => !isBusy(s.id))
       .map((s) => {
         const title = (
           db.prepare('SELECT title FROM sessions WHERE id = ?').get(s.id) as
