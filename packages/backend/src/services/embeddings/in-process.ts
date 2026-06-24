@@ -41,6 +41,12 @@ function defaultRawEmbed(): Promise<RawEmbed> {
     };
     // Keep models in a user-controlled, persistent cache (survives restarts).
     tf.env.cacheDir = path.join(os.homedir(), '.pinloom', 'models');
+    // NOTE: allowRemoteModels stays TRUE on purpose. "Zero setup" means the model
+    // has to come from somewhere — on a cold cache the FIRST warmup downloads it
+    // (~120MB) into the cache above. This runs in the BACKGROUND warmup, never on
+    // a request hot path (search runs on FTS until ready), and a download failure
+    // is caught → degrade to FTS. After first run it's an offline cache hit.
+    // Strict-offline users can switch to the Ollama provider (v3 §11 H5).
     const extractor = await tf.pipeline('feature-extraction', MODEL);
     return async (text: string) => {
       const out = await extractor(text, { pooling: 'mean', normalize: true });

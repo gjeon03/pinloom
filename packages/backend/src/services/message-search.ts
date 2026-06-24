@@ -302,7 +302,11 @@ export async function searchMessagesHybrid(
     return semantic.length > 0 ? semantic : fts.slice(0, limit);
   }
 
-  // Both arms are relevance-ranked → RRF fuse, then hydrate the fused order.
-  const fusedIds = rrfFuse([fts.map((r) => r.messageId), vecIds]).slice(0, limit);
-  return hydrateByIds(db, fusedIds, tokens, opts);
+  // Both arms are relevance-ranked → RRF fuse, hydrate, THEN slice. Vector KNN
+  // is global (not project-scoped), so out-of-project ids drop during hydration;
+  // slicing AFTER hydration keeps the count from dipping below the FTS-only path
+  // on a project-scoped query (the fused candidate pool is bounded — fts ≤
+  // limit*2 plus the KNN top-k — so hydrating it all is cheap).
+  const fusedIds = rrfFuse([fts.map((r) => r.messageId), vecIds]);
+  return hydrateByIds(db, fusedIds, tokens, opts).slice(0, limit);
 }

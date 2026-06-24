@@ -255,11 +255,17 @@ single-user local app does not need.
   Promise.all)** to bound memory, and the backfill still **yields to live
   traffic** between batches as defense-in-depth. (If a future heavier model
   changes this, the provider interface is unchanged — swap in a worker behind it.)
-- **Model pre-staged into the HF cache + `allowRemoteModels=false` /
-  localFilesOnly** (H5) so the server never hits the network on a hot path.
-  Provider is **lazy-loaded** so a broken/missing native addon throws into the
-  degrade-to-FTS branch, never at import time. Verify `onnxruntime-node` resolves
-  under the **pnpm workspace** (not a flat npm install) before adding to deps.
+- **First-run model download is ACCEPTED, in the background** (H5, revised). The
+  original plan was `allowRemoteModels=false` + pre-staging, but that breaks the
+  "zero setup" promise (the model must come from somewhere). Decision: keep
+  `allowRemoteModels=true`; the FIRST background warmup downloads ~120MB into
+  `~/.pinloom/models`, then it's an offline cache hit forever. The invariant that
+  actually matters — **never block a request on the network** — holds: the
+  download is in the background warmup, search runs on FTS until ready, and a
+  download failure is caught → degrade to FTS. Strict-offline → use the Ollama
+  provider. Provider is **lazy-loaded** so a broken native addon degrades, never
+  throws at import. (`onnxruntime-node` confirmed resolving under the pnpm
+  workspace; load + 384-d Korean embedding spike-verified.)
 - **Any failure (extension, model, worker) → degrade to pure lexical FTS** =
   exactly today's behavior. Search must never regress or error.
 - Verify on isolated ports/test DB; never rebuild prod dist; deploy on user's
