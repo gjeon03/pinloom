@@ -192,11 +192,17 @@ overlaps with L1. To avoid two competing journals:
   everywhere"). The global view is a read-time aggregation, not a second store.
   Exact on-disk layout (e.g. `~/.pinloom/timeline/<project>/YYYY-MM-DD.md` vs
   inside the wiki tree) is a build-phase detail.
-- **Embedding backend** — ⏳ deferred to build phase (local daemon / in-process
-  model / cloud), pluggable, degrade-to-FTS when absent.
+- **Embedding backend** — ✅ **DECIDED**: a **pluggable provider interface**
+  with one job (text → vector). **Default = in-process** (pinloom runs a small
+  embedding model itself, e.g. `multilingual-e5`; zero setup, fully local).
+  **Ollama = a fast-follow adapter** behind the same interface (opt-in /
+  selectable; e.g. `bge-m3` for top Korean quality). Cloud is intentionally NOT
+  built (privacy: the corpus is private coding history). If no provider is
+  available, **degrade to lexical FTS** (search still works, just keyword-only).
+  Build order: ship in-process with Phase 1, add the Ollama adapter right after.
 
-> Status: all design decisions locked except the embedding backend (a build-time
-> pick). Ready to start Phase 1 (§7) when the user is.
+> Status: **all design decisions locked.** Ready to start Phase 1 (§7) — the
+> semantic corpus (SQLite vector store + in-process embedding + hybrid-with-FTS).
 
 ## 9. Explicitly NOT doing
 
