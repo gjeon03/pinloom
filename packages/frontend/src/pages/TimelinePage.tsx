@@ -26,15 +26,14 @@ function save(key: string, val: string) {
   }
 }
 
-// L1 Work Timeline reader (knowledge-system-v3 Phase 3). "By project" shows a
-// Finder-style tree (project → its dated entries) in the left sidebar; "By
-// date" shows every project's entry for one day. Plus the per-project
-// auto-capture toggle and manual capture (one project / all).
+// L1 Work Timeline reader (knowledge-system-v3 Phase 3). "By project" is a
+// macOS-Finder column view: projects | the selected project's dates | the
+// entry. "By date" shows every project's entry for one day. Plus the
+// per-project auto-capture toggle and manual capture (one project / all).
 export function TimelinePage() {
   const [mode, setMode] = useState<'project' | 'date'>('project');
   const [projectId, setProjectIdRaw] = useState<string | null>(() => load('pinloom:timeline:project'));
   const [projDate, setProjDateRaw] = useState<string | null>(() => load('pinloom:timeline:date'));
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [date, setDate] = useState<string>(localToday());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -56,8 +55,8 @@ export function TimelinePage() {
     [projects, projectId],
   );
 
-  // Pick a sensible default project + date once the index loads (or after the
-  // persisted project disappears), and keep the chosen project expanded.
+  // Default to the first project + its newest date once the index loads (or
+  // after the persisted project disappears / its date is gone).
   useEffect(() => {
     if (projects.length === 0) return;
     let pid = projectId;
@@ -65,15 +64,16 @@ export function TimelinePage() {
       pid = (projects.find((p) => p.dates.length > 0) ?? projects[0]).projectId;
       setProjectId(pid);
     }
-    setExpanded((prev) => new Set(prev).add(pid as string));
     const proj = projects.find((p) => p.projectId === pid);
     if (proj && (!projDate || !proj.dates.includes(projDate)) && proj.dates.length > 0) {
       setProjDate(proj.dates[0]);
     }
   }, [index]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Only fetch when the selected project actually has this date — avoids a 404
+  // on a stale persisted date that the current project no longer has.
   const { data: entry } = useSWR(
-    mode === 'project' && projectId && projDate
+    mode === 'project' && projectId && projDate && selected?.dates.includes(projDate)
       ? ['timeline:entry', projectId, projDate]
       : null,
     () => api.getTimelineEntry(projectId as string, projDate as string),
@@ -84,22 +84,14 @@ export function TimelinePage() {
     () => api.getTimelineForDate(date),
   );
 
+  // Click a project → select it + jump to its newest date (Finder fills the
+  // next column). Keep the current date if the project still has it.
   function clickProject(pid: string) {
     setProjectId(pid);
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(pid)) next.delete(pid);
-      else next.add(pid);
-      return next;
-    });
     const proj = projects.find((p) => p.projectId === pid);
     if (proj && proj.dates.length > 0 && (!projDate || !proj.dates.includes(projDate))) {
       setProjDate(proj.dates[0]);
     }
-  }
-  function clickDate(pid: string, d: string) {
-    setProjectId(pid);
-    setProjDate(d);
   }
 
   async function toggleAuto() {
@@ -206,67 +198,62 @@ export function TimelinePage() {
       <div className="flex-1 min-h-0 flex">
         {mode === 'project' ? (
           <>
-            {/* Finder-style project → date tree */}
-            <div className="w-56 shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-1">
+            {/* Column 1 — projects */}
+            <div className="w-52 shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-1">
               {projects.length === 0 ? (
                 <div className="text-xs text-[var(--color-ink-muted)] p-3">No projects.</div>
               ) : (
                 projects.map((p) => {
-                  const isOpen = expanded.has(p.projectId);
                   const isSel = p.projectId === projectId;
                   return (
-                    <div key={p.projectId}>
-                      <button
-                        onClick={() => clickProject(p.projectId)}
-                        className={`flex w-full items-center gap-1 px-2 py-1 text-left text-xs ${
-                          isSel && !projDate
-                            ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-                            : 'text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]'
-                        }`}
-                      >
-                        <ChevronRight
-                          size={12}
-                          className={`shrink-0 transition-transform text-[var(--color-ink-muted)] ${isOpen ? 'rotate-90' : ''}`}
-                        />
-                        <span className="truncate flex-1">{p.projectName}</span>
-                        <span className="text-[10px] text-[var(--color-ink-muted)]">
-                          {p.dates.length || ''}
-                        </span>
-                      </button>
-                      {isOpen &&
-                        (p.dates.length === 0 ? (
-                          <div className="pl-7 pr-2 py-1 text-[11px] text-[var(--color-ink-muted)] italic">
-                            no entries
-                          </div>
-                        ) : (
-                          p.dates.map((d) => (
-                            <button
-                              key={d}
-                              onClick={() => clickDate(p.projectId, d)}
-                              className={`block w-full pl-7 pr-2 py-1 text-left text-xs ${
-                                isSel && d === projDate
-                                  ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-                                  : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]'
-                              }`}
-                            >
-                              {d}
-                            </button>
-                          ))
-                        ))}
-                    </div>
+                    <button
+                      key={p.projectId}
+                      onClick={() => clickProject(p.projectId)}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs ${
+                        isSel
+                          ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                          : 'text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]'
+                      }`}
+                    >
+                      <span className="truncate flex-1">{p.projectName}</span>
+                      <span className="text-[10px] text-[var(--color-ink-muted)]">
+                        {p.dates.length || ''}
+                      </span>
+                      <ChevronRight size={12} className="shrink-0 text-[var(--color-ink-muted)]" />
+                    </button>
                   );
                 })
               )}
             </div>
-            {/* Entry */}
+            {/* Column 2 — the selected project's dates */}
+            <div className="w-44 shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-1">
+              {!selected ? (
+                <div className="text-xs text-[var(--color-ink-muted)] p-3">Select a project.</div>
+              ) : selected.dates.length === 0 ? (
+                <div className="text-xs text-[var(--color-ink-muted)] p-3">No entries yet.</div>
+              ) : (
+                selected.dates.map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setProjDate(d)}
+                    className={`block w-full px-3 py-1.5 text-left text-xs ${
+                      d === projDate
+                        ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                        : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))
+              )}
+            </div>
+            {/* Column 3 — the entry */}
             <div className="flex-1 overflow-y-auto p-4">
               {entry?.markdown ? (
                 <Markdown content={entry.markdown} />
               ) : (
                 <div className="text-sm text-[var(--color-ink-muted)]">
-                  {selected && projDate
-                    ? 'No entry for this day.'
-                    : 'Select a project and date on the left.'}
+                  {selected && projDate ? 'No entry for this day.' : 'Pick a date.'}
                 </div>
               )}
             </div>
