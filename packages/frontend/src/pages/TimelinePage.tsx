@@ -181,7 +181,7 @@ export function TimelinePage() {
           <>
             <label
               className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)] cursor-pointer"
-              title={`Auto-capture for ${selected.projectName}: automatically distill this project's work into a daily entry once a session has been idle ~15 min. Per-project — applies to the selected project.`}
+              title={`Auto-capture for ${selected.projectName} (per-project).\nSchedule: a background sweep runs every ~1 min and captures a session once it has been idle ~15 min AND ≥80 chars of new work accrued since the last capture. An already-captured day re-distills at most once every 30 min. Closing a session tab deletes it — capture before then (or use Capture now).`}
             >
               <input type="checkbox" checked={selected.auto} onChange={() => void toggleAuto()} />
               Auto-capture
