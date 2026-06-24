@@ -3,6 +3,8 @@ export interface Project {
   name: string;
   cwd: string;
   groupId: string | null;
+  /** Per-project automatic Work Timeline capture (default true). */
+  timelineAuto: boolean;
   createdAt: string;
   updatedAt: string;
 }

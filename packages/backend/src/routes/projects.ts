@@ -9,6 +9,7 @@ interface ProjectRow {
   cwd: string;
   group_id: string | null;
   order_index: number;
+  timeline_auto: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -19,6 +20,8 @@ function toProject(row: ProjectRow): Project {
     name: row.name,
     cwd: row.cwd,
     groupId: row.group_id,
+    // Default true for legacy rows (column added in migration 33).
+    timelineAuto: row.timeline_auto !== 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -216,6 +216,54 @@ async function captureProjectDay(
   return true;
 }
 
+/**
+ * Manual capture ("정리해줘" / the API): distill a project's entry for `date`
+ * NOW, ignoring the idle + rate-limit gates (the user asked explicitly). Still
+ * uses the keyed mutex and skips mid-turn sessions. Does NOT advance per-session
+ * cursors — manual is a one-off, auto-capture continues normally afterward.
+ * Returns true if an entry was written.
+ */
+export async function manualCaptureProjectDay(
+  db: Database,
+  projectId: string,
+  date: string,
+  opts: { home?: string; runDistill?: RunDistill; isRunning?: (id: string) => boolean } = {},
+): Promise<boolean> {
+  const isRunning = opts.isRunning ?? isAiRunning;
+  const project = db
+    .prepare('SELECT name, cwd FROM projects WHERE id = ?')
+    .get(projectId) as { name: string; cwd: string } | undefined;
+  if (!project) return false;
+  const slug = getProjectWikiSlugByProjectId(projectId);
+  const sessionRows = db
+    .prepare("SELECT id FROM sessions WHERE project_id = ? AND bot_kind IS NULL")
+    .all(projectId) as { id: string }[];
+
+  return withDayLock(`${slug}:${date}`, async () => {
+    const sessions = sessionRows
+      .filter((s) => !isRunning(s.id))
+      .map((s) => {
+        const title = (
+          db.prepare('SELECT title FROM sessions WHERE id = ?').get(s.id) as
+            | { title: string | null }
+            | undefined
+        )?.title ?? null;
+        return { id: s.id, title, transcript: dayTranscript(db, s.id, date) };
+      })
+      .filter((s) => s.transcript.trim() !== '');
+    if (sessions.length === 0) return false;
+    const commits = await gitCommitsForDay(project.cwd, date);
+    const existing = readEntry(slug, date, opts.home);
+    const md = await distillDay(
+      { projectName: project.name, date, sessions, commits, existingEntry: existing },
+      { runDistill: opts.runDistill },
+    );
+    if (!md) return false;
+    writeEntry(slug, date, md, opts.home);
+    return true;
+  });
+}
+
 // ---- background scheduler (mirrors message-indexer.ts) ----
 let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
