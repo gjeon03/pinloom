@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { CalendarDays, RefreshCw, ChevronRight } from 'lucide-react';
 import { api } from '../api/client.js';
@@ -84,6 +84,25 @@ export function TimelinePage() {
     () => api.getTimelineForDate(date),
   );
 
+  // "Capture all" runs as a backend job; poll its status so progress survives
+  // navigation AND reload (the backend owns the state). Poll only while running.
+  const { data: capJob } = useSWR('timeline:capture-status', () => api.captureAllStatus(), {
+    refreshInterval: (d) => (d?.running ? 1500 : 0),
+  });
+  const capturingAll = capJob?.running ?? false;
+  // When a capture-all finishes, refresh the timeline views.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && capJob && !capJob.running) {
+      void globalMutate('timeline:index');
+      if (capJob.date) void globalMutate(['timeline:date', capJob.date]);
+      if (projectId && capJob.date) void globalMutate(['timeline:entry', projectId, capJob.date]);
+      setNotice(`Captured ${capJob.captured}/${capJob.total} projects`);
+      setTimeout(() => setNotice(null), 6000);
+    }
+    wasRunning.current = capJob?.running ?? false;
+  }, [capJob?.running]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Click a project → select it + jump to its newest date (Finder fills the
   // next column). Keep the current date if the project still has it.
   function clickProject(pid: string) {
@@ -119,20 +138,13 @@ export function TimelinePage() {
   }
 
   async function captureAll() {
-    if (busy) return;
-    setBusy(true);
-    setNotice('Capturing all projects… (takes a while)');
+    if (capturingAll) return;
     try {
-      const r = await api.captureTimelineAll();
-      setNotice(`Captured ${r.captured}/${r.projects} projects`);
-      void globalMutate('timeline:index');
-      void globalMutate(['timeline:date', r.date]);
-      if (projectId) void globalMutate(['timeline:entry', projectId, r.date]);
+      await api.captureTimelineAll();
+      void globalMutate('timeline:capture-status'); // kick off polling immediately
     } catch (e) {
       setNotice(`Failed: ${String(e)}`);
-    } finally {
-      setBusy(false);
-      setTimeout(() => setNotice(null), 6000);
+      setTimeout(() => setNotice(null), 4000);
     }
   }
 
@@ -186,11 +198,12 @@ export function TimelinePage() {
         )}
         <button
           onClick={() => void captureAll()}
-          disabled={busy}
+          disabled={busy || capturingAll}
           title="Capture today's work for every project"
           className={captureBtnCls}
         >
-          <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> Capture all
+          <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
+          {capturingAll ? `Capturing ${capJob!.done}/${capJob!.total}…` : 'Capture all'}
         </button>
         {notice && <span className="text-xs text-[var(--color-ink-muted)]">{notice}</span>}
       </header>

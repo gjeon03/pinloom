@@ -15,6 +15,26 @@ import {
   readEntry,
 } from '../services/timeline/store.js';
 
+interface CaptureAllJob {
+  running: boolean;
+  date: string;
+  total: number;
+  done: number;
+  captured: number;
+  failed: number;
+  finishedAt: number | null;
+}
+// In-process tracker for the background "capture all" job (one at a time).
+let captureAllJob: CaptureAllJob = {
+  running: false,
+  date: '',
+  total: 0,
+  done: 0,
+  captured: 0,
+  failed: 0,
+  finishedAt: null,
+};
+
 export async function timelineRoutes(app: FastifyInstance) {
   const db = getDb();
 
@@ -123,11 +143,20 @@ export async function timelineRoutes(app: FastifyInstance) {
     },
   );
 
-  // Manual "capture now" for ALL visible projects (a given date, default today).
-  // Sequential — each project is an LLM distill; the UI shows progress.
+  // "Capture all" runs N sequential LLM distills (minutes). Rather than block one
+  // long request — whose UI state dies the moment the user navigates away — it
+  // runs as a background job tracked in-process, and the client polls
+  // /capture-all/status. State thus survives navigation AND reload (the backend
+  // owns it); a backend restart resets it to not-running (the job died with it).
+  app.get('/api/timeline/capture-all/status', async () => captureAllJob);
+
   app.post<{ Body: { date?: string } }>(
     '/api/timeline/capture-all',
     async (req, reply) => {
+      if (captureAllJob.running) {
+        reply.code(409);
+        return { error: 'capture already running', job: captureAllJob };
+      }
       const date = req.body?.date ?? localToday();
       try {
         assertDate(date);
@@ -138,15 +167,29 @@ export async function timelineRoutes(app: FastifyInstance) {
       const projects = db
         .prepare('SELECT id FROM projects WHERE hidden = 0')
         .all() as { id: string }[];
-      let captured = 0;
-      for (const p of projects) {
-        try {
-          if (await manualCaptureProjectDay(db, p.id, date)) captured += 1;
-        } catch {
-          // one project's failure must not abort the rest
+      captureAllJob = {
+        running: true,
+        date,
+        total: projects.length,
+        done: 0,
+        captured: 0,
+        failed: 0,
+        finishedAt: null,
+      };
+      // Fire-and-forget: keep the event loop going after the response is sent.
+      void (async () => {
+        for (const p of projects) {
+          try {
+            if (await manualCaptureProjectDay(db, p.id, date)) captureAllJob.captured += 1;
+          } catch {
+            captureAllJob.failed += 1; // one project's failure must not abort the rest
+          }
+          captureAllJob.done += 1;
         }
-      }
-      return { ok: true as const, date, captured, projects: projects.length };
+        captureAllJob.running = false;
+        captureAllJob.finishedAt = Date.now();
+      })();
+      return { started: true as const, date, total: projects.length };
     },
   );
 

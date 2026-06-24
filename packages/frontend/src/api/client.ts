@@ -210,10 +210,20 @@ export const api = {
       { method: 'POST', body: JSON.stringify(date ? { date } : {}) },
     ),
   captureTimelineAll: (date?: string) =>
-    request<{ ok: true; date: string; captured: number; projects: number }>(
-      '/api/timeline/capture-all',
-      { method: 'POST', body: JSON.stringify(date ? { date } : {}) },
-    ),
+    request<{ started: true; date: string; total: number }>('/api/timeline/capture-all', {
+      method: 'POST',
+      body: JSON.stringify(date ? { date } : {}),
+    }),
+  captureAllStatus: () =>
+    request<{
+      running: boolean;
+      date: string;
+      total: number;
+      done: number;
+      captured: number;
+      failed: number;
+      finishedAt: number | null;
+    }>('/api/timeline/capture-all/status'),
 
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>
