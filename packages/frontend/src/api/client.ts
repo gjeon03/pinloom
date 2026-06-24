@@ -155,6 +155,33 @@ export const api = {
       `/api/sessions/${sessionId}/context`,
     ),
 
+  // Corpus recap (Phase 4)
+  recapAsk: (question: string, projectId?: string) =>
+    request<{
+      answer: string;
+      sources: {
+        n: number;
+        messageId: string;
+        sessionId: string;
+        sessionTitle: string | null;
+        projectName: string;
+        createdAt: string;
+      }[];
+    }>('/api/recap/ask', {
+      method: 'POST',
+      body: JSON.stringify({ question, projectId }),
+    }),
+  recapGenerate: (body: {
+    kind: 'portfolio' | 'resume';
+    dateFrom: string;
+    dateTo: string;
+    projectId?: string;
+  }) =>
+    request<{ markdown: string; empty: boolean }>('/api/recap/generate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   // Work Timeline (L1)
   listTimelineDates: (projectId: string) =>
     request<{ dates: string[] }>(`/api/timeline/projects/${projectId}`),
