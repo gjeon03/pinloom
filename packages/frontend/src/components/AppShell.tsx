@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   BookOpen,
+  CalendarDays,
   ChevronDown,
   ChevronRight,
   FolderPlus,
@@ -108,6 +109,7 @@ export function AppShell({ children }: Props) {
   const { projectId } = useParams<{ projectId: string }>();
   const onWiki = location.pathname.startsWith('/wiki');
   const onTeams = location.pathname.startsWith('/teams');
+  const onTimeline = location.pathname.startsWith('/timeline');
 
   const [sidebarHidden, setSidebarHidden] = useState(
     () => localStorage.getItem('pinloom:sidebarHidden') === '1',
@@ -646,6 +648,17 @@ export function AppShell({ children }: Props) {
           >
             <BookOpen size={12} />
             Wiki
+          </button>
+          <button
+            onClick={() => navigate('/timeline')}
+            className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
+              onTimeline
+                ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
+            }`}
+          >
+            <CalendarDays size={12} />
+            Timeline
           </button>
           <div className="flex items-center gap-1">
             <button
