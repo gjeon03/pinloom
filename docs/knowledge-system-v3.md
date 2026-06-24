@@ -282,17 +282,27 @@ silent boot-time drop (M3).
 - `getEmbeddingProvider()` → provider | null (null ⇒ degrade). Tests mock the
   model.
 
-**Step B (#6) — Vector store + indexing + backfill**
-- `connection.ts`: load sqlite-vec (try/catch → flag); `ensureVecTables()` lazy.
-- Index on the **content-bearing UPDATE boundary** (H3): enqueue from the same
-  predicate the FTS `_ai`/`_au` triggers use (`role IN ('user','assistant') AND
-  content <> ''`) — NOT on the empty INSERT (`closeStream` writes real content
-  later). Re-embed = **delete+insert** (no upsert).
-- **`AFTER DELETE ON messages` trigger** → `DELETE FROM <vec> WHERE doc_id=old.id`
-  (H4) so session-delete cascade evicts vectors.
-- Backfill: background batch, cursor = `messages.id NOT IN (SELECT doc_id FROM
-  <vec> WHERE source='message')`, re-evaluated per batch → resumable across
-  restarts (M4); throttled, yields to live traffic.
+**Step B (#6) — Vector store + indexing + backfill** ✅ *built as below*
+- `connection.ts`: load sqlite-vec (try/catch → `isVectorAvailable()`);
+  `vector-store.ts` creates the vec0 table LAZILY (never the migration ledger).
+- **Indexing = periodic background SWEEP, not a write-path hook** (cleaner than
+  the planned UPDATE-boundary hook, and zero runner coupling): `message-indexer.ts`
+  drains `role IN ('user','assistant') AND content <> '' AND source_message_id IS
+  NULL AND id NOT IN (message_vectors)` in throttled batches, yielding between
+  each. The `content <> ''` predicate naturally skips the empty streaming
+  placeholder (H3 satisfied without hooking `closeStream`); the `NOT IN` cursor
+  makes it idempotent + resumable across restarts (M4) and unifies backfill with
+  live indexing. New messages are searchable on the next sweep (seconds' lag —
+  fine for history). Re-embed = **delete+insert** (vec0 has no upsert).
+- **Delete-sync via periodic GC, NOT a trigger** (H4, revised): a persistent
+  `AFTER DELETE` trigger referencing the vec0 table would break message/session
+  deletes on any later boot where the extension failed to load. Instead
+  `gcOrphans()` sweeps `doc_id NOT IN (SELECT id FROM messages)` after productive
+  passes; doc_ids are nanoids (never reused) and dead hits drop at the search
+  join, so orphans are harmless until GC.
+- Inference is in-process (worker_thread unneeded — see above); the sweep yields
+  to live traffic. Wired in `app.ts` boot, guarded `NODE_ENV !== 'test'`,
+  degrade-safe.
 - Confirm `db-export.ts`/`db-import.ts` don't open a second `new Database` that
   would lack the extension (L3).
 

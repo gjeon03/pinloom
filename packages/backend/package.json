@@ -26,6 +26,7 @@
     "jszip": "^3.10.1",
     "nanoid": "^5.1.2",
     "node-pty": "^1.1.0",
+    "sqlite-vec": "^0.1.9",
     "ws": "^8.20.0"
   },
   "devDependencies": {
