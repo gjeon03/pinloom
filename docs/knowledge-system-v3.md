@@ -387,3 +387,38 @@ discriminator already supports it).
 **De-risk order:** (1) 2C state model + keyed mutex + `isAiRunning` guard, tested
 with a FAKE runAgent + isolated DB/home (no LLM/auth); (2) 2B git boundary; (3)
 real SDK distill (verified in prod like the gardener).
+
+---
+
+## 13. Phase 5 — corpus over MCP (knowledge as infrastructure)
+
+The pinloom MCP server (`packages/mcp-server`) gains a third mode, **corpus**,
+that exposes the user's pinloom knowledge to EXTERNAL agents — their IDE's Claude
+Code / Codex — so they can query it from anywhere, not just pinloom's UI. No
+token: it calls pinloom's PUBLIC localhost routes (single-user, local-only).
+
+Tools (corpus mode): `pinloom_search` (hybrid search over past conversations),
+`pinloom_ask` (RAG answer grounded in history, cited), `pinloom_timeline` (a
+day's Work Timeline). All hit existing public routes (`/api/search`,
+`/api/recap/ask`, `/api/timeline/date/:date`) — additive, no backend change.
+
+Mode selection (`index.ts`): `PINLOOM_CORPUS` → corpus; else `PINLOOM_BOT_TOKEN`
+→ bot; else team. Team/bot unchanged (smoke-verified all three).
+
+**Register it (user does this once, after a `pnpm build`):**
+
+Claude Code:
+```
+claude mcp add pinloom-corpus -e PINLOOM_CORPUS=1 \
+  -- node <repo>/packages/mcp-server/dist/index.js
+```
+Codex (`~/.codex/config.toml`):
+```
+[mcp_servers.pinloom-corpus]
+command = "node"
+args = ["<repo>/packages/mcp-server/dist/index.js"]
+env = { PINLOOM_CORPUS = "1" }
+```
+Then in the IDE: "search my pinloom history for …" / "ask pinloom what I decided
+about …". Requires the pinloom backend running on :4748 (the default; override
+with `PINLOOM_BACKEND_URL`).
