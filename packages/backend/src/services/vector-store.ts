@@ -17,9 +17,10 @@ import { isVectorAvailable } from '../db/connection.js';
 // Table names are internal constants (never user input) → safe to interpolate.
 export const MESSAGE_VECTORS = 'message_vectors';
 
-/** Create the bookkeeping meta table + a source's vec0 table at `dim` width.
- *  Idempotent. No-op when the extension is unavailable. */
-export function ensureVectorTable(db: Database, table: string, dim: number): void {
+/** Create the bookkeeping meta table only. Idempotent + dim-independent, so it
+ *  is safe to call before reading meta on a fresh DB (the vec0 table needs a
+ *  dim, but the meta read that decides the dim must not require the vec0 table). */
+export function ensureMetaTable(db: Database): void {
   if (!isVectorAvailable()) return;
   db.exec(
     `CREATE TABLE IF NOT EXISTS vector_meta (
@@ -28,6 +29,13 @@ export function ensureVectorTable(db: Database, table: string, dim: number): voi
        dim        INTEGER NOT NULL
      )`,
   );
+}
+
+/** Create the bookkeeping meta table + a source's vec0 table at `dim` width.
+ *  Idempotent. No-op when the extension is unavailable. */
+export function ensureVectorTable(db: Database, table: string, dim: number): void {
+  if (!isVectorAvailable()) return;
+  ensureMetaTable(db);
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING vec0(
        doc_id TEXT PRIMARY KEY,
@@ -43,6 +51,10 @@ export interface VectorMeta {
 
 export function getVectorMeta(db: Database, table: string): VectorMeta | null {
   if (!isVectorAvailable()) return null;
+  // Ensure the meta table exists first — on a fresh DB this read would otherwise
+  // throw "no such table: vector_meta" before ensureVectorTable ever runs, which
+  // wedged the indexer (it reads meta to decide the dim). See message-indexer.
+  ensureMetaTable(db);
   const row = db
     .prepare('SELECT model_id, dim FROM vector_meta WHERE table_name = ?')
     .get(table) as { model_id: string; dim: number } | undefined;

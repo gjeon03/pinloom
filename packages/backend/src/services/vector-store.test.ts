@@ -77,4 +77,13 @@ describe.skipIf(!available)('vector-store', () => {
       .map((r) => (r as { doc_id: string }).doc_id);
     expect(ids).toEqual(['live']);
   });
+
+  // Regression: on a fresh DB the indexer reads meta FIRST (to decide the dim),
+  // so getVectorMeta must not throw "no such table: vector_meta" — that error
+  // wedged the indexer in a retry loop and left semantic search permanently off.
+  it('getVectorMeta tolerates a missing meta table (returns null, no throw)', () => {
+    db.exec('DROP TABLE IF EXISTS vector_meta');
+    expect(() => getVectorMeta(db, MESSAGE_VECTORS)).not.toThrow();
+    expect(getVectorMeta(db, MESSAGE_VECTORS)).toBeNull();
+  });
 });
