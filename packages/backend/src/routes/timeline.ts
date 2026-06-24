@@ -26,6 +26,23 @@ export async function timelineRoutes(app: FastifyInstance) {
     );
   }
 
+  // Tree index for the "By project" sidebar: every visible project with its
+  // auto flag + the dates it has entries for (newest first). One call powers
+  // the Finder-style project→date tree.
+  app.get('/api/timeline/index', async () => {
+    const projects = db
+      .prepare('SELECT id, name, timeline_auto FROM projects WHERE hidden = 0 ORDER BY name')
+      .all() as { id: string; name: string; timeline_auto: number }[];
+    return {
+      projects: projects.map((p) => ({
+        projectId: p.id,
+        projectName: p.name,
+        auto: p.timeline_auto !== 0,
+        dates: listDates(getProjectWikiSlugByProjectId(p.id)),
+      })),
+    };
+  });
+
   // Dates that have a timeline entry for a project (newest first).
   app.get<{ Params: { projectId: string } }>(
     '/api/timeline/projects/:projectId',

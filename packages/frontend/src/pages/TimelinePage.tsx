@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
-import { CalendarDays, RefreshCw } from 'lucide-react';
-import type { Project } from '@pinloom/shared';
+import { CalendarDays, RefreshCw, ChevronRight } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
 
@@ -12,58 +11,66 @@ function localToday(): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
-// L1 Work Timeline reader (knowledge-system-v3 Phase 3). Per-project dated
-// journal entries (auto-distilled from sessions + commits) + a cross-project
-// "what did I do on D" view, the per-project auto-capture toggle, and a manual
-// "capture now" trigger.
+function load(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function save(key: string, val: string) {
+  try {
+    localStorage.setItem(key, val);
+  } catch {
+    // ignore
+  }
+}
+
+// L1 Work Timeline reader (knowledge-system-v3 Phase 3). "By project" shows a
+// Finder-style tree (project → its dated entries) in the left sidebar; "By
+// date" shows every project's entry for one day. Plus the per-project
+// auto-capture toggle and manual capture (one project / all).
 export function TimelinePage() {
   const [mode, setMode] = useState<'project' | 'date'>('project');
-  // Persist the selected project so it survives navigating away and back (FIX4).
-  const [projectId, setProjectIdRaw] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem('pinloom:timeline:project');
-    } catch {
-      return null;
-    }
-  });
-  function setProjectId(id: string) {
-    setProjectIdRaw(id);
-    try {
-      localStorage.setItem('pinloom:timeline:project', id);
-    } catch {
-      // ignore
-    }
-  }
+  const [projectId, setProjectIdRaw] = useState<string | null>(() => load('pinloom:timeline:project'));
+  const [projDate, setProjDateRaw] = useState<string | null>(() => load('pinloom:timeline:date'));
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [date, setDate] = useState<string>(localToday());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const { data: projects } = useSWR('timeline:projects', () => api.listProjects());
+  function setProjectId(id: string) {
+    setProjectIdRaw(id);
+    save('pinloom:timeline:project', id);
+  }
+  function setProjDate(d: string) {
+    setProjDateRaw(d);
+    save('pinloom:timeline:date', d);
+  }
 
-  // Select the first project if none persisted, or the persisted one is gone.
-  useEffect(() => {
-    if (!projects || projects.length === 0) return;
-    if (!projectId || !projects.some((p) => p.id === projectId)) {
-      setProjectId(projects[0].id);
-    }
-  }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: index } = useSWR('timeline:index', () => api.getTimelineIndex());
+  const projects = index?.projects ?? [];
 
-  const project = useMemo(
-    () => projects?.find((p) => p.id === projectId) ?? null,
+  const selected = useMemo(
+    () => projects.find((p) => p.projectId === projectId) ?? null,
     [projects, projectId],
   );
 
-  const { data: datesData } = useSWR(
-    mode === 'project' && projectId ? ['timeline:dates', projectId] : null,
-    () => api.listTimelineDates(projectId as string),
-  );
-  const dates = datesData?.dates ?? [];
-
-  // selected date within project mode (default newest)
-  const [projDate, setProjDate] = useState<string | null>(null);
+  // Pick a sensible default project + date once the index loads (or after the
+  // persisted project disappears), and keep the chosen project expanded.
   useEffect(() => {
-    setProjDate(dates.length > 0 ? dates[0] : null);
-  }, [datesData]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (projects.length === 0) return;
+    let pid = projectId;
+    if (!pid || !projects.some((p) => p.projectId === pid)) {
+      pid = (projects.find((p) => p.dates.length > 0) ?? projects[0]).projectId;
+      setProjectId(pid);
+    }
+    setExpanded((prev) => new Set(prev).add(pid as string));
+    const proj = projects.find((p) => p.projectId === pid);
+    if (proj && (!projDate || !proj.dates.includes(projDate)) && proj.dates.length > 0) {
+      setProjDate(proj.dates[0]);
+    }
+  }, [index]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: entry } = useSWR(
     mode === 'project' && projectId && projDate
@@ -77,9 +84,28 @@ export function TimelinePage() {
     () => api.getTimelineForDate(date),
   );
 
-  async function toggleAuto(p: Project) {
-    await api.setProjectTimelineAuto(p.id, !p.timelineAuto);
-    void globalMutate('timeline:projects');
+  function clickProject(pid: string) {
+    setProjectId(pid);
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(pid)) next.delete(pid);
+      else next.add(pid);
+      return next;
+    });
+    const proj = projects.find((p) => p.projectId === pid);
+    if (proj && proj.dates.length > 0 && (!projDate || !proj.dates.includes(projDate))) {
+      setProjDate(proj.dates[0]);
+    }
+  }
+  function clickDate(pid: string, d: string) {
+    setProjectId(pid);
+    setProjDate(d);
+  }
+
+  async function toggleAuto() {
+    if (!selected) return;
+    await api.setProjectTimelineAuto(selected.projectId, !selected.auto);
+    void globalMutate('timeline:index');
   }
 
   async function captureNow() {
@@ -89,8 +115,9 @@ export function TimelinePage() {
     try {
       const r = await api.captureTimeline(projectId);
       setNotice(r.written ? `Captured ${r.date}` : 'Nothing new to capture');
-      void globalMutate(['timeline:dates', projectId]);
+      void globalMutate('timeline:index');
       void globalMutate(['timeline:entry', projectId, r.date]);
+      if (r.written) setProjDate(r.date);
     } catch (e) {
       setNotice(`Failed: ${String(e)}`);
     } finally {
@@ -106,11 +133,9 @@ export function TimelinePage() {
     try {
       const r = await api.captureTimelineAll();
       setNotice(`Captured ${r.captured}/${r.projects} projects`);
-      if (projectId) {
-        void globalMutate(['timeline:dates', projectId]);
-        void globalMutate(['timeline:entry', projectId, r.date]);
-      }
+      void globalMutate('timeline:index');
       void globalMutate(['timeline:date', r.date]);
+      if (projectId) void globalMutate(['timeline:entry', projectId, r.date]);
     } catch (e) {
       setNotice(`Failed: ${String(e)}`);
     } finally {
@@ -118,6 +143,9 @@ export function TimelinePage() {
       setTimeout(() => setNotice(null), 6000);
     }
   }
+
+  const captureBtnCls =
+    'flex items-center gap-1 text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-50';
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -140,34 +168,17 @@ export function TimelinePage() {
           </button>
         </div>
 
-        {mode === 'project' && (
+        {mode === 'project' && selected && (
           <>
-            <select
-              value={projectId ?? ''}
-              onChange={(e) => setProjectId(e.target.value)}
-              className="text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1"
-            >
-              {(projects ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            {project && (
-              <label className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)]">
-                <input
-                  type="checkbox"
-                  checked={project.timelineAuto}
-                  onChange={() => void toggleAuto(project)}
-                />
-                Auto-capture
-              </label>
-            )}
+            <label className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)]">
+              <input type="checkbox" checked={selected.auto} onChange={() => void toggleAuto()} />
+              Auto-capture
+            </label>
             <button
               onClick={() => void captureNow()}
-              disabled={busy || !projectId}
-              title="Capture today's work now"
-              className="flex items-center gap-1 text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-50"
+              disabled={busy}
+              title={`Capture today's work for ${selected.projectName}`}
+              className={captureBtnCls}
             >
               <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> Capture now
             </button>
@@ -185,7 +196,7 @@ export function TimelinePage() {
           onClick={() => void captureAll()}
           disabled={busy}
           title="Capture today's work for every project"
-          className="flex items-center gap-1 text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-50"
+          className={captureBtnCls}
         >
           <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> Capture all
         </button>
@@ -195,33 +206,67 @@ export function TimelinePage() {
       <div className="flex-1 min-h-0 flex">
         {mode === 'project' ? (
           <>
-            <div className="w-44 shrink-0 border-r border-[var(--color-border)] overflow-y-auto p-2">
-              {dates.length === 0 ? (
-                <div className="text-xs text-[var(--color-ink-muted)] p-2">
-                  No entries yet.
-                </div>
+            {/* Finder-style project → date tree */}
+            <div className="w-56 shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-1">
+              {projects.length === 0 ? (
+                <div className="text-xs text-[var(--color-ink-muted)] p-3">No projects.</div>
               ) : (
-                dates.map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => setProjDate(d)}
-                    className={`block w-full text-left rounded px-2 py-1 text-xs ${
-                      d === projDate
-                        ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-                        : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
-                    }`}
-                  >
-                    {d}
-                  </button>
-                ))
+                projects.map((p) => {
+                  const isOpen = expanded.has(p.projectId);
+                  const isSel = p.projectId === projectId;
+                  return (
+                    <div key={p.projectId}>
+                      <button
+                        onClick={() => clickProject(p.projectId)}
+                        className={`flex w-full items-center gap-1 px-2 py-1 text-left text-xs ${
+                          isSel && !projDate
+                            ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                            : 'text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]'
+                        }`}
+                      >
+                        <ChevronRight
+                          size={12}
+                          className={`shrink-0 transition-transform text-[var(--color-ink-muted)] ${isOpen ? 'rotate-90' : ''}`}
+                        />
+                        <span className="truncate flex-1">{p.projectName}</span>
+                        <span className="text-[10px] text-[var(--color-ink-muted)]">
+                          {p.dates.length || ''}
+                        </span>
+                      </button>
+                      {isOpen &&
+                        (p.dates.length === 0 ? (
+                          <div className="pl-7 pr-2 py-1 text-[11px] text-[var(--color-ink-muted)] italic">
+                            no entries
+                          </div>
+                        ) : (
+                          p.dates.map((d) => (
+                            <button
+                              key={d}
+                              onClick={() => clickDate(p.projectId, d)}
+                              className={`block w-full pl-7 pr-2 py-1 text-left text-xs ${
+                                isSel && d === projDate
+                                  ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                                  : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]'
+                              }`}
+                            >
+                              {d}
+                            </button>
+                          ))
+                        ))}
+                    </div>
+                  );
+                })
               )}
             </div>
+            {/* Entry */}
             <div className="flex-1 overflow-y-auto p-4">
               {entry?.markdown ? (
                 <Markdown content={entry.markdown} />
               ) : (
                 <div className="text-sm text-[var(--color-ink-muted)]">
-                  {projDate ? 'No entry for this day.' : 'Select a date on the left.'}
+                  {selected && projDate
+                    ? 'No entry for this day.'
+                    : 'Select a project and date on the left.'}
                 </div>
               )}
             </div>
