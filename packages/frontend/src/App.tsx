@@ -19,6 +19,7 @@ import { WikiPage } from './pages/WikiPage.js';
 import { WikiDetailPage } from './pages/WikiDetailPage.js';
 import { WikiProposalsPage } from './pages/WikiProposalsPage.js';
 import { TimelinePage } from './pages/TimelinePage.js';
+import { RecapPage } from './pages/RecapPage.js';
 import { cacheKeys } from './api/cacheKeys.js';
 
 // SWR defaults: revalidate on browser focus + network reconnect so a tab
@@ -153,6 +154,14 @@ export function App() {
               element={
                 <AppShell>
                   {() => <TimelinePage />}
+                </AppShell>
+              }
+            />
+            <Route
+              path="/recap"
+              element={
+                <AppShell>
+                  {() => <RecapPage />}
                 </AppShell>
               }
             />
