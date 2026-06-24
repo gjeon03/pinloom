@@ -286,6 +286,7 @@ export async function sessionRoutes(app: FastifyInstance) {
             name: string;
             cwd: string;
             group_id: string | null;
+            timeline_auto: number | null;
             created_at: string;
             updated_at: string;
           }
@@ -301,6 +302,7 @@ export async function sessionRoutes(app: FastifyInstance) {
           name: projectRow.name,
           cwd: projectRow.cwd,
           groupId: projectRow.group_id,
+          timelineAuto: projectRow.timeline_auto !== 0,
           createdAt: projectRow.created_at,
           updatedAt: projectRow.updated_at,
         },

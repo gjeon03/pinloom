@@ -574,6 +574,24 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       ALTER TABLE projects ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    id: 33,
+    // Work Timeline (L1) capture (docs/knowledge-system-v3.md §12). The timeline
+    // ENTRIES live as markdown files under ~/.pinloom/timeline/ (not the DB) —
+    // only the capture bookkeeping is here. `projects.timeline_auto` is the
+    // per-project automatic-capture toggle (default ON). `timeline_capture_state`
+    // is the per-session cursor (last message distilled into the timeline), so
+    // the background sweep is idempotent + resumable across restarts. Plain
+    // ALTER/CREATE — no extension dependency.
+    sql: `
+      ALTER TABLE projects ADD COLUMN timeline_auto INTEGER NOT NULL DEFAULT 1;
+      CREATE TABLE IF NOT EXISTS timeline_capture_state (
+        session_id                TEXT PRIMARY KEY,
+        last_captured_message_id  TEXT,
+        last_captured_at          TEXT
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

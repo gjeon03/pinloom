@@ -330,3 +330,60 @@ silent boot-time drop (M3).
 **Review verdict:** REVISE→build; all HIGH (H1 lazy vec-table, H2 worker_thread,
 H3 update-boundary, H4 delete-trigger, H5 install/model staging) and MED folded
 in above. Sound to build.
+
+---
+
+## 12. Phase 2 build plan — Work Timeline (revised after adversarial review)
+
+Verdict: REVISE → build (shape right; copy proven infra). 2A done.
+
+**Canonicalization decision (H1):** `~/.pinloom/timeline/<slug>/YYYY-MM-DD.md` is
+the **canonical, automatic L1 work-record**. The schedule bot's Obsidian journal
+(PR #131) is a SEPARATE artifact — the user's *manual planning* surface — NOT a
+duplicate of the timeline. **Bot↔timeline wiring is DEFERRED** out of Phase 2 (a
+later task: a `pinloom_read_timeline` MCP tool so the bot can reference the
+substrate). Phase 2 ships the substrate only → no two-journals problem.
+
+**2B Distillation** (`timeline/distill.ts`): `distillDay({projectCwd, date,
+sessions, commits, existingEntry, runAgent})` → markdown. Seam mirrors
+`wiki-gardener.ts` (injectable runAgent; real SDK default, read-only). Manual
+"정리해줘" and the sweep share this ONE entrypoint (L2). `gitCommitsForDay(cwd,
+date)` via **`execFile('git', [...])`** (NO shell interpolation, M2), local-tz
+boundaries (`--since="<date> 00:00" --until="<date> 23:59" --date=local`),
+non-repo guard (`git -C cwd rev-parse` → empty commits, never throw).
+
+**2C Capture trigger + state** (`timeline/capture.ts` + migration). Copy the
+`message-indexer.ts` discipline verbatim (interval + `running` single-flight +
+`unref` + try/catch + `NODE_ENV!=='test'` guard + resumable cursor).
+- Migration: `projects.timeline_auto INTEGER NOT NULL DEFAULT 1` (plain ALTER,
+  no extension dep — safe in the numbered ledger) + `timeline_capture_state(
+  session_id PRIMARY KEY, last_captured_message_id, last_captured_at)`.
+- **Pending selection (H2/H4/M5)** — one grouped query: sessions whose
+  `MAX(messages.created_at) < now-15min`, that have a message id beyond their
+  cursor with **substantive** new content, whose project `timeline_auto=1` and is
+  not hidden/bot. At distill time re-check `!isAiRunning(sessionId)` AND queue
+  depth 0 (select→distill race).
+- **Roll-up**: at date change, finalize yesterday across projects via the SAME
+  path.
+- **Keyed single-flight (H3)**: an in-process `Map<`${slug}:${date}`, Promise>`
+  mutex around read-modify-write of the day file (blind `writeEntry` overwrite is
+  a data-loss path; both idle + roll-up share the lock; roll-up skips locked).
+- **Cost bound (M1)**: per-(project,date) min re-distill interval (~30–60 min) +
+  a substantive-delta floor (skip if < N new non-trivial chars since cursor).
+- **Crash/delete (M3)**: advance every contributing session's cursor in ONE
+  transaction ONLY after `writeEntry` succeeds → resumable; tolerate a
+  deleted-mid-distill session (read transcript defensively, skip if gone).
+- Wired in `app.ts` boot, degrade-safe, `NODE_ENV!=='test'`.
+
+**2D Toggle + API + view** (NO bot wiring — deferred per H1): per-project
+`timeline_auto` toggle (UI + API), `GET` timeline (project / date-range /
+global-date-view), `POST` manual capture (→ same `distillDay`). UI maps
+slug→project name (L3).
+
+**Out of Phase 2 (L1):** vector-indexing timeline entries into the Phase-1 corpus
+— a small fast-follow once the writer is stable (the `doc_vectors.source`
+discriminator already supports it).
+
+**De-risk order:** (1) 2C state model + keyed mutex + `isAiRunning` guard, tested
+with a FAKE runAgent + isolated DB/home (no LLM/auth); (2) 2B git boundary; (3)
+real SDK distill (verified in prod like the gardener).

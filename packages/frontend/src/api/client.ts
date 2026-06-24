@@ -155,6 +155,29 @@ export const api = {
       `/api/sessions/${sessionId}/context`,
     ),
 
+  // Work Timeline (L1)
+  listTimelineDates: (projectId: string) =>
+    request<{ dates: string[] }>(`/api/timeline/projects/${projectId}`),
+  getTimelineEntry: (projectId: string, date: string) =>
+    request<{ date: string; markdown: string | null }>(
+      `/api/timeline/projects/${projectId}/entries/${date}`,
+    ),
+  getTimelineForDate: (date: string) =>
+    request<{
+      date: string;
+      entries: { slug: string; projectName: string; markdown: string }[];
+    }>(`/api/timeline/date/${date}`),
+  setProjectTimelineAuto: (projectId: string, auto: boolean) =>
+    request<{ ok: true; auto: boolean }>(`/api/timeline/projects/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ auto }),
+    }),
+  captureTimeline: (projectId: string, date?: string) =>
+    request<{ ok: true; date: string; written: boolean }>(
+      `/api/timeline/projects/${projectId}/capture`,
+      { method: 'POST', body: JSON.stringify(date ? { date } : {}) },
+    ),
+
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
