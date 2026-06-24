@@ -17,6 +17,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "@fastify/cors": "^10.0.2",
     "@fastify/websocket": "^11.0.2",
+    "@huggingface/transformers": "^4.2.0",
     "@pinloom/mcp-server": "workspace:*",
     "@pinloom/shared": "workspace:*",
     "better-sqlite3": "^12.9.0",
