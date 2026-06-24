@@ -1,7 +1,7 @@
 # pinloom Knowledge System v3 — the automatic knowledge flywheel
 
-Status: **design / vision — NO code yet, decisions PENDING.** Successor to
-`knowledge-system-v2.md`. Reference-driven by
+Status: **design locked; Phase 1 in build** (build plan + spike results +
+adversarial-review fixes in §11). Successor to `knowledge-system-v2.md`. Reference-driven by
 [Tencent/WeKnora](https://github.com/Tencent/WeKnora) and the broader
 "personal second brain" category (Khoj, Obsidian Smart Connections,
 Karpathy-style self-growing LLM wiki, Graphify / codebase-memory). This doc
@@ -223,3 +223,90 @@ single-user local app does not need.
   / [codebase-memory MCP](https://github.com/DeusData/codebase-memory-mcp) —
   codebase → queryable knowledge graph; ADRs / decisions persisted across
   sessions; MCP as the standard transport.
+
+---
+
+## 11. Phase 1 build plan — semantic corpus (revised after adversarial review)
+
+**Spike results (empirically verified, isolated scratch, prod untouched):**
+- `sqlite-vec` (npm, prebuilt `vec0.dylib` darwin-arm64) loads into the
+  project's better-sqlite3 12.9.0 under Node 24 via `db.loadExtension()`; vec0
+  KNN (`WHERE embedding MATCH ? ORDER BY distance`) ranks correctly.
+- In-process `Xenova/multilingual-e5-small` (transformers.js) embeds Korean,
+  384-dim, ranking correct but **thin margin** (0.831 vs 0.819) → in-process is
+  "good enough for ranking"; Ollama/bge-m3 is the quality upgrade (fast-follow).
+- vec0 **DELETE by PK works**; vec0 **does NOT support UPSERT** → re-embed must
+  be **delete+insert**; an `AFTER DELETE ON messages` **trigger CAN delete from
+  the vec0 table** (orphan eviction works).
+
+**Production-safety invariants (non-negotiable — prod is live):**
+- **Vec table is created LAZILY after `loadExtension` succeeds, NEVER via the
+  numbered-migration ledger** (H1). A `CREATE VIRTUAL TABLE vec0` inside a
+  numbered migration would throw when the extension is absent → roll back →
+  unrecorded → re-throw every boot = prod startup crash. Instead: `loadExtension`
+  in `connection.ts` inside try/catch → `vectorSearchAvailable` flag; when true,
+  run an idempotent `ensureVecTables()` (CREATE IF NOT EXISTS) at startup.
+- **Inference runs in a `worker_thread`** (H2). better-sqlite3 is synchronous and
+  one stall serializes every HTTP/WS handshake (see `event-loop-monitor.ts`).
+  Model lives in a worker (text in / vectors out); vec0 writes stay on the main
+  connection but **batched with `setImmediate` yields**, concurrency cap 1, and
+  the backfill yields to live traffic.
+- **Model pre-staged into the HF cache + `allowRemoteModels=false` /
+  localFilesOnly** (H5) so the server never hits the network on a hot path.
+  Provider is **lazy-loaded** so a broken/missing native addon throws into the
+  degrade-to-FTS branch, never at import time. Verify `onnxruntime-node` resolves
+  under the **pnpm workspace** (not a flat npm install) before adding to deps.
+- **Any failure (extension, model, worker) → degrade to pure lexical FTS** =
+  exactly today's behavior. Search must never regress or error.
+- Verify on isolated ports/test DB; never rebuild prod dist; deploy on user's
+  timing (standard `pnpm build` + `launchctl kickstart -k`).
+
+**Schema (source-agnostic from day 1 — M5):** vectors live in SQLite keyed by a
+stable text id + a `source` discriminator, so wiki/timeline slot in later with NO
+vec rebuild. Phase 1 indexes **messages only** (parity with today's ⌘K), but the
+table is `doc_vectors(doc_id TEXT PRIMARY KEY, source TEXT, embedding float[384])`
+(or per-source vec tables behind one interface). A meta row tracks
+`(model_id, dim)`; a dim change is an **explicit, surfaced re-embed**, not a
+silent boot-time drop (M3).
+
+**Step A (#5) — Embedding provider interface + in-process impl**
+- `EmbeddingProvider { id, dim, embedQuery(text), embedPassage(text) }` — note
+  the **e5 asymmetry: store with `passage:`, search with `query:`** (L1, unit-
+  tested both ways).
+- `InProcessProvider` (transformers.js, multilingual-e5-small, mean-pool+
+  normalize, lazy singleton in a worker_thread, length cap, localFilesOnly).
+- `getEmbeddingProvider()` → provider | null (null ⇒ degrade). Tests mock the
+  model.
+
+**Step B (#6) — Vector store + indexing + backfill**
+- `connection.ts`: load sqlite-vec (try/catch → flag); `ensureVecTables()` lazy.
+- Index on the **content-bearing UPDATE boundary** (H3): enqueue from the same
+  predicate the FTS `_ai`/`_au` triggers use (`role IN ('user','assistant') AND
+  content <> ''`) — NOT on the empty INSERT (`closeStream` writes real content
+  later). Re-embed = **delete+insert** (no upsert).
+- **`AFTER DELETE ON messages` trigger** → `DELETE FROM <vec> WHERE doc_id=old.id`
+  (H4) so session-delete cascade evicts vectors.
+- Backfill: background batch, cursor = `messages.id NOT IN (SELECT doc_id FROM
+  <vec> WHERE source='message')`, re-evaluated per batch → resumable across
+  restarts (M4); throttled, yields to live traffic.
+- Confirm `db-export.ts`/`db-import.ts` don't open a second `new Database` that
+  would lack the extension (L3).
+
+**Step C (#7) — Hybrid search (RRF)**
+- `vectorSearch(queryEmb)` → KNN → `messages.id` + distance.
+- `searchMessages` fuses existing FTS + vector by **RRF (k=60)**, deduped by
+  `messages.id` across the two id spaces (M2). When vector is unavailable →
+  exactly today's FTS path (no regression).
+- **Short-Korean LIKE-only path (M1):** that path has no bm25 ranking (recency
+  sort), so do NOT feed it into RRF as a ranked list — return vector results when
+  available, else the LIKE list as today (decided, not implicit).
+- Excerpts/highlights unchanged; wire shape unchanged.
+
+**Step D (#8) — Verify + review + PR**
+- per-package `tsc --noEmit`, full backend tests, isolated E2E: (a) a semantic
+  hit a keyword query misses, AND (b) a **keyword-query non-regression** guard vs
+  today's pure-FTS ranking (L2). Adversarial review; fix; PR (incl. this doc).
+
+**Review verdict:** REVISE→build; all HIGH (H1 lazy vec-table, H2 worker_thread,
+H3 update-boundary, H4 delete-trigger, H5 install/model staging) and MED folded
+in above. Sound to build.
