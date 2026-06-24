@@ -41,6 +41,8 @@ import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
 import { sweepStrandedDispatchesOnBoot } from './services/dispatches.js';
 import { startEventLoopMonitor } from './services/event-loop-monitor.js';
+import { initEmbeddings } from './services/embeddings/index.js';
+import { startMessageIndexer, stopMessageIndexer } from './services/message-indexer.js';
 
 // Guard the WebSocket routes against cross-site hijacking. The terminal
 // socket is effectively local RCE, so a malicious page the user happens to
@@ -83,6 +85,7 @@ export async function createApp() {
   // spawned. app.close() awaits this, and server.ts's shutdown awaits
   // app.close() (within its 3s force-exit budget).
   app.addHook('onClose', async () => {
+    stopMessageIndexer();
     await killAllTerminals();
     await killAllAgentTerminals();
     await killAllCodexTerminals();
@@ -104,6 +107,16 @@ export async function createApp() {
   const stranded = sweepStrandedDispatchesOnBoot();
   if (stranded > 0) {
     app.log.info(`[dispatches] swept ${stranded} stranded dispatch(es) on boot`);
+  }
+
+  // Semantic search (Phase 1): warm the embedding model in the background and
+  // start the message indexer's periodic sweep. Both are degrade-safe no-ops if
+  // the model/extension can't load — search falls back to lexical FTS. Skipped
+  // under unit tests (no model download); the isolated E2E can opt out via
+  // PINLOOM_EMBEDDINGS=off.
+  if (process.env.NODE_ENV !== 'test') {
+    initEmbeddings();
+    startMessageIndexer();
   }
 
   await app.register(cors, { origin: true });

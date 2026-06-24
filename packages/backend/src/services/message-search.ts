@@ -19,6 +19,9 @@
 
 import type { Database } from 'better-sqlite3';
 import type { MessageRole, MessageSearchResult } from '@pinloom/shared';
+import { isVectorAvailable } from '../db/connection.js';
+import type { EmbeddingProvider } from './embeddings/types.js';
+import { MESSAGE_VECTORS, knn } from './vector-store.js';
 
 const TRIGRAM_MIN = 3;
 const DEFAULT_LIMIT = 50;
@@ -180,21 +183,130 @@ export function searchMessages(
 
   const rows = db.prepare(sql).all(...params) as Row[];
   const tokens = [...matchTokens, ...likeTokens];
-  return rows.map((r) => {
-    const { excerpt, highlights } = buildExcerpt(r.content, tokens);
-    return {
-      messageId: r.id,
-      sessionId: r.session_id,
-      sessionTitle: r.session_title,
-      projectId: r.project_id,
-      projectName: r.project_name,
-      // Safe cast: tool/system rows can't reach here — the MATCH path only sees
-      // messages_fts (which migration 29 populates with user/assistant rows
-      // only), and the LIKE path filters role IN ('user','assistant').
-      role: r.role as MessageRole,
-      createdAt: r.created_at,
-      excerpt,
-      highlights,
-    };
+  return rows.map((r) => toResult(r, tokens));
+}
+
+function toResult(r: Row, tokens: string[]): MessageSearchResult {
+  const { excerpt, highlights } = buildExcerpt(r.content, tokens);
+  return {
+    messageId: r.id,
+    sessionId: r.session_id,
+    sessionTitle: r.session_title,
+    projectId: r.project_id,
+    projectName: r.project_name,
+    // Safe cast: tool/system rows can't reach here — the MATCH path only sees
+    // messages_fts (user/assistant rows), the LIKE path filters role, and the
+    // vector path only indexes user/assistant content rows.
+    role: r.role as MessageRole,
+    createdAt: r.created_at,
+    excerpt,
+    highlights,
+  };
+}
+
+// Fetch + hydrate specific message ids (preserving the given order), applying
+// the same role / project / non-mirror filters search uses. Used to hydrate the
+// fused (vector ∪ FTS) id list.
+function hydrateByIds(
+  db: Database,
+  ids: string[],
+  tokens: string[],
+  opts: SearchOptions,
+): MessageSearchResult[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const params: unknown[] = [...ids];
+  let where = `m.id IN (${placeholders}) AND m.role IN ('user','assistant') AND m.source_message_id IS NULL`;
+  if (opts.projectId) {
+    where += ' AND s.project_id = ?';
+    params.push(opts.projectId);
+  }
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.session_id, m.role, m.content, m.created_at,
+              s.title AS session_title, s.project_id, p.name AS project_name
+       FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       JOIN projects p ON p.id = s.project_id
+       WHERE ${where}`,
+    )
+    .all(...params) as Row[];
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  // Preserve the fused ranking order; drop ids whose row was filtered out.
+  return ids
+    .map((id) => byId.get(id))
+    .filter((r): r is Row => r !== undefined)
+    .map((r) => toResult(r, tokens));
+}
+
+// Reciprocal Rank Fusion: merge several ranked id lists into one. A doc's score
+// is Σ 1/(k + rank) across the lists it appears in (rank is 0-based here). k=60
+// is the standard constant. Deduped by id.
+const RRF_K = 60;
+export function rrfFuse(lists: string[][]): string[] {
+  const score = new Map<string, number>();
+  for (const list of lists) {
+    list.forEach((id, i) => {
+      score.set(id, (score.get(id) ?? 0) + 1 / (RRF_K + i + 1));
+    });
+  }
+  return [...score.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+}
+
+/**
+ * Hybrid search: lexical FTS fused with semantic vector KNN (docs/knowledge-
+ * system-v3.md §11 Step C). Falls back to EXACTLY the FTS-only `searchMessages`
+ * path when no embedding provider is ready or the vector extension is absent —
+ * so this never regresses the keyword case. `provider` is the warm embedding
+ * provider (or null to force lexical).
+ */
+export async function searchMessagesHybrid(
+  db: Database,
+  rawQuery: string,
+  opts: SearchOptions = {},
+  provider: EmbeddingProvider | null = null,
+): Promise<MessageSearchResult[]> {
+  const { matchTokens, likeTokens } = tokenizeQuery(rawQuery);
+  if (matchTokens.length === 0 && likeTokens.length === 0) return [];
+  const limit = clampLimit(opts.limit);
+  const tokens = [...matchTokens, ...likeTokens];
+
+  // FTS arm (today's behavior). Pull a slightly larger pool to fuse against.
+  const fts = searchMessages(db, rawQuery, {
+    ...opts,
+    limit: Math.min(Math.max(limit * 2, limit), MAX_LIMIT),
   });
+
+  // Vector arm — only when a provider is warm and the extension loaded.
+  let vecIds: string[] = [];
+  if (provider && isVectorAvailable()) {
+    try {
+      const qvec = await provider.embedQuery(rawQuery);
+      // Over-fetch so the project filter / fusion still has candidates.
+      const k = Math.min(opts.projectId ? limit * 8 : limit * 4, 300);
+      vecIds = knn(db, MESSAGE_VECTORS, qvec, Math.max(k, limit)).map((h) => h.docId);
+    } catch {
+      vecIds = [];
+    }
+  }
+
+  // No vector signal → exactly the FTS-only result (degrade / non-regression).
+  if (vecIds.length === 0) return fts.slice(0, limit);
+
+  // M1: an only-short-Korean query has NO bm25 ranking (the FTS arm is a
+  // recency-sorted LIKE list, not a relevance order), so don't pollute RRF with
+  // it — prefer the semantic ranking; fall back to the FTS list if hydration is
+  // empty (e.g. all vector hits filtered out by project scope).
+  if (matchTokens.length === 0) {
+    const semantic = hydrateByIds(db, vecIds, tokens, opts).slice(0, limit);
+    return semantic.length > 0 ? semantic : fts.slice(0, limit);
+  }
+
+  // Both arms are relevance-ranked → RRF fuse, hydrate, THEN slice. Vector KNN
+  // is global (not project-scoped), so out-of-project ids drop during hydration;
+  // slicing AFTER hydration keeps the count from dipping below the FTS-only path
+  // on a project-scoped query (the fused candidate pool is bounded — fts ≤
+  // limit*2 plus the KNN top-k — so hydrating it all is cheap).
+  const fusedIds = rrfFuse([fts.map((r) => r.messageId), vecIds]);
+  return hydrateByIds(db, fusedIds, tokens, opts).slice(0, limit);
 }
