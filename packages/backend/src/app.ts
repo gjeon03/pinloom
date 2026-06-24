@@ -43,6 +43,7 @@ import { sweepStrandedDispatchesOnBoot } from './services/dispatches.js';
 import { startEventLoopMonitor } from './services/event-loop-monitor.js';
 import { initEmbeddings } from './services/embeddings/index.js';
 import { startMessageIndexer, stopMessageIndexer } from './services/message-indexer.js';
+import { startTimelineCapture, stopTimelineCapture } from './services/timeline/capture.js';
 
 // Guard the WebSocket routes against cross-site hijacking. The terminal
 // socket is effectively local RCE, so a malicious page the user happens to
@@ -86,6 +87,7 @@ export async function createApp() {
   // app.close() (within its 3s force-exit budget).
   app.addHook('onClose', async () => {
     stopMessageIndexer();
+    stopTimelineCapture();
     await killAllTerminals();
     await killAllAgentTerminals();
     await killAllCodexTerminals();
@@ -117,6 +119,10 @@ export async function createApp() {
   if (process.env.NODE_ENV !== 'test') {
     initEmbeddings();
     startMessageIndexer();
+    // Work Timeline (Phase 2): background sweep distills idle sessions' day
+    // activity into per-project journal entries. Out of the runner hot path,
+    // degrade-safe (a distill failure is caught per-sweep).
+    startTimelineCapture();
   }
 
   await app.register(cors, { origin: true });
