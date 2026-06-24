@@ -35,6 +35,9 @@ export function TimelinePage() {
   const [projectId, setProjectIdRaw] = useState<string | null>(() => load('pinloom:timeline:project'));
   const [projDate, setProjDateRaw] = useState<string | null>(() => load('pinloom:timeline:date'));
   const [date, setDate] = useState<string>(localToday());
+  // Which day Capture now / Capture all target (default today; pick a past day
+  // to backfill a date the auto-sweep hasn't reached yet, or regenerate one).
+  const [captureDate, setCaptureDate] = useState<string>(localToday());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -124,8 +127,8 @@ export function TimelinePage() {
     setBusy(true);
     setNotice('Capturing…');
     try {
-      const r = await api.captureTimeline(projectId);
-      setNotice(r.written ? `Captured ${r.date}` : 'Nothing new to capture');
+      const r = await api.captureTimeline(projectId, captureDate);
+      setNotice(r.written ? `Captured ${r.date}` : 'Nothing to capture');
       void globalMutate('timeline:index');
       void globalMutate(['timeline:entry', projectId, r.date]);
       if (r.written) setProjDate(r.date);
@@ -140,7 +143,7 @@ export function TimelinePage() {
   async function captureAll() {
     if (capturingAll) return;
     try {
-      await api.captureTimelineAll();
+      await api.captureTimelineAll(captureDate);
       void globalMutate('timeline:capture-status'); // kick off polling immediately
     } catch (e) {
       setNotice(`Failed: ${String(e)}`);
@@ -153,7 +156,7 @@ export function TimelinePage() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3 flex-wrap">
+      <header className="border-b border-[var(--color-border)] pl-4 pr-60 py-2 flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <CalendarDays size={16} /> Work Timeline
         </div>
@@ -181,7 +184,7 @@ export function TimelinePage() {
             <button
               onClick={() => void captureNow()}
               disabled={busy}
-              title={`Capture today's work for ${selected.projectName}`}
+              title={`Capture ${captureDate} for ${selected.projectName}`}
               className={captureBtnCls}
             >
               <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> Capture now
@@ -196,10 +199,18 @@ export function TimelinePage() {
             className="text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1"
           />
         )}
+        <input
+          type="date"
+          value={captureDate}
+          max={localToday()}
+          title="Which day Capture targets — pick a past day to backfill it"
+          onChange={(e) => setCaptureDate(e.target.value)}
+          className="text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1"
+        />
         <button
           onClick={() => void captureAll()}
           disabled={busy || capturingAll}
-          title="Capture today's work for every project"
+          title={`Capture ${captureDate} for every project`}
           className={captureBtnCls}
         >
           <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
