@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import type { RecapSource } from '../api/client.js';
 
 // Module-level store so Recap results + in-flight state survive navigating away
 // and back (RecapPage unmounts on route change). The async ask/generate update
@@ -7,14 +8,7 @@ import { useSyncExternalStore } from 'react';
 
 export type AskResult = {
   answer: string;
-  sources: {
-    n: number;
-    messageId: string;
-    sessionId: string;
-    sessionTitle: string | null;
-    projectName: string;
-    createdAt: string;
-  }[];
+  sources: RecapSource[];
 } | null;
 
 export type Lang = 'ko' | 'en';

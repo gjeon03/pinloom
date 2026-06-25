@@ -23,6 +23,19 @@ import type {
   UserEnvVarWithValue,
 } from '@pinloom/shared';
 
+// A cited source in a Recap answer — a past message OR a work-timeline entry.
+export type RecapSource =
+  | {
+      kind: 'message';
+      n: number;
+      messageId: string;
+      sessionId: string;
+      sessionTitle: string | null;
+      projectName: string;
+      createdAt: string;
+    }
+  | { kind: 'timeline'; n: number; projectId: string; projectName: string; date: string };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const hasBody = init?.body != null;
   const res = await fetch(path, {
@@ -159,14 +172,7 @@ export const api = {
   recapAsk: (question: string, projectId?: string, language?: 'ko' | 'en') =>
     request<{
       answer: string;
-      sources: {
-        n: number;
-        messageId: string;
-        sessionId: string;
-        sessionTitle: string | null;
-        projectName: string;
-        createdAt: string;
-      }[];
+      sources: RecapSource[];
     }>('/api/recap/ask', {
       method: 'POST',
       body: JSON.stringify({ question, projectId, language }),

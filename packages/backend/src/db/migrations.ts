@@ -592,6 +592,23 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 34,
+    // Timeline semantic indexing bookkeeping (knowledge-system-v3 fast-follow).
+    // The timeline ENTRIES (markdown files) get vector-indexed into the lazily-
+    // created `timeline_vectors` vec0 table so search/Recap span them too. This
+    // PLAIN table tracks the content hash last embedded per entry so re-distilled
+    // entries re-embed and unchanged ones are skipped. doc_id = `${projectId}:${date}`
+    // (projectId is the durable key — the on-disk slug is rename-unstable). No
+    // extension dependency here → boot-safe even when sqlite-vec can't load.
+    sql: `
+      CREATE TABLE IF NOT EXISTS timeline_index_state (
+        doc_id        TEXT PRIMARY KEY,
+        content_hash  TEXT NOT NULL,
+        indexed_at    TEXT
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
