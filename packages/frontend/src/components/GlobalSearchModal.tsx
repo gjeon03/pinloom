@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import useSWR from 'swr';
 import { Search, X } from 'lucide-react';
 import type { MessageSearchResult } from '@pinloom/shared';
-import { api } from '../api/client.js';
+import { api, type TimelineSearchHit } from '../api/client.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { gotoSessionTab } from '../utils/gotoSession.js';
@@ -68,11 +68,13 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
 
   const debounced = useDebounce(query.trim(), DEBOUNCE_MS);
   const active = debounced.length >= MIN_CHARS;
-  const { data: results = [], isLoading } = useSWR(
+  const { data, isLoading } = useSWR(
     active ? cacheKeys.search(debounced, null) : null,
     () => api.search(debounced, { limit: 30 }),
     { keepPreviousData: true },
   );
+  const results = data?.results ?? [];
+  const timeline = data?.timeline ?? [];
 
   // Reset the cursor on a NEW query (not on every `results` identity change —
   // a background revalidation must not snap the selection back to 0).
@@ -93,6 +95,18 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
 
   function open(result: MessageSearchResult) {
     gotoSessionTab(navigate, result.projectId, result.sessionId);
+    onClose();
+  }
+
+  function openTimeline(t: TimelineSearchHit) {
+    // Deep-link: preselect the project + date the Timeline page restores from.
+    try {
+      localStorage.setItem('pinloom:timeline:project', t.projectId);
+      localStorage.setItem('pinloom:timeline:date', t.date);
+    } catch {
+      // ignore
+    }
+    navigate('/timeline');
     onClose();
   }
 
@@ -118,10 +132,13 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
   const status = useMemo(() => {
     if (!active)
       return `Type at least ${MIN_CHARS} characters to search your history`;
-    if (isLoading && results.length === 0) return 'Searching…';
-    if (results.length === 0) return 'No matching messages';
-    return `${results.length} result${results.length === 1 ? '' : 's'}`;
-  }, [active, isLoading, results.length]);
+    if (isLoading && results.length === 0 && timeline.length === 0) return 'Searching…';
+    const total = results.length + timeline.length;
+    if (total === 0) return 'No matches';
+    return `${results.length} message${results.length === 1 ? '' : 's'}${
+      timeline.length > 0 ? ` · ${timeline.length} timeline` : ''
+    }`;
+  }, [active, isLoading, results.length, timeline.length]);
 
   return (
     <div
@@ -200,6 +217,30 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
               </div>
             </button>
           ))}
+
+          {timeline.length > 0 && (
+            <div className="mt-1 border-t border-[var(--color-border)] pt-1">
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+                Work timeline
+              </div>
+              {timeline.map((t) => (
+                <button
+                  key={`${t.projectId}:${t.date}`}
+                  onClick={() => openTimeline(t)}
+                  className="flex w-full flex-col gap-0.5 px-3 py-2 text-left hover:bg-[var(--color-surface-3)]"
+                >
+                  <div className="flex items-center gap-2 text-[11px] text-[var(--color-ink-muted)]">
+                    <span className="truncate font-medium text-[var(--color-ink)]">
+                      🗓 {t.projectName}
+                    </span>
+                    <span aria-hidden>·</span>
+                    <span className="tabular-nums">{t.date}</span>
+                  </div>
+                  <div className="line-clamp-2 text-xs text-[var(--color-ink)]">{t.excerpt}</div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-ink-muted)]">

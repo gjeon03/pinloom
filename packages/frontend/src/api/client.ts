@@ -36,6 +36,14 @@ export type RecapSource =
     }
   | { kind: 'timeline'; n: number; projectId: string; projectName: string; date: string };
 
+// A timeline entry hit from ⌘K search (semantic-only).
+export interface TimelineSearchHit {
+  projectId: string;
+  projectName: string;
+  date: string;
+  excerpt: string;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const hasBody = init?.body != null;
   const res = await fetch(path, {
@@ -98,9 +106,9 @@ export const api = {
     const params = new URLSearchParams({ q: query });
     if (opts?.projectId) params.set('projectId', opts.projectId);
     if (opts?.limit) params.set('limit', String(opts.limit));
-    return request<{ results: MessageSearchResult[] }>(
+    return request<{ results: MessageSearchResult[]; timeline: TimelineSearchHit[] }>(
       `/api/search?${params}`,
-    ).then((r) => r.results);
+    );
   },
 
   // Reusable prompt templates (global, manually ordered).
