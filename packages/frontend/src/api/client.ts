@@ -150,6 +150,7 @@ export const api = {
     request<{
       nodes: { id: string; title: string }[];
       edges: { source: string; target: string; weight: number }[];
+      truncated: boolean;
     }>('/api/wiki/graph'),
 
   // Wiki gardener proposals (Phase 2).

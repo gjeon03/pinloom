@@ -11,10 +11,15 @@ import { WIKI_VECTORS, readWikiPage, wikiTitle } from './wiki-indexer.js';
 export interface WikiGraph {
   nodes: { id: string; title: string }[];
   edges: { source: string; target: string; weight: number }[];
+  /** True when the wiki exceeded MAX_NODES and the graph was capped. */
+  truncated: boolean;
 }
 
 const TOP_K = 4; // neighbours kept per node
 const MIN_SIM = 0.6; // cosine floor — below this, pages aren't meaningfully related
+// Bound the O(n²) cosine + the synchronous readFileSync-per-node so a large wiki
+// can't stall the event loop on this request-thread endpoint (review MED-2).
+const MAX_NODES = 400;
 
 function cosine(a: Float32Array, b: Float32Array): number {
   let dot = 0;
@@ -29,11 +34,19 @@ function cosine(a: Float32Array, b: Float32Array): number {
 }
 
 export function buildWikiGraph(db: Database, home?: string): WikiGraph {
-  const vecs = readVectors(db, WIKI_VECTORS);
-  const nodes = vecs.map((v) => {
-    const content = readWikiPage(v.docId, home);
-    return { id: v.docId, title: content ? wikiTitle(content, v.docId) : v.docId };
-  });
+  const all = readVectors(db, WIKI_VECTORS);
+  const truncated = all.length > MAX_NODES;
+  // Resolve titles + drop pages deleted since indexing (their deep-link would
+  // 404 and they'd be dangling graph nodes — review LOW-3). GC removes the vector
+  // on the next index pass; here we just don't surface a ghost.
+  const vecs = all
+    .slice(0, MAX_NODES)
+    .map((v) => {
+      const content = readWikiPage(v.docId, home); // one read per node
+      return content ? { docId: v.docId, vec: v.vec, title: wikiTitle(content, v.docId) } : null;
+    })
+    .filter((v): v is { docId: string; vec: Float32Array; title: string } => v !== null);
+  const nodes = vecs.map((v) => ({ id: v.docId, title: v.title }));
 
   // Top-K neighbours per node, collapsed to undirected edges (keep the max weight
   // when both directions propose the same pair).
@@ -55,5 +68,5 @@ export function buildWikiGraph(db: Database, home?: string): WikiGraph {
       if (!prev || s > prev.weight) edges.set(key, { source, target, weight: s });
     }
   }
-  return { nodes, edges: [...edges.values()] };
+  return { nodes, edges: [...edges.values()], truncated };
 }

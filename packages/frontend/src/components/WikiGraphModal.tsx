@@ -83,7 +83,7 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
           <div className="text-sm font-semibold">
             Wiki graph
             <span className="ml-2 text-xs font-normal text-[var(--color-ink-muted)]">
-              related notes by meaning
+              related notes by meaning{data?.truncated ? ' · showing first 400' : ''}
             </span>
           </div>
           <button

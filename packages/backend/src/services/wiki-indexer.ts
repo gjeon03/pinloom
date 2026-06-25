@@ -31,15 +31,22 @@ function pagesDir(home?: string): string {
   return path.join(home ?? os.homedir(), '.pinloom', 'wiki', 'pages');
 }
 
-/** Slugs (filename sans .md) of the flat wiki pages. Throws on a real read error
- *  (so the indexer can refuse to GC); returns [] for a missing dir (no wiki yet). */
+/** Page slugs = relPath sans `.md` (flat `foo.md` → `foo`; promoted topic dir
+ *  `topic/index.md` → `topic/index`). Matches wiki-reader's promoted-dir model so
+ *  the corpus never disagrees with the dashboard. Throws on a real read error (so
+ *  the indexer can refuse to GC); returns [] for a missing dir (no wiki yet). */
 export function listWikiSlugs(home?: string): string[] {
   const dir = pagesDir(home);
   if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => f.endsWith('.md'))
-    .map((f) => f.slice(0, -3))
-    .sort();
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) {
+      if (existsSync(path.join(dir, e.name, 'index.md'))) out.push(`${e.name}/index`);
+    } else if (e.name.endsWith('.md')) {
+      out.push(e.name.slice(0, -3));
+    }
+  }
+  return out.sort();
 }
 
 export function readWikiPage(slug: string, home?: string): string | null {

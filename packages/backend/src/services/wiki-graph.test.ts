@@ -45,6 +45,7 @@ describe.skipIf(!available)('buildWikiGraph', () => {
     const g = buildWikiGraph(db, home);
     expect(g.nodes.map((n) => n.id).sort()).toEqual(['a', 'b', 'c']);
     expect(g.nodes.find((n) => n.id === 'a')?.title).toBe('Page A'); // title from heading
+    expect(g.truncated).toBe(false);
     // exactly one undirected edge a↔b; c connects to nobody
     expect(g.edges).toHaveLength(1);
     const e = g.edges[0];
@@ -52,8 +53,17 @@ describe.skipIf(!available)('buildWikiGraph', () => {
     expect(e.weight).toBeGreaterThan(0.6);
   });
 
+  it('drops a node whose page file was deleted since indexing (no ghost)', async () => {
+    upsertVector(db, WIKI_VECTORS, 'live', new Float32Array([1, 0, 0]));
+    upsertVector(db, WIKI_VECTORS, 'ghost', new Float32Array([1, 0.01, 0]));
+    await writePage(home, 'live', '# Live'); // 'ghost' has a vector but NO file
+    const g = buildWikiGraph(db, home);
+    expect(g.nodes.map((n) => n.id)).toEqual(['live']); // ghost dropped
+    expect(g.edges).toHaveLength(0); // its edge pruned with it
+  });
+
   it('is empty + safe when nothing is indexed', () => {
     db.exec(`DELETE FROM ${WIKI_VECTORS};`);
-    expect(buildWikiGraph(db, home)).toEqual({ nodes: [], edges: [] });
+    expect(buildWikiGraph(db, home)).toEqual({ nodes: [], edges: [], truncated: false });
   });
 });

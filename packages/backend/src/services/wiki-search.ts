@@ -18,7 +18,7 @@ const EXCERPT_LEN = 160;
 
 /** Strip YAML frontmatter + headings/markers so the teaser is real prose. */
 function teaser(content: string): string {
-  const body = content.replace(/^---\n[\s\S]*?\n---\n/, '');
+  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
   return (
     body
       .split('\n')
