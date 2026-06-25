@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { SWRConfig, mutate } from 'swr';
-import { Search } from 'lucide-react';
+import { FileText, Search } from 'lucide-react';
 import { AppShell } from './components/AppShell.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
 import { GlobalSearchModal } from './components/GlobalSearchModal.js';
+import { PromptTemplatesPanel } from './components/PromptTemplatesPanel.js';
 import { BotLauncher } from './components/BotLauncher.js';
 import { NotepadToggle, NotepadPanel } from './components/Notepad.js';
 import { ChatDoneNotifier } from './components/ChatDoneNotifier.js';
@@ -37,6 +38,7 @@ const swrConfig = {
 export function App() {
   const [notepadOpen, setNotepadOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
 
   // Global ⌘K / Ctrl+K opens history search from anywhere.
   useEffect(() => {
@@ -82,6 +84,15 @@ export function App() {
               className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
             >
               <Search size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setTemplatesOpen(true)}
+              title="Prompt templates"
+              aria-label="Prompt templates"
+              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+            >
+              <FileText size={16} />
             </button>
             <BotLauncher />
             <NotepadToggle
@@ -177,6 +188,9 @@ export function App() {
             />
           </Routes>
           </div>
+          {templatesOpen && (
+            <PromptTemplatesPanel onClose={() => setTemplatesOpen(false)} />
+          )}
           {notepadOpen && <NotepadPanel onClose={() => setNotepadOpen(false)} />}
         </div>
       </div>
