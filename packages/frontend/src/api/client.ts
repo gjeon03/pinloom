@@ -34,13 +34,21 @@ export type RecapSource =
       projectName: string;
       createdAt: string;
     }
-  | { kind: 'timeline'; n: number; projectId: string; projectName: string; date: string };
+  | { kind: 'timeline'; n: number; projectId: string; projectName: string; date: string }
+  | { kind: 'wiki'; n: number; slug: string; title: string };
 
 // A timeline entry hit from ⌘K search (semantic-only).
 export interface TimelineSearchHit {
   projectId: string;
   projectName: string;
   date: string;
+  excerpt: string;
+}
+
+// A wiki page hit from ⌘K search (semantic-only).
+export interface WikiSearchHit {
+  slug: string;
+  title: string;
   excerpt: string;
 }
 
@@ -106,9 +114,11 @@ export const api = {
     const params = new URLSearchParams({ q: query });
     if (opts?.projectId) params.set('projectId', opts.projectId);
     if (opts?.limit) params.set('limit', String(opts.limit));
-    return request<{ results: MessageSearchResult[]; timeline: TimelineSearchHit[] }>(
-      `/api/search?${params}`,
-    );
+    return request<{
+      results: MessageSearchResult[];
+      timeline: TimelineSearchHit[];
+      wiki: WikiSearchHit[];
+    }>(`/api/search?${params}`);
   },
 
   // Reusable prompt templates (global, manually ordered).

@@ -29,6 +29,11 @@ import {
   gcTimelineVectors,
   runTimelineIndexPass,
 } from './timeline/indexer.js';
+import {
+  __resetWikiIndexerForTest,
+  gcWikiVectors,
+  runWikiIndexPass,
+} from './wiki-indexer.js';
 
 const BATCH = 32;
 const INTERVAL_MS = 5000;
@@ -116,11 +121,13 @@ async function tick(): Promise<void> {
     if (processed > 0) {
       gcOrphans(db, MESSAGE_VECTORS, 'SELECT id FROM messages');
     }
-    // Same single-flight + same warm provider: index the Work Timeline (L1) too,
-    // so search/Recap span the curated journal. Runs after messages to keep the
-    // chat hot path first; GC is internally guarded against FS flakiness.
+    // Same single-flight + same warm provider: index the Work Timeline (L1) and
+    // wiki (L2) too, so search/Recap span the whole corpus. After messages to
+    // keep the chat hot path first; each GC is guarded against FS flakiness.
     const tl = await runTimelineIndexPass(db, provider);
     gcTimelineVectors(db, tl);
+    const wk = await runWikiIndexPass(db, provider);
+    gcWikiVectors(db, wk);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[vector] index pass failed:', err instanceof Error ? err.message : err);
@@ -146,4 +153,5 @@ export function stopMessageIndexer(): void {
   running = false;
   schemaReady = false;
   __resetTimelineIndexerForTest();
+  __resetWikiIndexerForTest();
 }

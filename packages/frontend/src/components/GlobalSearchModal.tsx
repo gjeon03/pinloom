@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import useSWR from 'swr';
 import { Search, X } from 'lucide-react';
 import type { MessageSearchResult } from '@pinloom/shared';
-import { api, type TimelineSearchHit } from '../api/client.js';
+import { api, type TimelineSearchHit, type WikiSearchHit } from '../api/client.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { gotoSessionTab } from '../utils/gotoSession.js';
@@ -75,6 +75,7 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
   );
   const results = data?.results ?? [];
   const timeline = data?.timeline ?? [];
+  const wiki = data?.wiki ?? [];
 
   // Reset the cursor on a NEW query (not on every `results` identity change —
   // a background revalidation must not snap the selection back to 0).
@@ -110,6 +111,11 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
     onClose();
   }
 
+  function openWiki(w: WikiSearchHit) {
+    navigate(`/wiki/pages/${w.slug}.md`);
+    onClose();
+  }
+
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -132,13 +138,13 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
   const status = useMemo(() => {
     if (!active)
       return `Type at least ${MIN_CHARS} characters to search your history`;
-    if (isLoading && results.length === 0 && timeline.length === 0) return 'Searching…';
-    const total = results.length + timeline.length;
+    const total = results.length + timeline.length + wiki.length;
+    if (isLoading && total === 0) return 'Searching…';
     if (total === 0) return 'No matches';
     return `${results.length} message${results.length === 1 ? '' : 's'}${
       timeline.length > 0 ? ` · ${timeline.length} timeline` : ''
-    }`;
-  }, [active, isLoading, results.length, timeline.length]);
+    }${wiki.length > 0 ? ` · ${wiki.length} wiki` : ''}`;
+  }, [active, isLoading, results.length, timeline.length, wiki.length]);
 
   return (
     <div
@@ -237,6 +243,24 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
                     <span className="tabular-nums">{t.date}</span>
                   </div>
                   <div className="line-clamp-2 text-xs text-[var(--color-ink)]">{t.excerpt}</div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {wiki.length > 0 && (
+            <div className="mt-1 border-t border-[var(--color-border)] pt-1">
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+                Wiki
+              </div>
+              {wiki.map((w) => (
+                <button
+                  key={w.slug}
+                  onClick={() => openWiki(w)}
+                  className="flex w-full flex-col gap-0.5 px-3 py-2 text-left hover:bg-[var(--color-surface-3)]"
+                >
+                  <div className="text-[11px] font-medium text-[var(--color-ink)]">📖 {w.title}</div>
+                  <div className="line-clamp-2 text-xs text-[var(--color-ink-muted)]">{w.excerpt}</div>
                 </button>
               ))}
             </div>

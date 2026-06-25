@@ -609,6 +609,21 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 35,
+    // Wiki (L2) semantic indexing bookkeeping — same pattern as timeline (id 34).
+    // The wiki PAGES (~/.pinloom/wiki/pages/*.md) get vector-indexed into the
+    // lazily-created `wiki_vectors` vec0 table so ⌘K search + Recap span the
+    // curated convention notes too — completing the L0/L1/L2 corpus. doc_id is the
+    // page slug (filename sans .md). Plain table → boot-safe without the extension.
+    sql: `
+      CREATE TABLE IF NOT EXISTS wiki_index_state (
+        doc_id        TEXT PRIMARY KEY,
+        content_hash  TEXT NOT NULL,
+        indexed_at    TEXT
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
