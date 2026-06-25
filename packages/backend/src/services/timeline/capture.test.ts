@@ -117,6 +117,18 @@ describe('runCaptureSweep', () => {
     expect(cur.id).toBe('d2');
   });
 
+  it('caps a giant message before it reaches the distiller (anti-bloat)', async () => {
+    seedProject('p1');
+    seedSession('s1', 'p1');
+    addMsg('big', 's1', 'user', 'X'.repeat(5000), idleAt);
+    let seenPrompt = '';
+    const recordDistill: RunDistill = async (prompt) => ((seenPrompt = prompt), '# entry\n- ok');
+    await runCaptureSweep(db, { now: NOW, home, runDistill: recordDistill, isBusy: () => false });
+    expect(seenPrompt).toContain('…(생략)'); // capped marker present
+    const longestRun = Math.max(...[...seenPrompt.matchAll(/X+/g)].map((m) => m[0].length), 0);
+    expect(longestRun).toBeLessThanOrEqual(1500); // not the full 5000
+  });
+
   it('captures multiple sessions of one project into one project-day entry', async () => {
     seedProject('p1');
     seedSession('s1', 'p1');

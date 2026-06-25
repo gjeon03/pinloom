@@ -15,6 +15,26 @@ import {
   readEntry,
 } from '../services/timeline/store.js';
 
+interface CaptureAllJob {
+  running: boolean;
+  date: string;
+  total: number;
+  done: number;
+  captured: number;
+  failed: number;
+  finishedAt: number | null;
+}
+// In-process tracker for the background "capture all" job (one at a time).
+let captureAllJob: CaptureAllJob = {
+  running: false,
+  date: '',
+  total: 0,
+  done: 0,
+  captured: 0,
+  failed: 0,
+  finishedAt: null,
+};
+
 export async function timelineRoutes(app: FastifyInstance) {
   const db = getDb();
 
@@ -25,6 +45,23 @@ export async function timelineRoutes(app: FastifyInstance) {
         | undefined) ?? null
     );
   }
+
+  // Tree index for the "By project" sidebar: every visible project with its
+  // auto flag + the dates it has entries for (newest first). One call powers
+  // the Finder-style project→date tree.
+  app.get('/api/timeline/index', async () => {
+    const projects = db
+      .prepare('SELECT id, name, timeline_auto FROM projects WHERE hidden = 0 ORDER BY name')
+      .all() as { id: string; name: string; timeline_auto: number }[];
+    return {
+      projects: projects.map((p) => ({
+        projectId: p.id,
+        projectName: p.name,
+        auto: p.timeline_auto !== 0,
+        dates: listDates(getProjectWikiSlugByProjectId(p.id)),
+      })),
+    };
+  });
 
   // Dates that have a timeline entry for a project (newest first).
   app.get<{ Params: { projectId: string } }>(
@@ -103,6 +140,56 @@ export async function timelineRoutes(app: FastifyInstance) {
         req.params.projectId,
       );
       return { ok: true as const, auto: req.body.auto };
+    },
+  );
+
+  // "Capture all" runs N sequential LLM distills (minutes). Rather than block one
+  // long request — whose UI state dies the moment the user navigates away — it
+  // runs as a background job tracked in-process, and the client polls
+  // /capture-all/status. State thus survives navigation AND reload (the backend
+  // owns it); a backend restart resets it to not-running (the job died with it).
+  app.get('/api/timeline/capture-all/status', async () => captureAllJob);
+
+  app.post<{ Body: { date?: string } }>(
+    '/api/timeline/capture-all',
+    async (req, reply) => {
+      if (captureAllJob.running) {
+        reply.code(409);
+        return { error: 'capture already running', job: captureAllJob };
+      }
+      const date = req.body?.date ?? localToday();
+      try {
+        assertDate(date);
+      } catch {
+        reply.code(400);
+        return { error: 'invalid date' };
+      }
+      const projects = db
+        .prepare('SELECT id FROM projects WHERE hidden = 0')
+        .all() as { id: string }[];
+      captureAllJob = {
+        running: true,
+        date,
+        total: projects.length,
+        done: 0,
+        captured: 0,
+        failed: 0,
+        finishedAt: null,
+      };
+      // Fire-and-forget: keep the event loop going after the response is sent.
+      void (async () => {
+        for (const p of projects) {
+          try {
+            if (await manualCaptureProjectDay(db, p.id, date)) captureAllJob.captured += 1;
+          } catch {
+            captureAllJob.failed += 1; // one project's failure must not abort the rest
+          }
+          captureAllJob.done += 1;
+        }
+        captureAllJob.running = false;
+        captureAllJob.finishedAt = Date.now();
+      })();
+      return { started: true as const, date, total: projects.length };
     },
   );
 

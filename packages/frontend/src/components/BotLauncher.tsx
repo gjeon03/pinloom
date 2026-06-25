@@ -75,8 +75,8 @@ export function BotLauncher() {
     try {
       const session = await api.openBot('skill');
       const hint = projectName
-        ? `프로젝트 '${projectName}' 관련 스킬을 만들고 싶어. 아래 내용을 스킬로 정리해줘:\n`
-        : '글로벌 스킬을 만들고 싶어. 아래 내용을 스킬로 정리해줘:\n';
+        ? `I want to create a skill for the project '${projectName}'. Turn the following into a skill:\n`
+        : 'I want to create a global skill. Turn the following into a skill:\n';
       seedDraft(session.id, hint);
       navigate(`/s/${session.id}`);
     } catch (err) {
@@ -96,8 +96,8 @@ export function BotLauncher() {
         type="button"
         onClick={() => void openSchedule()}
         disabled={busy}
-        title="일정 봇"
-        aria-label="일정 봇"
+        title="Schedule bot"
+        aria-label="Schedule bot"
         className={btnClass}
       >
         <CalendarClock size={16} />
@@ -108,8 +108,8 @@ export function BotLauncher() {
           type="button"
           onClick={() => void toggleSkill()}
           disabled={busy}
-          title="스킬 봇"
-          aria-label="스킬 봇"
+          title="Skill bot"
+          aria-label="Skill bot"
           className={btnClass}
         >
           <Wrench size={16} />
@@ -117,24 +117,24 @@ export function BotLauncher() {
         {skillOpen && (
           <div className="absolute right-0 mt-1 w-56 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-lg z-50">
             <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-              스킬 범위
+              Skill scope
             </div>
             <button
               type="button"
               onClick={() => void openSkill(null)}
               className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-[var(--color-surface-2)]"
             >
-              글로벌 (모든 프로젝트)
+              Global (all projects)
             </button>
             <div className="my-1 border-t border-[var(--color-border)]" />
             <div className="max-h-56 overflow-y-auto">
               {projects === null ? (
                 <div className="px-2 py-1.5 text-xs text-[var(--color-ink-muted)]">
-                  불러오는 중…
+                  Loading…
                 </div>
               ) : projects.length === 0 ? (
                 <div className="px-2 py-1.5 text-xs text-[var(--color-ink-muted)]">
-                  프로젝트 없음
+                  No projects
                 </div>
               ) : (
                 projects.map((p) => (

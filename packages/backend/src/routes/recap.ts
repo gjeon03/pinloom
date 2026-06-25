@@ -17,7 +17,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export async function recapRoutes(app: FastifyInstance) {
   const db = getDb();
 
-  app.post<{ Body: { question?: string; projectId?: string } }>(
+  app.post<{ Body: { question?: string; projectId?: string; language?: string } }>(
     '/api/recap/ask',
     async (req, reply) => {
       const question = (req.body?.question ?? '').trim();
@@ -29,6 +29,7 @@ export async function recapRoutes(app: FastifyInstance) {
         return await answerOverCorpus(db, question, {
           projectId: req.body?.projectId || undefined,
           provider: getEmbeddingProvider(),
+          language: req.body?.language === 'en' ? 'en' : 'ko',
         });
       } catch (err) {
         reply.code(500);
@@ -38,12 +39,18 @@ export async function recapRoutes(app: FastifyInstance) {
   );
 
   app.post<{
-    Body: { kind?: string; dateFrom?: string; dateTo?: string; projectId?: string };
+    Body: {
+      kind?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      projectId?: string;
+      language?: string;
+    };
   }>('/api/recap/generate', async (req, reply) => {
     const kind = req.body?.kind;
-    if (kind !== 'portfolio' && kind !== 'resume') {
+    if (kind !== 'detailed' && kind !== 'concise') {
       reply.code(400);
-      return { error: 'kind must be "portfolio" or "resume"' };
+      return { error: 'kind must be "detailed" or "concise"' };
     }
     const { dateFrom, dateTo } = req.body ?? {};
     if (!dateFrom || !dateTo || !DATE_RE.test(dateFrom) || !DATE_RE.test(dateTo)) {
@@ -56,6 +63,7 @@ export async function recapRoutes(app: FastifyInstance) {
         dateFrom,
         dateTo,
         projectId: req.body?.projectId || undefined,
+        language: req.body?.language === 'en' ? 'en' : 'ko',
       });
     } catch (err) {
       reply.code(500);

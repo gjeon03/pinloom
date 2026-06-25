@@ -156,7 +156,7 @@ export const api = {
     ),
 
   // Corpus recap (Phase 4)
-  recapAsk: (question: string, projectId?: string) =>
+  recapAsk: (question: string, projectId?: string, language?: 'ko' | 'en') =>
     request<{
       answer: string;
       sources: {
@@ -169,13 +169,14 @@ export const api = {
       }[];
     }>('/api/recap/ask', {
       method: 'POST',
-      body: JSON.stringify({ question, projectId }),
+      body: JSON.stringify({ question, projectId, language }),
     }),
   recapGenerate: (body: {
-    kind: 'portfolio' | 'resume';
+    kind: 'detailed' | 'concise';
     dateFrom: string;
     dateTo: string;
     projectId?: string;
+    language?: 'ko' | 'en';
   }) =>
     request<{ markdown: string; empty: boolean }>('/api/recap/generate', {
       method: 'POST',
@@ -183,6 +184,10 @@ export const api = {
     }),
 
   // Work Timeline (L1)
+  getTimelineIndex: () =>
+    request<{
+      projects: { projectId: string; projectName: string; auto: boolean; dates: string[] }[];
+    }>('/api/timeline/index'),
   listTimelineDates: (projectId: string) =>
     request<{ dates: string[] }>(`/api/timeline/projects/${projectId}`),
   getTimelineEntry: (projectId: string, date: string) =>
@@ -204,6 +209,21 @@ export const api = {
       `/api/timeline/projects/${projectId}/capture`,
       { method: 'POST', body: JSON.stringify(date ? { date } : {}) },
     ),
+  captureTimelineAll: (date?: string) =>
+    request<{ started: true; date: string; total: number }>('/api/timeline/capture-all', {
+      method: 'POST',
+      body: JSON.stringify(date ? { date } : {}),
+    }),
+  captureAllStatus: () =>
+    request<{
+      running: boolean;
+      date: string;
+      total: number;
+      done: number;
+      captured: number;
+      failed: number;
+      finishedAt: number | null;
+    }>('/api/timeline/capture-all/status'),
 
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>
