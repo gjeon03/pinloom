@@ -23,7 +23,7 @@ export async function searchRoutes(app: FastifyInstance) {
     const provider = getEmbeddingProvider();
     const [results, timeline] = await Promise.all([
       searchMessagesHybrid(db, q, { projectId, limit }, provider),
-      searchTimeline(db, q, { projectId }, provider),
+      searchTimeline(db, q, { projectId, limit }, provider),
     ]);
     return { results, timeline };
   });

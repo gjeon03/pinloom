@@ -18,9 +18,17 @@ export interface TimelineHit {
 }
 
 const EXCERPT_LEN = 160;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function splitDocId(docId: string): { projectId: string; date: string } {
-  return { projectId: docId.slice(0, -11), date: docId.slice(-10) };
+// docId = `${projectId}:${date}`. projectId is a nanoid (no colon) so the FIRST
+// colon is the separator; validate the date so a malformed docId can't reach
+// readEntry's assertDate and 500 the whole /api/search (review H1).
+function parseDocId(docId: string): { projectId: string; date: string } | null {
+  const i = docId.indexOf(':');
+  if (i < 0) return null;
+  const date = docId.slice(i + 1);
+  if (!DATE_RE.test(date)) return null;
+  return { projectId: docId.slice(0, i), date };
 }
 
 /** Returns the top timeline entries semantically nearest to `query` (empty when
@@ -44,22 +52,45 @@ export async function searchTimeline(
     return [];
   }
   const k = Math.min(opts.projectId ? limit * 4 : limit * 2, 100);
+  // Resolve slug + name ONCE per project (getProjectWikiSlugByProjectId loads the
+  // whole project table on each call — don't run it per knn hit, review H2).
   const nameStmt = db.prepare('SELECT name FROM projects WHERE id = ?');
+  const projCache = new Map<string, { slug: string; name: string } | null>();
+  function resolveProject(projectId: string): { slug: string; name: string } | null {
+    if (projCache.has(projectId)) return projCache.get(projectId) ?? null;
+    let resolved: { slug: string; name: string } | null = null;
+    try {
+      const name =
+        (nameStmt.get(projectId) as { name: string } | undefined)?.name ?? projectId;
+      resolved = { slug: getProjectWikiSlugByProjectId(projectId), name };
+    } catch {
+      resolved = null;
+    }
+    projCache.set(projectId, resolved);
+    return resolved;
+  }
+
   const hits: TimelineHit[] = [];
   for (const h of knn(db, TIMELINE_VECTORS, qvec, k)) {
-    const { projectId, date } = splitDocId(h.docId);
+    const parsed = parseDocId(h.docId);
+    if (!parsed) continue;
+    const { projectId, date } = parsed;
     if (opts.projectId && projectId !== opts.projectId) continue;
-    const content = readEntry(getProjectWikiSlugByProjectId(projectId), date);
+    const proj = resolveProject(projectId);
+    if (!proj) continue;
+    let content: string | null;
+    try {
+      content = readEntry(proj.slug, date);
+    } catch {
+      continue; // bad date / FS error — skip, never 500 the search
+    }
     if (!content) continue; // file gone since indexing
-    const projectName =
-      (nameStmt.get(projectId) as { name: string } | undefined)?.name ?? projectId;
-    // first non-heading line as a teaser, capped
     const teaser =
       content
         .split('\n')
         .map((l) => l.trim())
         .find((l) => l && !l.startsWith('#')) ?? content.trim();
-    hits.push({ projectId, projectName, date, excerpt: teaser.slice(0, EXCERPT_LEN) });
+    hits.push({ projectId, projectName: proj.name, date, excerpt: teaser.slice(0, EXCERPT_LEN) });
     if (hits.length >= limit) break;
   }
   return hits;

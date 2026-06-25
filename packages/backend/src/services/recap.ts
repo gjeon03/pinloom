@@ -33,11 +33,16 @@ const PER_MESSAGE_CAP = 4000; // chars per hydrated message / timeline entry
 const ANSWER_CONTEXT_BUDGET = 60_000;
 const TIMELINE_BUDGET = 100_000; // concatenated timeline markdown for 4B
 
-// docId for timeline vectors is `${projectId}:${date}` with date a fixed
-// YYYY-MM-DD; split off the trailing ":YYYY-MM-DD" so a projectId is recovered
-// verbatim regardless of its characters.
-function splitTimelineDocId(docId: string): { projectId: string; date: string } {
-  return { projectId: docId.slice(0, -11), date: docId.slice(-10) };
+// docId for timeline vectors is `${projectId}:${date}`. projectId is a nanoid
+// (no colon) → first colon is the separator; validate the date so a malformed
+// docId can't reach readEntry's assertDate (returns null → caller skips it).
+const TL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function splitTimelineDocId(docId: string): { projectId: string; date: string } | null {
+  const i = docId.indexOf(':');
+  if (i < 0) return null;
+  const date = docId.slice(i + 1);
+  if (!TL_DATE_RE.test(date)) return null;
+  return { projectId: docId.slice(0, i), date };
 }
 
 // prompt + system → text. Injectable for tests.
@@ -118,6 +123,9 @@ function answerSystem(lang: RecapLanguage): string {
 // messages (review M3).
 type Candidate = {
   rrf: number;
+  /** 0 = message, 1 = timeline — deterministic tie-break so equal RRF ranks are
+   *  stable across runs and messages (the richer primary corpus) win ties. */
+  arm: 0 | 1;
   content: string;
   source: RecapSourceData;
   label: string;
@@ -152,6 +160,7 @@ export async function answerOverCorpus(
     const row = contentStmt.get(h.messageId) as { content: string } | undefined;
     candidates.push({
       rrf: 1 / (RRF_K + i),
+      arm: 0,
       content: (row?.content ?? h.excerpt).slice(0, PER_MESSAGE_CAP),
       label: `${h.projectName} · ${h.sessionTitle ?? 'session'} · ${h.createdAt}`,
       source: {
@@ -175,15 +184,23 @@ export async function answerOverCorpus(
       const nameStmt = db.prepare('SELECT name FROM projects WHERE id = ?');
       const tlHits = knn(db, TIMELINE_VECTORS, qvec, k)
         .map((hit) => splitTimelineDocId(hit.docId))
-        .filter((t) => !opts.projectId || t.projectId === opts.projectId)
+        .filter((t): t is { projectId: string; date: string } =>
+          t !== null && (!opts.projectId || t.projectId === opts.projectId),
+        )
         .slice(0, TIMELINE_HITS);
       tlHits.forEach((t, i) => {
-        const content = readEntry(getProjectWikiSlugByProjectId(t.projectId), t.date);
+        let content: string | null;
+        try {
+          content = readEntry(getProjectWikiSlugByProjectId(t.projectId), t.date);
+        } catch {
+          return; // bad slug/date — skip this hit, keep the rest
+        }
         if (!content) return; // file gone since indexing
         const projectName =
           (nameStmt.get(t.projectId) as { name: string } | undefined)?.name ?? t.projectId;
         candidates.push({
           rrf: 1 / (RRF_K + i),
+          arm: 1,
           content: content.slice(0, PER_MESSAGE_CAP),
           label: `work journal · ${projectName} · ${t.date}`,
           source: { kind: 'timeline', projectId: t.projectId, projectName, date: t.date },
@@ -200,7 +217,7 @@ export async function answerOverCorpus(
 
   // Single relevance order, single budget filled greedily, [n] numbered across
   // the merge — no per-arm reservation.
-  candidates.sort((a, b) => b.rrf - a.rrf);
+  candidates.sort((a, b) => b.rrf - a.rrf || a.arm - b.arm);
   const sources: RecapSource[] = [];
   const promptChunks: string[] = [];
   let budget = ANSWER_CONTEXT_BUDGET;
@@ -264,7 +281,12 @@ function gatherTimeline(
       const md = readEntry(slug, d);
       if (!md) continue;
       const block = `## ${p.name} — ${d}\n\n${md}`;
-      parts.push(block.slice(0, Math.max(budget, 0)));
+      const slice = block.slice(0, Math.max(budget, 0));
+      if (!slice.trim()) {
+        truncated = true; // budget exhausted mid-block — don't push an empty separator
+        break;
+      }
+      parts.push(slice);
       budget -= block.length;
     }
     if (budget <= 0) truncated = true;
