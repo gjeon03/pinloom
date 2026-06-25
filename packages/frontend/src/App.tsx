@@ -82,7 +82,7 @@ export function App() {
                 type="button"
                 onClick={() => setSearchOpen(true)}
                 aria-label="Search history"
-                className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+                className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
               >
                 <Search size={16} />
               </button>
@@ -92,7 +92,7 @@ export function App() {
                 type="button"
                 onClick={() => setTemplatesOpen(true)}
                 aria-label="Prompt templates"
-                className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+                className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
               >
                 <FileText size={16} />
               </button>

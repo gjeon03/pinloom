@@ -179,7 +179,7 @@ export function NotificationCenter() {
             type="button"
             onClick={toggleOpen}
             aria-label="Notifications"
-            className="relative rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]"
+            className="relative inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]"
           >
             <Bell
               size={16}
