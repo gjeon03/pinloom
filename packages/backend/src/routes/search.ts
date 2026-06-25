@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../db/connection.js';
 import { searchMessagesHybrid } from '../services/message-search.js';
+import { searchTimeline } from '../services/timeline/search.js';
 import { getEmbeddingProvider } from '../services/embeddings/index.js';
 
 // GET /api/search — hybrid search over conversation history: lexical FTS fused
@@ -16,14 +17,14 @@ export async function searchRoutes(app: FastifyInstance) {
     Querystring: { q?: string; projectId?: string; limit?: string };
   }>('/api/search', async (req) => {
     const q = (req.query.q ?? '').trim();
-    if (!q) return { results: [] };
+    if (!q) return { results: [], timeline: [] };
     const limit = req.query.limit ? Number(req.query.limit) : undefined;
-    const results = await searchMessagesHybrid(
-      db,
-      q,
-      { projectId: req.query.projectId || undefined, limit },
-      getEmbeddingProvider(),
-    );
-    return { results };
+    const projectId = req.query.projectId || undefined;
+    const provider = getEmbeddingProvider();
+    const [results, timeline] = await Promise.all([
+      searchMessagesHybrid(db, q, { projectId, limit }, provider),
+      searchTimeline(db, q, { projectId, limit }, provider),
+    ]);
+    return { results, timeline };
   });
 }

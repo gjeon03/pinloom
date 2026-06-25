@@ -20,13 +20,30 @@ import { searchMessagesHybrid } from './message-search.js';
 import type { EmbeddingProvider } from './embeddings/types.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { listDates, readEntry } from './timeline/store.js';
+import { TIMELINE_VECTORS } from './timeline/indexer.js';
+import { getVectorMeta, knn } from './vector-store.js';
+import { isVectorAvailable } from '../db/connection.js';
 
 const DEFAULT_RECAP_MODEL = 'claude-sonnet-4-6';
 const RECAP_TIMEOUT_MS = 5 * 60_000;
 const ANSWER_HITS = 12;
-const PER_MESSAGE_CAP = 4000; // chars per hydrated message
+const TIMELINE_HITS = 8;
+const RRF_K = 60; // reciprocal-rank-fusion constant (matches message-search)
+const PER_MESSAGE_CAP = 4000; // chars per hydrated message / timeline entry
 const ANSWER_CONTEXT_BUDGET = 60_000;
 const TIMELINE_BUDGET = 100_000; // concatenated timeline markdown for 4B
+
+// docId for timeline vectors is `${projectId}:${date}`. projectId is a nanoid
+// (no colon) → first colon is the separator; validate the date so a malformed
+// docId can't reach readEntry's assertDate (returns null → caller skips it).
+const TL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function splitTimelineDocId(docId: string): { projectId: string; date: string } | null {
+  const i = docId.indexOf(':');
+  if (i < 0) return null;
+  const date = docId.slice(i + 1);
+  if (!TL_DATE_RE.test(date)) return null;
+  return { projectId: docId.slice(0, i), date };
+}
 
 // prompt + system → text. Injectable for tests.
 export type RunRecap = (prompt: string, system: string, model: string) => Promise<string>;
@@ -70,14 +87,22 @@ const defaultRunRecap: RunRecap = async (prompt, system, model) => {
 
 // ---------------------------------------------------------------- 4A: Q&A ----
 
-export interface RecapSource {
-  n: number;
+type MessageSourceData = {
+  kind: 'message';
   messageId: string;
   sessionId: string;
   sessionTitle: string | null;
   projectName: string;
   createdAt: string;
-}
+};
+type TimelineSourceData = {
+  kind: 'timeline';
+  projectId: string;
+  projectName: string;
+  date: string;
+};
+type RecapSourceData = MessageSourceData | TimelineSourceData;
+export type RecapSource = RecapSourceData & { n: number };
 export interface CorpusAnswer {
   answer: string;
   sources: RecapSource[];
@@ -89,8 +114,22 @@ function langLine(lang: RecapLanguage): string {
 }
 
 function answerSystem(lang: RecapLanguage): string {
-  return `You answer a developer's question using ONLY the numbered context excerpts from their own past coding conversations. Each excerpt is tagged [n]. Ground every claim in the excerpts and CITE the ones you use inline as [n]. If the excerpts don't contain the answer, say so plainly — never invent. Be concise. ${langLine(lang)}`;
+  return `You answer a developer's question using ONLY the numbered context excerpts from their own past coding conversations and dated work-journal entries. Each excerpt is tagged [n]. Ground every claim in the excerpts and CITE the ones you use inline as [n]. If the excerpts don't contain the answer, say so plainly — never invent. Be concise. ${langLine(lang)}`;
 }
+
+// One ranked candidate before budget-filling. `rrf` is the reciprocal-rank score
+// used to interleave the two independently-ranked arms (messages, timeline) into
+// a single relevance order — so the timeline arm never steals a fixed quota from
+// messages (review M3).
+type Candidate = {
+  rrf: number;
+  /** 0 = message, 1 = timeline — deterministic tie-break so equal RRF ranks are
+   *  stable across runs and messages (the richer primary corpus) win ties. */
+  arm: 0 | 1;
+  content: string;
+  source: RecapSourceData;
+  label: string;
+};
 
 export async function answerOverCorpus(
   db: Database,
@@ -106,54 +145,96 @@ export async function answerOverCorpus(
 ): Promise<CorpusAnswer> {
   const q = question.trim();
   if (!q) return { answer: '질문이 비어 있어요.', sources: [] };
+  const provider = opts.provider ?? null;
+  const candidates: Candidate[] = [];
 
+  // --- arm 1: messages (hybrid FTS + vector) ---
   const hits = await searchMessagesHybrid(
     db,
     q,
     { projectId: opts.projectId, limit: opts.limit ?? ANSWER_HITS },
-    opts.provider ?? null,
+    provider,
   );
-  if (hits.length === 0) {
+  const contentStmt = db.prepare('SELECT content FROM messages WHERE id = ?');
+  hits.forEach((h, i) => {
+    const row = contentStmt.get(h.messageId) as { content: string } | undefined;
+    candidates.push({
+      rrf: 1 / (RRF_K + i),
+      arm: 0,
+      content: (row?.content ?? h.excerpt).slice(0, PER_MESSAGE_CAP),
+      label: `${h.projectName} · ${h.sessionTitle ?? 'session'} · ${h.createdAt}`,
+      source: {
+        kind: 'message',
+        messageId: h.messageId,
+        sessionId: h.sessionId,
+        sessionTitle: h.sessionTitle,
+        projectName: h.projectName,
+        createdAt: h.createdAt,
+      },
+    });
+  });
+
+  // --- arm 2: timeline (vector only) — guarded on a SHARED vector space so we
+  // never fuse distances from a different embedding model (review M2). ---
+  const tlMeta = isVectorAvailable() ? getVectorMeta(db, TIMELINE_VECTORS) : null;
+  if (provider && tlMeta && tlMeta.modelId === provider.id) {
+    try {
+      const qvec = await provider.embedQuery(q);
+      const k = Math.min(opts.projectId ? TIMELINE_HITS * 4 : TIMELINE_HITS * 2, 100);
+      const nameStmt = db.prepare('SELECT name FROM projects WHERE id = ?');
+      const tlHits = knn(db, TIMELINE_VECTORS, qvec, k)
+        .map((hit) => splitTimelineDocId(hit.docId))
+        .filter((t): t is { projectId: string; date: string } =>
+          t !== null && (!opts.projectId || t.projectId === opts.projectId),
+        )
+        .slice(0, TIMELINE_HITS);
+      tlHits.forEach((t, i) => {
+        let content: string | null;
+        try {
+          content = readEntry(getProjectWikiSlugByProjectId(t.projectId), t.date);
+        } catch {
+          return; // bad slug/date — skip this hit, keep the rest
+        }
+        if (!content) return; // file gone since indexing
+        const projectName =
+          (nameStmt.get(t.projectId) as { name: string } | undefined)?.name ?? t.projectId;
+        candidates.push({
+          rrf: 1 / (RRF_K + i),
+          arm: 1,
+          content: content.slice(0, PER_MESSAGE_CAP),
+          label: `work journal · ${projectName} · ${t.date}`,
+          source: { kind: 'timeline', projectId: t.projectId, projectName, date: t.date },
+        });
+      });
+    } catch {
+      // embed/knn failure → degrade to messages-only
+    }
+  }
+
+  if (candidates.length === 0) {
     return { answer: '관련된 기록을 찾지 못했어요.', sources: [] };
   }
 
-  // Hydrate FULL message content (the 160-char excerpt is too thin to ground on).
-  const contentStmt = db.prepare('SELECT content FROM messages WHERE id = ?');
-  const chunks: (RecapSource & { content: string })[] = [];
+  // Single relevance order, single budget filled greedily, [n] numbered across
+  // the merge — no per-arm reservation.
+  candidates.sort((a, b) => b.rrf - a.rrf || a.arm - b.arm);
+  const sources: RecapSource[] = [];
+  const promptChunks: string[] = [];
   let budget = ANSWER_CONTEXT_BUDGET;
-  for (const h of hits) {
+  for (const c of candidates) {
     if (budget <= 0) break;
-    const row = contentStmt.get(h.messageId) as { content: string } | undefined;
-    const content = (row?.content ?? h.excerpt).slice(0, PER_MESSAGE_CAP);
-    budget -= content.length;
-    chunks.push({
-      n: chunks.length + 1,
-      messageId: h.messageId,
-      sessionId: h.sessionId,
-      sessionTitle: h.sessionTitle,
-      projectName: h.projectName,
-      createdAt: h.createdAt,
-      content,
-    });
+    const n = sources.length + 1;
+    budget -= c.content.length;
+    sources.push({ ...c.source, n } as RecapSource);
+    promptChunks.push(`[${n}] (${c.label})\n${c.content}`);
   }
 
-  const prompt = [
-    `Question: ${q}`,
-    '',
-    'Context excerpts:',
-    ...chunks.map(
-      (c) =>
-        `[${c.n}] (${c.projectName} · ${c.sessionTitle ?? 'session'} · ${c.createdAt})\n${c.content}`,
-    ),
-  ].join('\n\n');
-
+  const prompt = [`Question: ${q}`, '', 'Context excerpts:', ...promptChunks].join('\n\n');
   const answer = await (opts.runRecap ?? defaultRunRecap)(
     prompt,
     answerSystem(opts.language ?? 'ko'),
     opts.model ?? DEFAULT_RECAP_MODEL,
   );
-  // strip content from the returned sources (UI only needs the link metadata)
-  const sources: RecapSource[] = chunks.map(({ content: _c, ...s }) => s);
   return { answer: answer.trim(), sources };
 }
 
@@ -200,7 +281,12 @@ function gatherTimeline(
       const md = readEntry(slug, d);
       if (!md) continue;
       const block = `## ${p.name} — ${d}\n\n${md}`;
-      parts.push(block.slice(0, Math.max(budget, 0)));
+      const slice = block.slice(0, Math.max(budget, 0));
+      if (!slice.trim()) {
+        truncated = true; // budget exhausted mid-block — don't push an empty separator
+        break;
+      }
+      parts.push(slice);
       budget -= block.length;
     }
     if (budget <= 0) truncated = true;

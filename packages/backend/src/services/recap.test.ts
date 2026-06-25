@@ -2,9 +2,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getDb } from '../db/connection.js';
+import { getDb, isVectorAvailable } from '../db/connection.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { writeEntry } from './timeline/store.js';
+import { ensureVectorTable, setVectorMeta, upsertVector } from './vector-store.js';
+import { TIMELINE_VECTORS } from './timeline/indexer.js';
+import type { EmbeddingProvider } from './embeddings/types.js';
 import { answerOverCorpus, generateRecap, type RunRecap } from './recap.js';
 
 const db = getDb();
@@ -56,6 +59,32 @@ describe('answerOverCorpus', () => {
     expect(cap.seen()).toContain('[1]');
     expect(r.sources[0]).toMatchObject({ n: 1, messageId: 'm1', sessionId: 's', projectName: 'P' });
     expect(r.answer).toContain('생성된 결과');
+  });
+
+  it('fuses timeline entries into the answer as kind:timeline sources', async () => {
+    if (!isVectorAvailable()) return; // vec extension absent → timeline arm is a no-op
+    db.prepare("INSERT INTO projects (id,name,cwd,created_at,updated_at) VALUES ('pc','Commerce','/tmp/commerce','t','t')").run();
+    const slug = getProjectWikiSlugByProjectId('pc');
+    writeEntry(slug, '2026-06-20', '# 6/20\n- 쿠폰 발급 중복 방지를 Redis 분산락으로 구현');
+    const v = new Float32Array([1, 0, 0, 0]);
+    ensureVectorTable(db, TIMELINE_VECTORS, 4);
+    setVectorMeta(db, TIMELINE_VECTORS, 'fake', 4);
+    upsertVector(db, TIMELINE_VECTORS, 'pc:2026-06-20', v);
+    const fakeProvider: EmbeddingProvider = {
+      id: 'fake', // must match the timeline_vectors meta (shared-space guard)
+      dim: 4,
+      embedQuery: async () => v,
+      embedPassages: async (t) => t.map(() => v),
+    };
+    const cap = captureRun();
+    const r = await answerOverCorpus(db, '쿠폰 중복 어떻게 막았지', {
+      provider: fakeProvider,
+      runRecap: cap.run,
+    });
+    expect(cap.seen()).toContain('Redis 분산락'); // timeline content reached the model
+    expect(
+      r.sources.some((s) => s.kind === 'timeline' && s.projectId === 'pc' && s.date === '2026-06-20'),
+    ).toBe(true);
   });
 });
 

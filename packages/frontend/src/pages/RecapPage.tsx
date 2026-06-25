@@ -114,13 +114,32 @@ export function RecapPage() {
                       Sources
                     </div>
                     <ul className="space-y-0.5">
-                      {s.askResult!.sources.map((src) => (
-                        <li key={src.n} className="text-xs">
-                          <Link to={`/s/${src.sessionId}`} className="text-[var(--color-accent)] hover:underline">
-                            [{src.n}] {src.projectName} · {src.sessionTitle ?? 'session'} · {src.createdAt.slice(0, 10)}
-                          </Link>
-                        </li>
-                      ))}
+                      {s.askResult!.sources.map((src) =>
+                        src.kind === 'timeline' ? (
+                          <li key={src.n} className="text-xs">
+                            <Link
+                              to="/timeline"
+                              onClick={() => {
+                                try {
+                                  localStorage.setItem('pinloom:timeline:project', src.projectId);
+                                  localStorage.setItem('pinloom:timeline:date', src.date);
+                                } catch {
+                                  // ignore
+                                }
+                              }}
+                              className="text-[var(--color-accent)] hover:underline"
+                            >
+                              [{src.n}] 🗓 {src.projectName} · {src.date}
+                            </Link>
+                          </li>
+                        ) : (
+                          <li key={src.n} className="text-xs">
+                            <Link to={`/s/${src.sessionId}`} className="text-[var(--color-accent)] hover:underline">
+                              [{src.n}] {src.projectName} · {src.sessionTitle ?? 'session'} · {src.createdAt.slice(0, 10)}
+                            </Link>
+                          </li>
+                        ),
+                      )}
                     </ul>
                   </div>
                 )}
