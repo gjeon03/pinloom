@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Info, NotepadText, Plus, Rows2, X } from 'lucide-react';
+import { Info, Plus, Rows2, SquarePen, X } from 'lucide-react';
 import { api, type NotepadDoc, type NotepadTab } from '../api/client.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { Tooltip } from './Tooltip.js';
@@ -41,18 +41,20 @@ export function NotepadToggle({
   onToggle: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      title="Notepad"
-      className={`rounded-full border bg-[var(--color-surface-2)]/90 p-2 shadow-md backdrop-blur-sm inline-flex items-center justify-center ${
-        open
-          ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-          : 'border-[var(--color-border)] text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]'
-      }`}
-    >
-      <NotepadText size={14} />
-    </button>
+    <Tooltip label="Notepad">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label="Notepad"
+        className={`rounded-md border bg-[var(--color-surface-2)] p-1.5 inline-flex items-center justify-center ${
+          open
+            ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+            : 'border-[var(--color-border)] text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]'
+        }`}
+      >
+        <SquarePen size={16} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -298,7 +300,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
 
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
-          <NotepadText size={14} />
+          <SquarePen size={14} />
           Notepad
           <Tooltip label="Saved to the local SQLite DB" side="bottom">
             <Info

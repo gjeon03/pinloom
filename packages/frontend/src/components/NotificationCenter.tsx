@@ -9,6 +9,7 @@ import {
 import { gotoSessionTab } from '../utils/gotoSession.js';
 import { useRunningSessions, type RunningSession } from '../stores/sessionRunning.js';
 import { NotificationDetail } from './NotificationDetail.js';
+import { Tooltip } from './Tooltip.js';
 
 function formatRelative(ts: number): string {
   const seconds = Math.max(1, Math.floor((Date.now() - ts) / 1000));
@@ -173,22 +174,24 @@ export function NotificationCenter() {
   return (
     <>
       <div ref={wrapperRef} className="relative">
-        <button
-          type="button"
-          onClick={toggleOpen}
-          title="Notifications"
-          className="relative rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 backdrop-blur-sm p-2 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] shadow-md"
-        >
-          <Bell
-            size={14}
-            className={totalRunning > 0 ? 'animate-pulse text-[var(--color-accent)]' : ''}
-          />
-          {showBadge && (
-            <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[var(--color-accent)] text-black text-[10px] font-semibold flex items-center justify-center">
-              {badgeCount}
-            </span>
-          )}
-        </button>
+        <Tooltip label="Notifications">
+          <button
+            type="button"
+            onClick={toggleOpen}
+            aria-label="Notifications"
+            className="relative rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]"
+          >
+            <Bell
+              size={16}
+              className={totalRunning > 0 ? 'animate-pulse text-[var(--color-accent)]' : ''}
+            />
+            {showBadge && (
+              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[var(--color-accent)] text-black text-[10px] font-semibold flex items-center justify-center">
+                {badgeCount}
+              </span>
+            )}
+          </button>
+        </Tooltip>
 
         {open && (
           <div
