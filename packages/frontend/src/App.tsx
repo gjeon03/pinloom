@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { SWRConfig, mutate } from 'swr';
-import { Search } from 'lucide-react';
+import { FileText, Search } from 'lucide-react';
 import { AppShell } from './components/AppShell.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
 import { GlobalSearchModal } from './components/GlobalSearchModal.js';
-import { GithubLink } from './components/GithubLink.js';
+import { PromptTemplatesPanel } from './components/PromptTemplatesPanel.js';
+import { Tooltip } from './components/Tooltip.js';
 import { BotLauncher } from './components/BotLauncher.js';
 import { NotepadToggle, NotepadPanel } from './components/Notepad.js';
 import { ChatDoneNotifier } from './components/ChatDoneNotifier.js';
@@ -38,6 +39,7 @@ const swrConfig = {
 export function App() {
   const [notepadOpen, setNotepadOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
 
   // Global ⌘K / Ctrl+K opens history search from anywhere.
   useEffect(() => {
@@ -75,17 +77,27 @@ export function App() {
               content edge and never overlaps the docked notepad. */}
           <div className="relative flex-1 min-w-0">
           <div className="absolute top-3 right-3 z-40 flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setSearchOpen(true)}
-              title="Search history (⌘K)"
-              aria-label="Search history"
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
-            >
-              <Search size={16} />
-            </button>
+            <Tooltip label="Search history (⌘K)">
+              <button
+                type="button"
+                onClick={() => setSearchOpen(true)}
+                aria-label="Search history"
+                className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+              >
+                <Search size={16} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Prompt templates">
+              <button
+                type="button"
+                onClick={() => setTemplatesOpen(true)}
+                aria-label="Prompt templates"
+                className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+              >
+                <FileText size={16} />
+              </button>
+            </Tooltip>
             <BotLauncher />
-            <GithubLink />
             <NotepadToggle
               open={notepadOpen}
               onToggle={() => setNotepadOpen((v) => !v)}
@@ -179,6 +191,9 @@ export function App() {
             />
           </Routes>
           </div>
+          {templatesOpen && (
+            <PromptTemplatesPanel onClose={() => setTemplatesOpen(false)} />
+          )}
           {notepadOpen && <NotepadPanel onClose={() => setNotepadOpen(false)} />}
         </div>
       </div>

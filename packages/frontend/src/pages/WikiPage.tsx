@@ -255,8 +255,10 @@ export function WikiPage() {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
-        {/* pr clears the fixed top-right control cluster (github/notepad/bell). */}
-        <div className="pl-6 pr-[136px] py-4">
+        {/* pr clears the fixed top-right control cluster (search · templates ·
+            schedule/skill bots · notepad · bell) so the wiki's own action
+            buttons never slide under it. */}
+        <div className="pl-6 pr-[244px] py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-lg font-semibold">Wiki</h1>
@@ -269,7 +271,7 @@ export function WikiPage() {
                 </p>
               )}
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
               <Tooltip label="Sync from a session" side="bottom">
                 <button
                   onClick={() => setShowSyncPicker(true)}

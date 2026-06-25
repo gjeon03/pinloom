@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { CalendarClock, Wrench } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
+import { Tooltip } from './Tooltip.js';
 
 // Seed the target session's composer draft (read by ChatView on mount) so the
 // user lands with the scope already stated. Prepends, never clobbers.
@@ -88,32 +89,34 @@ export function BotLauncher() {
   }
 
   const btnClass =
-    'rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-50';
+    'inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-50';
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => void openSchedule()}
-        disabled={busy}
-        title="Schedule bot"
-        aria-label="Schedule bot"
-        className={btnClass}
-      >
-        <CalendarClock size={16} />
-      </button>
-
-      <div ref={wrapRef} className="relative">
+      <Tooltip label="Schedule bot">
         <button
           type="button"
-          onClick={() => void toggleSkill()}
+          onClick={() => void openSchedule()}
           disabled={busy}
-          title="Skill bot"
-          aria-label="Skill bot"
+          aria-label="Schedule bot"
           className={btnClass}
         >
-          <Wrench size={16} />
+          <CalendarClock size={16} />
         </button>
+      </Tooltip>
+
+      <div ref={wrapRef} className="relative">
+        <Tooltip label="Skill bot">
+          <button
+            type="button"
+            onClick={() => void toggleSkill()}
+            disabled={busy}
+            aria-label="Skill bot"
+            className={btnClass}
+          >
+            <Wrench size={16} />
+          </button>
+        </Tooltip>
         {skillOpen && (
           <div className="absolute right-0 mt-1 w-56 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-lg z-50">
             <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-[var(--color-ink-muted)]">

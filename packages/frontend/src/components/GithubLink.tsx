@@ -20,16 +20,18 @@ function GithubMark({ size = 14 }: { size?: number }) {
 
 // Link to the public repo. Rendered inline in the top-right control cluster
 // (positioning is owned by the cluster container in App).
+// Link to the public repo. Lives at the bottom of Settings (moved out of the
+// top-right control cluster — it was rarely used and crowded that corner).
 export function GithubLink() {
   return (
     <a
       href={REPO_URL}
       target="_blank"
       rel="noopener noreferrer"
-      title="Open pinloom on GitHub"
-      className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/90 p-2 text-[var(--color-ink-muted)] shadow-md backdrop-blur-sm hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] inline-flex items-center justify-center"
+      className="inline-flex items-center gap-2 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
     >
       <GithubMark size={14} />
+      pinloom on GitHub ↗
     </a>
   );
 }
