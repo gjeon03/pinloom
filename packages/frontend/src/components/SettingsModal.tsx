@@ -555,40 +555,123 @@ function DefaultTransportSection() {
 
 // Install pinloom as a standalone PWA so it gets a dock/taskbar icon and its
 // own window (no browser chrome). The service worker only precaches the static
-// Which backend powers semantic search. Read-only status + how to switch — the
-// backend is chosen at boot from PINLOOM_EMBEDDINGS (a live toggle would force a
-// full re-embed, so it's an env + restart, not a click).
+// Which backend powers semantic search (⌘K + Recap). Live toggle: switching
+// persists the choice, re-warms, and re-embeds the corpus in the background.
+// Ollama is managed in-place (detect server, download the model with progress)
+// — only installing the Ollama app itself is left to the user.
+const EMB_MODES = [
+  { id: 'in-process', label: 'In-process' },
+  { id: 'ollama', label: 'Ollama' },
+  { id: 'off', label: 'Off' },
+] as const;
+
 function EmbeddingsSection() {
-  const { data } = useSWR('settings:embeddings', () => api.getEmbeddingsStatus());
-  const label =
-    data?.mode === 'ollama' ? 'Ollama' : data?.mode === 'off' ? 'Off (lexical only)' : 'In-process (default)';
+  const { data, mutate } = useSWR('settings:embeddings', () => api.getEmbeddingsStatus(), {
+    refreshInterval: 4000,
+  });
+  const [busy, setBusy] = useState(false);
+  const [pull, setPull] = useState<Awaited<ReturnType<typeof api.ollamaPullStatus>> | null>(null);
+
+  async function setMode(mode: 'in-process' | 'ollama' | 'off') {
+    if (busy || mode === data?.mode) return;
+    setBusy(true);
+    try {
+      await api.setEmbeddingsBackend(mode);
+      await mutate();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function download() {
+    if (!data) return;
+    await api.pullOllamaModel(data.ollamaModel);
+    const iv = setInterval(async () => {
+      const s = await api.ollamaPullStatus();
+      setPull(s);
+      if (!s.pulling) {
+        clearInterval(iv);
+        setPull(null);
+        if (s.done) await api.setEmbeddingsBackend('ollama'); // re-warm against the now-present model
+        await mutate();
+      }
+    }, 1000);
+  }
+
+  const mode = data?.mode ?? 'in-process';
+  const pct = pull && pull.total > 0 ? Math.floor((pull.completed / pull.total) * 100) : 0;
+
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
         Search embeddings
       </h3>
-      <div className="text-sm">
-        Backend: <span className="font-medium">{label}</span>
-        {data && data.mode !== 'off' && (
-          <span className="ml-2 text-xs text-[var(--color-ink-muted)]">
-            {data.ready ? `✓ warm${data.id ? ` (${data.id})` : ''}` : '… warming / unreachable → lexical fallback'}
+      <p className="mb-2 text-xs text-[var(--color-ink-muted)]">
+        Powers semantic ⌘K search + Recap. Ollama gives stronger embeddings (esp. Korean);
+        switching re-embeds in the background (keyword-only meanwhile).
+      </p>
+      <div className="flex rounded border border-[var(--color-border)] overflow-hidden text-xs w-fit">
+        {EMB_MODES.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => void setMode(m.id)}
+            disabled={busy}
+            className={`px-3 py-1.5 ${
+              mode === m.id
+                ? 'bg-[var(--color-accent)] text-black'
+                : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
+            } disabled:opacity-50`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-2 text-xs">
+        {mode === 'off' && <span className="text-[var(--color-ink-muted)]">Keyword search only.</span>}
+        {mode === 'in-process' && (
+          <span className="text-[var(--color-ink-muted)]">
+            {data?.ready ? `✓ ready (${data.id})` : 'warming up…'}
           </span>
         )}
+        {mode === 'ollama' && data && (
+          <>
+            {!data.ollama.running ? (
+              <div className="text-[var(--color-ink-muted)]">
+                Ollama isn’t running. Install it (
+                <code>brew install ollama</code> ·{' '}
+                <a
+                  href="https://ollama.com/download"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[var(--color-accent)] hover:underline"
+                >
+                  ollama.com
+                </a>
+                ) and start it — then this updates automatically.
+              </div>
+            ) : pull ? (
+              <div className="text-[var(--color-ink-muted)]">
+                Downloading {data.ollamaModel}… {pull.status} {pct > 0 ? `${pct}%` : ''}
+                <div className="mt-1 h-1.5 w-full max-w-xs rounded bg-[var(--color-surface-3)]">
+                  <div className="h-full rounded bg-[var(--color-accent)]" style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            ) : !data.modelPresent ? (
+              <button
+                onClick={() => void download()}
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1 hover:border-[var(--color-accent)]"
+              >
+                Download {data.ollamaModel}
+              </button>
+            ) : (
+              <span className="text-[var(--color-ink-muted)]">
+                {data.ready ? `✓ ${data.id} ready` : 're-embedding corpus… (keyword search meanwhile)'}
+              </span>
+            )}
+          </>
+        )}
       </div>
-      <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-        Default is a zero-setup in-process model. For stronger embeddings, run a local{' '}
-        <a
-          href="https://ollama.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[var(--color-accent)] hover:underline"
-        >
-          Ollama
-        </a>
-        : <code>ollama pull bge-m3</code>, then set <code>PINLOOM_EMBEDDINGS=ollama</code> (optionally{' '}
-        <code>PINLOOM_OLLAMA_MODEL</code>) and restart. Switching backends re-embeds the corpus in
-        the background; search degrades to keyword-only meanwhile.
-      </p>
     </section>
   );
 }
