@@ -18,6 +18,7 @@ import {
   type ImportMode,
 } from '../services/wiki-archive.js';
 import { writeWikiPage, WikiWriteError } from '../services/wiki-writer.js';
+import { buildWikiGraph } from '../services/wiki-graph.js';
 
 interface SessionRow {
   id: string;
@@ -59,6 +60,10 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
     const overview = await getWikiOverview();
     return overview;
   });
+
+  // Similarity graph (nodes = pages, edges = nearest neighbours by embedding).
+  // Empty when the wiki isn't vector-indexed yet.
+  app.get('/api/wiki/graph', async () => buildWikiGraph(db));
 
   app.get<{ Params: { '*': string } }>(
     '/api/wiki/pages/*',

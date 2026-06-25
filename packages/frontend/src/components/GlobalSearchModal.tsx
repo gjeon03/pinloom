@@ -112,7 +112,7 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
   }
 
   function openWiki(w: WikiSearchHit) {
-    navigate(`/wiki/pages/${w.slug}.md`);
+    navigate(`/wiki/${encodeURIComponent(`${w.slug}.md`)}`);
     onClose();
   }
 

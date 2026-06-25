@@ -8,11 +8,13 @@ import {
   FolderOpen,
   Inbox,
   RefreshCw,
+  Share2,
   Sparkles,
   Sprout,
   Upload,
 } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
+import { WikiGraphModal } from '../components/WikiGraphModal.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import {
   api,
@@ -123,6 +125,7 @@ export function WikiPage() {
   }, [filtersCollapsed]);
   const [showSyncPicker, setShowSyncPicker] = useState(false);
   const [showAnalyzePicker, setShowAnalyzePicker] = useState(false);
+  const [showGraph, setShowGraph] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastSyncSummary, setLastSyncSummary] = useState<string | null>(null);
@@ -316,6 +319,15 @@ export function WikiPage() {
                     </span>
                   )}
                 </Link>
+              </Tooltip>
+              <Tooltip label="Related-notes graph (by meaning)" side="bottom">
+                <button
+                  onClick={() => setShowGraph(true)}
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
+                >
+                  <Share2 size={12} />
+                  Graph
+                </button>
               </Tooltip>
               <Tooltip label="Open wiki folder" side="bottom">
                 <button
@@ -546,6 +558,7 @@ export function WikiPage() {
           onClose={() => setShowAnalyzePicker(false)}
         />
       )}
+      {showGraph && <WikiGraphModal onClose={() => setShowGraph(false)} />}
       {pendingImportFile && (
         <ImportModeModal
           fileName={pendingImportFile.name}

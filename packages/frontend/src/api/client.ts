@@ -145,6 +145,13 @@ export const api = {
       body: JSON.stringify({ ids }),
     }),
 
+  // Wiki similarity graph (nodes = pages, edges = nearest neighbours by embedding).
+  getWikiGraph: () =>
+    request<{
+      nodes: { id: string; title: string }[];
+      edges: { source: string; target: string; weight: number }[];
+    }>('/api/wiki/graph'),
+
   // Wiki gardener proposals (Phase 2).
   runGardener: () =>
     request<{ created: number; skipped: number; truncated: boolean }>(

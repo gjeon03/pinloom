@@ -135,7 +135,7 @@ export function RecapPage() {
                         ) : src.kind === 'wiki' ? (
                           <li key={src.n} className="text-xs">
                             <Link
-                              to={`/wiki/pages/${src.slug}.md`}
+                              to={`/wiki/${encodeURIComponent(`${src.slug}.md`)}`}
                               className="text-[var(--color-accent)] hover:underline"
                             >
                               [{src.n}] 📖 {src.title}
