@@ -5,7 +5,6 @@ import { Search } from 'lucide-react';
 import { AppShell } from './components/AppShell.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
 import { GlobalSearchModal } from './components/GlobalSearchModal.js';
-import { GithubLink } from './components/GithubLink.js';
 import { BotLauncher } from './components/BotLauncher.js';
 import { NotepadToggle, NotepadPanel } from './components/Notepad.js';
 import { ChatDoneNotifier } from './components/ChatDoneNotifier.js';
@@ -85,7 +84,6 @@ export function App() {
               <Search size={16} />
             </button>
             <BotLauncher />
-            <GithubLink />
             <NotepadToggle
               open={notepadOpen}
               onToggle={() => setNotepadOpen((v) => !v)}

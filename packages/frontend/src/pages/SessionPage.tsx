@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import useSWR from 'swr';
 import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
@@ -13,6 +14,14 @@ import { applyPinChange } from '../utils/pins.js';
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const navigate = useNavigate();
+  // In the installed PWA there is no browser back button, so a session/bot page
+  // opened standalone is a dead end without this. Go back if there's history,
+  // else fall back to the session's project (or home).
+  function goBack() {
+    if (window.history.length > 1) navigate(-1);
+    else navigate(project ? `/projects/${project.id}` : '/');
+  }
   const [session, setSession] = useState<Session | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [pins, setPins] = useState<Message[]>([]);
@@ -80,12 +89,23 @@ export function SessionPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[var(--color-surface)]">
-      <header className="border-b border-[var(--color-border)] px-4 py-2">
-        <div className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
-          {project.name}
-        </div>
-        <div className="text-sm font-semibold truncate">
-          {session.title ?? `Chat ${session.id.slice(0, 6)}`}
+      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={goBack}
+          title="Back"
+          aria-label="Back"
+          className="shrink-0 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+        >
+          <ArrowLeft size={16} />
+        </button>
+        <div className="min-w-0">
+          <div className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
+            {project.name}
+          </div>
+          <div className="text-sm font-semibold truncate">
+            {session.title ?? `Chat ${session.id.slice(0, 6)}`}
+          </div>
         </div>
       </header>
 

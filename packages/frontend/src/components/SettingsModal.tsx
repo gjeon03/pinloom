@@ -8,6 +8,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { GithubLink } from './GithubLink.js';
 import type {
   HealthResponse,
   PromptTemplate,
@@ -669,6 +670,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <BackupSection />
 
           <DatabaseFileSection />
+
+          <div className="pt-2 border-t border-[var(--color-border)]">
+            <GithubLink />
+          </div>
         </div>
       </div>
     </div>
