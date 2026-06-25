@@ -11,9 +11,11 @@
 
 import type { EmbeddingProvider } from './types.js';
 import { InProcessEmbeddingProvider } from './in-process.js';
+import { OllamaEmbeddingProvider } from './ollama.js';
 
 export type { EmbeddingProvider } from './types.js';
 export { InProcessEmbeddingProvider } from './in-process.js';
+export { OllamaEmbeddingProvider } from './ollama.js';
 
 let activeProvider: EmbeddingProvider | null = null;
 let ready = false;
@@ -34,27 +36,42 @@ export function embeddingsReady(): boolean {
  * Off when PINLOOM_EMBEDDINGS=off. Resolves immediately; readiness flips later.
  */
 export function initEmbeddings(
-  // injectable for tests / future provider selection
-  provider: EmbeddingProvider = new InProcessEmbeddingProvider(),
+  // injectable for tests; otherwise the backend is picked from PINLOOM_EMBEDDINGS
+  // (`off` | `ollama` | unset → in-process default).
+  provider?: EmbeddingProvider,
 ): void {
   if (initStarted) return;
   initStarted = true;
-  if (process.env.PINLOOM_EMBEDDINGS === 'off') return;
+  const mode = process.env.PINLOOM_EMBEDDINGS;
+  if (mode === 'off') return;
+  const p =
+    provider ??
+    (mode === 'ollama' ? new OllamaEmbeddingProvider() : new InProcessEmbeddingProvider());
   void (async () => {
     try {
-      // Forcing one query embed loads + initializes the model.
-      await provider.embedQuery('warmup');
-      activeProvider = provider;
+      // Forcing one query embed loads + initializes the model (and, for Ollama,
+      // verifies the server is reachable + discovers the dim).
+      await p.embedQuery('warmup');
+      activeProvider = p;
       ready = true;
     } catch (err) {
       // Degrade silently to FTS-only; never crash the backend.
       // eslint-disable-next-line no-console
       console.error(
-        '[embeddings] warmup failed — search stays lexical-only:',
+        `[embeddings] warmup failed (${p.id}) — search stays lexical-only:`,
         err instanceof Error ? err.message : err,
       );
     }
   })();
+}
+
+/** Active embedding backend for diagnostics / Settings. */
+export function embeddingsStatus(): { mode: string; ready: boolean; id: string | null } {
+  return {
+    mode: process.env.PINLOOM_EMBEDDINGS === 'off' ? 'off' : process.env.PINLOOM_EMBEDDINGS === 'ollama' ? 'ollama' : 'in-process',
+    ready,
+    id: activeProvider?.id ?? null,
+  };
 }
 
 /** Test-only: reset module state between cases. */

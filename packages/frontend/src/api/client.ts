@@ -112,6 +112,9 @@ export const api = {
   },
 
   // Reusable prompt templates (global, manually ordered).
+  getEmbeddingsStatus: () =>
+    request<{ mode: string; ready: boolean; id: string | null }>('/api/settings/embeddings'),
+
   listPromptTemplates: () =>
     request<PromptTemplate[]>('/api/prompt-templates'),
   createPromptTemplate: (body: { title: string; body: string }) =>

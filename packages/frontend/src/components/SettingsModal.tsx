@@ -443,6 +443,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
           <DefaultTransportSection />
 
+          <EmbeddingsSection />
+
           <InstallAppSection />
 
           <AutostartSection />
@@ -553,6 +555,44 @@ function DefaultTransportSection() {
 
 // Install pinloom as a standalone PWA so it gets a dock/taskbar icon and its
 // own window (no browser chrome). The service worker only precaches the static
+// Which backend powers semantic search. Read-only status + how to switch — the
+// backend is chosen at boot from PINLOOM_EMBEDDINGS (a live toggle would force a
+// full re-embed, so it's an env + restart, not a click).
+function EmbeddingsSection() {
+  const { data } = useSWR('settings:embeddings', () => api.getEmbeddingsStatus());
+  const label =
+    data?.mode === 'ollama' ? 'Ollama' : data?.mode === 'off' ? 'Off (lexical only)' : 'In-process (default)';
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        Search embeddings
+      </h3>
+      <div className="text-sm">
+        Backend: <span className="font-medium">{label}</span>
+        {data && data.mode !== 'off' && (
+          <span className="ml-2 text-xs text-[var(--color-ink-muted)]">
+            {data.ready ? `✓ warm${data.id ? ` (${data.id})` : ''}` : '… warming / unreachable → lexical fallback'}
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
+        Default is a zero-setup in-process model. For stronger embeddings, run a local{' '}
+        <a
+          href="https://ollama.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[var(--color-accent)] hover:underline"
+        >
+          Ollama
+        </a>
+        : <code>ollama pull bge-m3</code>, then set <code>PINLOOM_EMBEDDINGS=ollama</code> (optionally{' '}
+        <code>PINLOOM_OLLAMA_MODEL</code>) and restart. Switching backends re-embeds the corpus in
+        the background; search degrades to keyword-only meanwhile.
+      </p>
+    </section>
+  );
+}
+
 // shell — the app still needs the backend running, which pairs with the
 // login-autostart setting. Chromium fires `beforeinstallprompt` (button drives
 // the native dialog); iOS Safari has no programmatic prompt, so we fall back to

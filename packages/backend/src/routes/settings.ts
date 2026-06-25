@@ -19,8 +19,13 @@ import {
   generateAutostartUnit,
   getAutostartStatus,
 } from '../services/autostart.js';
+import { embeddingsStatus } from '../services/embeddings/index.js';
 
 export async function settingsRoutes(app: FastifyInstance) {
+  // Which embedding backend powers semantic search (in-process default / Ollama
+  // / off) and whether it's warmed up. Selected at boot via PINLOOM_EMBEDDINGS.
+  app.get('/api/settings/embeddings', async () => embeddingsStatus());
+
   // Default transport for NEW sessions. `effective` is what claudeTransport()
   // currently resolves to (setting → env → 'sdk'); `setting` is the explicit
   // user choice (null = follow env/default). Only sdk|terminal are user-
