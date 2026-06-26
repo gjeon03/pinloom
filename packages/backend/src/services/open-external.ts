@@ -1,9 +1,14 @@
 import { spawn } from 'node:child_process';
 
-/** Launch a file/folder in the OS default handler. macOS-only for now (`open`);
- *  other platforms get a clear error so the UI can fall back to a shown path.
- *  Shared by the wiki + timeline "open in editor" routes. */
-export function openExternal(filePath: string): { ok: boolean; error?: string } {
+/** Launch a path via macOS `open`. With `{ reveal: true }` it adds `-R`, which
+ *  opens the file's CONTAINING FOLDER in Finder with the file selected — instead
+ *  of launching whatever app is bound to the file type (which for `.md` can be a
+ *  terminal like Warp, useless for "show me where this lives"). Plain mode opens
+ *  in the default handler. Other platforms return a clear error for the UI. */
+export function openExternal(
+  filePath: string,
+  opts: { reveal?: boolean } = {},
+): { ok: boolean; error?: string } {
   if (process.platform !== 'darwin') {
     return {
       ok: false,
@@ -11,7 +16,8 @@ export function openExternal(filePath: string): { ok: boolean; error?: string } 
     };
   }
   try {
-    const child = spawn('open', [filePath], { stdio: 'ignore', detached: true });
+    const args = opts.reveal ? ['-R', filePath] : [filePath];
+    const child = spawn('open', args, { stdio: 'ignore', detached: true });
     child.unref();
     return { ok: true };
   } catch (err) {

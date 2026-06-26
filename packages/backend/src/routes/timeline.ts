@@ -124,7 +124,7 @@ export async function timelineRoutes(app: FastifyInstance) {
     },
   );
 
-  // Open the entry's markdown file in the OS default editor (macOS).
+  // Reveal the entry's markdown file in Finder (open its folder, file selected).
   app.post<{ Params: { projectId: string; date: string } }>(
     '/api/timeline/projects/:projectId/entries/:date/open',
     async (req, reply) => {
@@ -144,7 +144,7 @@ export async function timelineRoutes(app: FastifyInstance) {
         return { error: 'no entry for this day yet' };
       }
       const full = entryPath(slug, req.params.date);
-      const result = openExternal(full);
+      const result = openExternal(full, { reveal: true });
       if (!result.ok) {
         reply.code(500);
         return { error: result.error ?? 'open failed' };
