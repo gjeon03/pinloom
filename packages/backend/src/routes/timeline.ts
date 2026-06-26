@@ -54,12 +54,15 @@ export async function timelineRoutes(app: FastifyInstance) {
   // the Finder-style project→date tree.
   app.get('/api/timeline/index', async () => {
     const projects = db
-      .prepare('SELECT id, name, timeline_auto FROM projects WHERE hidden = 0 ORDER BY name')
-      .all() as { id: string; name: string; timeline_auto: number }[];
+      .prepare(
+        'SELECT id, name, group_id, timeline_auto FROM projects WHERE hidden = 0 ORDER BY name',
+      )
+      .all() as { id: string; name: string; group_id: string | null; timeline_auto: number }[];
     return {
       projects: projects.map((p) => ({
         projectId: p.id,
         projectName: p.name,
+        groupId: p.group_id,
         auto: p.timeline_auto !== 0,
         dates: listDates(getProjectWikiSlugByProjectId(p.id)),
       })),

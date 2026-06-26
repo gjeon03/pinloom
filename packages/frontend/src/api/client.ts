@@ -254,7 +254,13 @@ export const api = {
   // Work Timeline (L1)
   getTimelineIndex: () =>
     request<{
-      projects: { projectId: string; projectName: string; auto: boolean; dates: string[] }[];
+      projects: {
+        projectId: string;
+        projectName: string;
+        groupId: string | null;
+        auto: boolean;
+        dates: string[];
+      }[];
     }>('/api/timeline/index'),
   listTimelineDates: (projectId: string) =>
     request<{ dates: string[] }>(`/api/timeline/projects/${projectId}`),
