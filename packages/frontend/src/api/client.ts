@@ -112,6 +112,36 @@ export const api = {
   },
 
   // Reusable prompt templates (global, manually ordered).
+  getEmbeddingsStatus: () =>
+    request<{
+      mode: 'in-process' | 'ollama' | 'off';
+      ready: boolean;
+      id: string | null;
+      ollamaModel: string;
+      ollama: { running: boolean; models: string[] };
+      modelPresent: boolean;
+    }>('/api/settings/embeddings'),
+  setEmbeddingsBackend: (mode: 'in-process' | 'ollama' | 'off', model?: string) =>
+    request<{ mode: string; ready: boolean }>('/api/settings/embeddings', {
+      method: 'POST',
+      body: JSON.stringify({ mode, model }),
+    }),
+  pullOllamaModel: (model?: string) =>
+    request<{ started: true; model: string }>('/api/settings/ollama/pull', {
+      method: 'POST',
+      body: JSON.stringify(model ? { model } : {}),
+    }),
+  ollamaPullStatus: () =>
+    request<{
+      pulling: boolean;
+      model: string;
+      status: string;
+      completed: number;
+      total: number;
+      done: boolean;
+      error: string | null;
+    }>('/api/settings/ollama/pull'),
+
   listPromptTemplates: () =>
     request<PromptTemplate[]>('/api/prompt-templates'),
   createPromptTemplate: (body: { title: string; body: string }) =>

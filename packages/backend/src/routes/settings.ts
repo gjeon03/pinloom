@@ -19,8 +19,78 @@ import {
   generateAutostartUnit,
   getAutostartStatus,
 } from '../services/autostart.js';
+import {
+  EMBEDDINGS_BACKEND_KEY,
+  EMBEDDINGS_OLLAMA_MODEL_KEY,
+  embeddingsStatus,
+  initEmbeddings,
+  resetEmbeddings,
+  resolveOllamaModel,
+  type EmbeddingsMode,
+} from '../services/embeddings/index.js';
+import {
+  hasModel,
+  ollamaStatus,
+  pullStatus,
+  startPull,
+} from '../services/embeddings/ollama-admin.js';
+import {
+  startMessageIndexer,
+  stopMessageIndexer,
+} from '../services/message-indexer.js';
 
 export async function settingsRoutes(app: FastifyInstance) {
+  // Which embedding backend powers semantic search + the local Ollama state, so
+  // the Settings UI can manage it without env/terminal.
+  app.get('/api/settings/embeddings', async () => {
+    const status = embeddingsStatus();
+    const ollama = await ollamaStatus();
+    return { ...status, ollama, modelPresent: hasModel(ollama, resolveOllamaModel()) };
+  });
+
+  // Switch backend live: persist + tear down + re-init + restart the indexer, so
+  // the corpus re-embeds in the background under the new model (degrades to
+  // keyword search meanwhile). Returns the new status immediately (warm later).
+  app.post<{ Body: { mode?: string; model?: string } }>(
+    '/api/settings/embeddings',
+    async (req, reply) => {
+      const mode = req.body?.mode;
+      if (mode !== 'in-process' && mode !== 'ollama' && mode !== 'off') {
+        reply.code(400);
+        return { error: 'mode must be in-process | ollama | off' };
+      }
+      setSetting(EMBEDDINGS_BACKEND_KEY, mode as EmbeddingsMode);
+      if (mode === 'ollama' && req.body?.model) {
+        setSetting(EMBEDDINGS_OLLAMA_MODEL_KEY, req.body.model.trim());
+      }
+      stopMessageIndexer();
+      resetEmbeddings();
+      initEmbeddings();
+      startMessageIndexer();
+      const status = embeddingsStatus();
+      const ollama = await ollamaStatus();
+      return { ...status, ollama, modelPresent: hasModel(ollama, resolveOllamaModel()) };
+    },
+  );
+
+  // Pull an Ollama model (background, polled). On completion the UI re-applies
+  // the ollama backend so warmup retries against the now-present model.
+  app.post<{ Body: { model?: string } }>('/api/settings/ollama/pull', async (req, reply) => {
+    const model = (req.body?.model ?? resolveOllamaModel()).trim();
+    if (!model) {
+      reply.code(400);
+      return { error: 'model is required' };
+    }
+    const started = startPull(model);
+    if (!started) {
+      reply.code(409);
+      return { error: 'a pull is already running', job: pullStatus() };
+    }
+    return { started: true as const, model };
+  });
+
+  app.get('/api/settings/ollama/pull', async () => pullStatus());
+
   // Default transport for NEW sessions. `effective` is what claudeTransport()
   // currently resolves to (setting → env → 'sdk'); `setting` is the explicit
   // user choice (null = follow env/default). Only sdk|terminal are user-
