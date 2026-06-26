@@ -10,6 +10,7 @@ import { getProjectWikiSlugByProjectId } from '../services/wiki-sync.js';
 import { manualCaptureProjectDay } from '../services/timeline/capture.js';
 import {
   assertDate,
+  getTimelineRoot,
   globalDateView,
   listDates,
   readEntry,
@@ -54,6 +55,7 @@ export async function timelineRoutes(app: FastifyInstance) {
       .prepare('SELECT id, name, timeline_auto FROM projects WHERE hidden = 0 ORDER BY name')
       .all() as { id: string; name: string; timeline_auto: number }[];
     return {
+      root: getTimelineRoot(), // abs dir, for the "Open in Obsidian" button
       projects: projects.map((p) => ({
         projectId: p.id,
         projectName: p.name,

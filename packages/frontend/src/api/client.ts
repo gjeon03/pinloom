@@ -254,6 +254,7 @@ export const api = {
   // Work Timeline (L1)
   getTimelineIndex: () =>
     request<{
+      root: string;
       projects: { projectId: string; projectName: string; auto: boolean; dates: string[] }[];
     }>('/api/timeline/index'),
   listTimelineDates: (projectId: string) =>

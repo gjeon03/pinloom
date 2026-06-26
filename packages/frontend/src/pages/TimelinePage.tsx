@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
-import { CalendarDays, RefreshCw, ChevronRight } from 'lucide-react';
+import { CalendarDays, Network, RefreshCw, ChevronRight } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
+import { openInObsidian } from '../utils/obsidian.js';
 
 function localToday(): string {
   const d = new Date();
@@ -220,6 +221,15 @@ export function TimelinePage() {
         >
           <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
           {capturingAll ? `Capturing ${capJob!.done}/${capJob!.total}…` : 'Capture all'}
+        </button>
+        <button
+          onClick={() => index?.root && openInObsidian(index.root)}
+          disabled={!index?.root}
+          title="Open the timeline folder as an Obsidian vault. First time: in Obsidian, “Open folder as vault” → this directory."
+          className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+        >
+          <Network size={12} />
+          Obsidian
         </button>
         {notice && <span className="text-xs text-[var(--color-ink-muted)]">{notice}</span>}
       </header>

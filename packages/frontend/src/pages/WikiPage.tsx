@@ -7,6 +7,7 @@ import {
   Download,
   FolderOpen,
   Inbox,
+  Network,
   RefreshCw,
   Share2,
   Sparkles,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import { WikiGraphModal } from '../components/WikiGraphModal.js';
+import { openInObsidian } from '../utils/obsidian.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import {
   api,
@@ -327,6 +329,19 @@ export function WikiPage() {
                 >
                   <Share2 size={12} />
                   Graph
+                </button>
+              </Tooltip>
+              <Tooltip
+                label="Open the wiki folder as an Obsidian vault. First time: in Obsidian, “Open folder as vault” → this directory."
+                side="bottom"
+              >
+                <button
+                  onClick={() => overview && openInObsidian(overview.wikiRoot)}
+                  disabled={!overview}
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+                >
+                  <Network size={12} />
+                  Obsidian
                 </button>
               </Tooltip>
               <Tooltip label="Open wiki folder" side="bottom">
