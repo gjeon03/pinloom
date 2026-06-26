@@ -1723,7 +1723,9 @@ function MessageBubbleInner({
               {findModelLabel(message.model)}
             </span>
           )}
-          <span>{new Date(message.createdAt).toLocaleTimeString()}</span>
+          <span title={new Date(message.createdAt).toLocaleString()}>
+            {new Date(message.createdAt).toLocaleTimeString()}
+          </span>
           {showActions && (
             <div className="flex items-center gap-0.5">
               <RawViewToggle rawView={rawView} onChange={setRawView} />

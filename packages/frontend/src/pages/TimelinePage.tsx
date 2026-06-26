@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
-import { CalendarDays, FolderOpen, Pencil, RefreshCw, Save, X, ChevronRight } from 'lucide-react';
+import { CalendarDays, ChevronDown, FolderOpen, Pencil, RefreshCw, Save, X, ChevronRight } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
 
@@ -52,6 +52,42 @@ export function TimelinePage() {
 
   const { data: index } = useSWR('timeline:index', () => api.getTimelineIndex());
   const projects = index?.projects ?? [];
+  const { data: groups = [] } = useSWR('timeline:groups', () => api.listProjectGroups());
+
+  // Column 1 grouped like the sidebar (named groups by order → Ungrouped), each
+  // collapsible. Collapsed keys persist so the choice sticks across reloads.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('pinloom:timelineCollapsedGroups') ?? '[]'));
+    } catch {
+      return new Set();
+    }
+  });
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      localStorage.setItem('pinloom:timelineCollapsedGroups', JSON.stringify([...next]));
+      return next;
+    });
+  }
+  const groupedProjects = useMemo(() => {
+    const byGroup = new Map<string | null, typeof projects>();
+    for (const p of projects) {
+      const arr = byGroup.get(p.groupId) ?? [];
+      arr.push(p);
+      byGroup.set(p.groupId, arr);
+    }
+    const out: { key: string; label: string; isUngrouped: boolean; items: typeof projects }[] = [];
+    for (const g of [...groups].sort((a, b) => a.orderIndex - b.orderIndex)) {
+      const ps = byGroup.get(g.id);
+      if (ps?.length) out.push({ key: g.id, label: g.name, isUngrouped: false, items: ps });
+    }
+    const ung = byGroup.get(null);
+    if (ung?.length) out.push({ key: '__ung__', label: 'Ungrouped', isUngrouped: true, items: ung });
+    return out;
+  }, [projects, groups]);
 
   const selected = useMemo(
     () => projects.find((p) => p.projectId === projectId) ?? null,
@@ -274,29 +310,63 @@ export function TimelinePage() {
       <div className="flex-1 min-h-0 flex">
         {mode === 'project' ? (
           <>
-            {/* Column 1 — projects */}
+            {/* Column 1 — projects, grouped + collapsible (like the sidebar) */}
             <div className="w-52 shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-1">
               {projects.length === 0 ? (
                 <div className="text-xs text-[var(--color-ink-muted)] p-3">No projects.</div>
               ) : (
-                projects.map((p) => {
-                  const isSel = p.projectId === projectId;
+                groupedProjects.map((sec) => {
+                  const open = !collapsedGroups.has(sec.key);
                   return (
-                    <button
-                      key={p.projectId}
-                      onClick={() => clickProject(p.projectId)}
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs ${
-                        isSel
-                          ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
-                          : 'text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]'
-                      }`}
-                    >
-                      <span className="truncate flex-1">{p.projectName}</span>
-                      <span className="text-[10px] text-[var(--color-ink-muted)]">
-                        {p.dates.length || ''}
-                      </span>
-                      <ChevronRight size={12} className="shrink-0 text-[var(--color-ink-muted)]" />
-                    </button>
+                    <div key={sec.key}>
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(sec.key)}
+                        className="flex w-full items-center gap-1.5 px-2 py-1 text-left hover:bg-[var(--color-surface-2)]"
+                      >
+                        {open ? (
+                          <ChevronDown size={11} className="shrink-0 text-[var(--color-ink-muted)]" />
+                        ) : (
+                          <ChevronRight size={11} className="shrink-0 text-[var(--color-ink-muted)]" />
+                        )}
+                        <span
+                          className={`text-[10px] font-semibold uppercase tracking-wide ${
+                            sec.isUngrouped
+                              ? 'italic text-[var(--color-ink-muted)]'
+                              : 'text-[var(--color-ink)]'
+                          }`}
+                        >
+                          {sec.label}
+                        </span>
+                        <span className="ml-auto text-[10px] text-[var(--color-ink-muted)]">
+                          {sec.items.length}
+                        </span>
+                      </button>
+                      {open &&
+                        sec.items.map((p) => {
+                          const isSel = p.projectId === projectId;
+                          return (
+                            <button
+                              key={p.projectId}
+                              onClick={() => clickProject(p.projectId)}
+                              className={`flex w-full items-center gap-2 py-1.5 pl-5 pr-3 text-left text-xs ${
+                                isSel
+                                  ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                                  : 'text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]'
+                              }`}
+                            >
+                              <span className="flex-1 truncate">{p.projectName}</span>
+                              <span className="text-[10px] text-[var(--color-ink-muted)]">
+                                {p.dates.length || ''}
+                              </span>
+                              <ChevronRight
+                                size={12}
+                                className="shrink-0 text-[var(--color-ink-muted)]"
+                              />
+                            </button>
+                          );
+                        })}
+                    </div>
                   );
                 })
               )}
