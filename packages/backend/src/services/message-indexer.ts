@@ -104,16 +104,45 @@ let running = false;
 let schemaReady = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 
+/** The most recent indexing failure, surfaced to the Settings UI so a silent
+ *  embedding breakage (e.g. an Ollama 400 on oversized input) is visible instead
+ *  of buried in logs. Cleared after a fully-clean sweep. */
+export interface IndexError {
+  pass: 'schema' | 'timeline' | 'wiki' | 'message';
+  message: string;
+  at: string;
+}
+let lastIndexError: IndexError | null = null;
+export function getLastIndexError(): IndexError | null {
+  return lastIndexError;
+}
+
 async function tick(): Promise<void> {
   if (running) return; // single-flight
   const provider = getEmbeddingProvider();
   if (!provider) return; // not warm / FTS-only
   running = true;
+  let erroredThisTick = false;
+  const record = (pass: IndexError['pass'], err: unknown) => {
+    erroredThisTick = true;
+    lastIndexError = {
+      pass,
+      message: err instanceof Error ? err.message : String(err),
+      at: new Date().toISOString(),
+    };
+    // eslint-disable-next-line no-console
+    console.error(`[vector] ${pass} pass failed:`, lastIndexError.message);
+  };
   try {
     const db = getDb();
-    if (!schemaReady) {
-      ensureSchema(db, provider);
-      schemaReady = true;
+    try {
+      if (!schemaReady) {
+        ensureSchema(db, provider);
+        schemaReady = true;
+      }
+    } catch (err) {
+      record('schema', err);
+      return; // can't index without the message schema; try again next tick
     }
     // Each corpus is indexed in its OWN try/catch so one failing pass never
     // starves the others (a single oversized message that an embedder rejects
@@ -128,15 +157,13 @@ async function tick(): Promise<void> {
       const tl = await runTimelineIndexPass(db, provider);
       gcTimelineVectors(db, tl);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[vector] timeline pass failed:', err instanceof Error ? err.message : err);
+      record('timeline', err);
     }
     try {
       const wk = await runWikiIndexPass(db, provider);
       gcWikiVectors(db, wk);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[vector] wiki pass failed:', err instanceof Error ? err.message : err);
+      record('wiki', err);
     }
     try {
       const processed = await runIndexPass(db, provider);
@@ -147,9 +174,9 @@ async function tick(): Promise<void> {
         gcOrphans(db, MESSAGE_VECTORS, 'SELECT id FROM messages');
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[vector] message pass failed:', err instanceof Error ? err.message : err);
+      record('message', err);
     }
+    if (!erroredThisTick) lastIndexError = null; // a clean sweep clears the banner
   } finally {
     running = false;
   }
@@ -171,6 +198,7 @@ export function stopMessageIndexer(): void {
   }
   running = false;
   schemaReady = false;
+  lastIndexError = null;
   __resetTimelineIndexerForTest();
   __resetWikiIndexerForTest();
 }

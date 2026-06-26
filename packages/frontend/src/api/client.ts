@@ -130,6 +130,12 @@ export const api = {
       ollamaModel: string;
       ollama: { running: boolean; models: string[] };
       modelPresent: boolean;
+      indexing: {
+        messages: { indexed: number; total: number };
+        timeline: { indexed: number };
+        wiki: { indexed: number; total: number };
+        lastError: { pass: string; message: string; at: string } | null;
+      };
     }>('/api/settings/embeddings'),
   setEmbeddingsBackend: (mode: 'in-process' | 'ollama' | 'off', model?: string) =>
     request<{ mode: string; ready: boolean }>('/api/settings/embeddings', {

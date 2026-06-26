@@ -565,6 +565,14 @@ const EMB_MODES = [
   { id: 'off', label: 'Off' },
 ] as const;
 
+const fmtCount = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+function timeAgo(iso: string): string {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return `${Math.floor(s)}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+}
+
 function EmbeddingsSection() {
   const { data, mutate } = useSWR('settings:embeddings', () => api.getEmbeddingsStatus(), {
     refreshInterval: 4000,
@@ -670,6 +678,27 @@ function EmbeddingsSection() {
           </>
         )}
       </div>
+
+      {data?.indexing && mode !== 'off' && (
+        <div className="mt-2 border-t border-[var(--color-border)] pt-2 text-[11px]">
+          <div className="text-[var(--color-ink-muted)]">
+            Indexed: messages {fmtCount(data.indexing.messages.indexed)}/
+            {fmtCount(data.indexing.messages.total)} · timeline {data.indexing.timeline.indexed} · wiki{' '}
+            {data.indexing.wiki.indexed}/{data.indexing.wiki.total}
+            {data.indexing.messages.indexed < data.indexing.messages.total && !data.indexing.lastError && (
+              <span className="ml-1 text-[var(--color-accent)]">· indexing…</span>
+            )}
+          </div>
+          {data.indexing.lastError && (
+            <div className="mt-1 text-amber-500">
+              ⚠ last error ({data.indexing.lastError.pass}): {data.indexing.lastError.message}
+              <span className="ml-1 text-[var(--color-ink-muted)]">
+                · {timeAgo(data.indexing.lastError.at)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
       {guideOpen && (
         <OllamaGuideModal model={data?.ollamaModel ?? 'bge-m3'} onClose={() => setGuideOpen(false)} />
       )}

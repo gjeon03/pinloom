@@ -35,9 +35,47 @@ import {
   startPull,
 } from '../services/embeddings/ollama-admin.js';
 import {
+  getLastIndexError,
   startMessageIndexer,
   stopMessageIndexer,
 } from '../services/message-indexer.js';
+import { getDb } from '../db/connection.js';
+import { MESSAGE_VECTORS, vectorRowCount } from '../services/vector-store.js';
+import { TIMELINE_VECTORS } from '../services/timeline/indexer.js';
+import { WIKI_VECTORS, listWikiSlugs } from '../services/wiki-indexer.js';
+
+// Per-corpus indexing progress + the last failure, so the Settings UI can show
+// "messages 3.2k/19.7k · timeline 256 · wiki 27/27" and surface a stuck embed
+// instead of it dying silently in the logs. Counts are cheap COUNT(*)s.
+function indexStatus() {
+  const db = getDb();
+  let messageTotal = 0;
+  try {
+    messageTotal = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM messages
+           WHERE role IN ('user','assistant') AND content <> '' AND source_message_id IS NULL`,
+        )
+        .get() as { c: number }
+    ).c;
+  } catch {
+    // messages table always exists; guard anyway
+  }
+  const wikiTotal = (() => {
+    try {
+      return listWikiSlugs().length;
+    } catch {
+      return 0;
+    }
+  })();
+  return {
+    messages: { indexed: vectorRowCount(db, MESSAGE_VECTORS), total: messageTotal },
+    timeline: { indexed: vectorRowCount(db, TIMELINE_VECTORS) },
+    wiki: { indexed: vectorRowCount(db, WIKI_VECTORS), total: wikiTotal },
+    lastError: getLastIndexError(),
+  };
+}
 
 export async function settingsRoutes(app: FastifyInstance) {
   // Which embedding backend powers semantic search + the local Ollama state, so
@@ -45,7 +83,12 @@ export async function settingsRoutes(app: FastifyInstance) {
   app.get('/api/settings/embeddings', async () => {
     const status = embeddingsStatus();
     const ollama = await ollamaStatus();
-    return { ...status, ollama, modelPresent: hasModel(ollama, resolveOllamaModel()) };
+    return {
+      ...status,
+      ollama,
+      modelPresent: hasModel(ollama, resolveOllamaModel()),
+      indexing: indexStatus(),
+    };
   });
 
   // Switch backend live: persist + tear down + re-init + restart the indexer, so
