@@ -5,8 +5,10 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
+  Cloud,
   FolderOpen,
   Inbox,
+  MoreHorizontal,
   RefreshCw,
   Share2,
   Sparkles,
@@ -126,6 +128,38 @@ export function WikiPage() {
   const [showSyncPicker, setShowSyncPicker] = useState(false);
   const [showAnalyzePicker, setShowAnalyzePicker] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
+  // Utility actions live behind a "⋯ More" menu so the header isn't a wall of
+  // buttons. Includes the GitHub wiki backup (moved here from Settings).
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [moreOpen]);
+
+  async function backupToGithub() {
+    setMoreOpen(false);
+    setGardenMsg(null);
+    try {
+      const cfg = await api.getBackupConfig();
+      if (!cfg.connected || !cfg.repo) {
+        setGardenMsg('Connect a GitHub repo in Settings → “Wiki sync (GitHub)” first.');
+        return;
+      }
+      setBackingUp(true);
+      const r = await api.runBackupSync();
+      setGardenMsg(r.pushed ? 'Backed up the wiki to GitHub.' : r.message);
+    } catch (e) {
+      setGardenMsg(`Backup failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBackingUp(false);
+    }
+  }
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastSyncSummary, setLastSyncSummary] = useState<string | null>(null);
@@ -296,16 +330,6 @@ export function WikiPage() {
                   Analyze
                 </button>
               </Tooltip>
-              <Tooltip label="Let the gardener propose cleanups" side="bottom">
-                <button
-                  onClick={runGarden}
-                  disabled={gardening}
-                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
-                >
-                  <Sprout size={12} className={gardening ? 'animate-pulse' : ''} />
-                  {gardening ? 'Gardening…' : 'Garden'}
-                </button>
-              </Tooltip>
               <Tooltip label="Review gardener proposals" side="bottom">
                 <Link
                   to="/wiki/proposals"
@@ -329,33 +353,6 @@ export function WikiPage() {
                   Graph
                 </button>
               </Tooltip>
-              <Tooltip label="Open wiki folder" side="bottom">
-                <button
-                  onClick={handleOpenFolder}
-                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
-                >
-                  <FolderOpen size={12} />
-                  Folder
-                </button>
-              </Tooltip>
-              <Tooltip label="Export wiki as zip" side="bottom">
-                <button
-                  onClick={handleExport}
-                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
-                >
-                  <Download size={12} />
-                  Export
-                </button>
-              </Tooltip>
-              <Tooltip label="Import wiki from zip (auto-backs up first)" side="bottom">
-                <button
-                  onClick={() => importInputRef.current?.click()}
-                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
-                >
-                  <Upload size={12} />
-                  Import
-                </button>
-              </Tooltip>
               <input
                 ref={importInputRef}
                 type="file"
@@ -368,18 +365,81 @@ export function WikiPage() {
                   e.target.value = '';
                 }}
               />
-              <Tooltip label="Reload" side="bottom">
-                <button
-                  onClick={refresh}
-                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
-                >
-                  {/* match the labelled buttons' text-xs line-box (16px) so the
-                      icon-only button isn't shorter than the rest */}
-                  <span className="flex h-4 items-center">
-                    <RefreshCw size={12} />
-                  </span>
-                </button>
-              </Tooltip>
+              {/* Utility / less-frequent actions, tucked behind one button. */}
+              <div className="relative" ref={moreRef}>
+                <Tooltip label="More actions" side="bottom">
+                  <button
+                    onClick={() => setMoreOpen((v) => !v)}
+                    aria-label="More actions"
+                    className="flex items-center rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1.5 text-xs hover:border-[var(--color-accent)]"
+                  >
+                    <MoreHorizontal size={14} />
+                  </button>
+                </Tooltip>
+                {moreOpen && (
+                  <div className="absolute right-0 z-20 mt-1 w-52 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] py-1 shadow-lg">
+                    {[
+                      {
+                        icon: <Sprout size={13} className={gardening ? 'animate-pulse' : ''} />,
+                        label: gardening ? 'Gardening…' : 'Garden (propose cleanups)',
+                        onClick: () => {
+                          setMoreOpen(false);
+                          void runGarden();
+                        },
+                        disabled: gardening,
+                      },
+                      {
+                        icon: <Cloud size={13} className={backingUp ? 'animate-pulse' : ''} />,
+                        label: backingUp ? 'Backing up…' : 'Backup to GitHub',
+                        onClick: () => void backupToGithub(),
+                        disabled: backingUp,
+                      },
+                      {
+                        icon: <FolderOpen size={13} />,
+                        label: 'Open wiki folder',
+                        onClick: () => {
+                          setMoreOpen(false);
+                          void handleOpenFolder();
+                        },
+                      },
+                      {
+                        icon: <Download size={13} />,
+                        label: 'Export as zip',
+                        onClick: () => {
+                          setMoreOpen(false);
+                          void handleExport();
+                        },
+                      },
+                      {
+                        icon: <Upload size={13} />,
+                        label: 'Import from zip',
+                        onClick: () => {
+                          setMoreOpen(false);
+                          importInputRef.current?.click();
+                        },
+                      },
+                      {
+                        icon: <RefreshCw size={13} />,
+                        label: 'Reload',
+                        onClick: () => {
+                          setMoreOpen(false);
+                          void refresh();
+                        },
+                      },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        onClick={item.onClick}
+                        disabled={item.disabled}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+                      >
+                        {item.icon}
+                        <span>{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
