@@ -59,6 +59,11 @@ function entryFile(slug: string, date: string, home?: string): string {
   return path.join(projectDir(slug, home), `${date}.md`);
 }
 
+/** Absolute path to a project-day entry file (for the "open in editor" route). */
+export function entryPath(slug: string, date: string, home?: string): string {
+  return entryFile(slug, date, home);
+}
+
 /** The markdown for one project-day, or null if no entry exists yet. */
 export function readEntry(slug: string, date: string, home?: string): string | null {
   const file = entryFile(slug, date, home);

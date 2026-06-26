@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
-import { CalendarDays, RefreshCw, ChevronRight } from 'lucide-react';
+import { CalendarDays, ExternalLink, Pencil, RefreshCw, Save, X, ChevronRight } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
 
@@ -86,6 +86,41 @@ export function TimelinePage() {
     mode === 'date' && date ? ['timeline:date', date] : null,
     () => api.getTimelineForDate(date),
   );
+
+  // In-place edit of the current project-day entry (mirrors the wiki's edit).
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [savingEntry, setSavingEntry] = useState(false);
+  // Leave edit mode whenever the viewed entry changes (project/date switch).
+  useEffect(() => {
+    setEditing(false);
+  }, [projectId, projDate]);
+
+  function startEditEntry() {
+    setDraft(entry?.markdown ?? '');
+    setEditing(true);
+  }
+  async function saveEntry() {
+    if (!projectId || !projDate) return;
+    setSavingEntry(true);
+    try {
+      await api.saveTimelineEntry(projectId, projDate, draft);
+      await globalMutate(['timeline:entry', projectId, projDate]);
+      setEditing(false);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingEntry(false);
+    }
+  }
+  async function openEntryFile() {
+    if (!projectId || !projDate) return;
+    try {
+      await api.openTimelineInEditor(projectId, projDate);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   // "Capture all" runs as a backend job; poll its status so progress survives
   // navigation AND reload (the backend owns the state). Poll only while running.
@@ -177,51 +212,63 @@ export function TimelinePage() {
           </button>
         </div>
 
+        {/* LEFT — view controls: what you're looking at */}
         {mode === 'project' && selected && (
-          <>
-            <label
-              className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)] cursor-pointer"
-              title={`Auto-capture for ${selected.projectName} (per-project).\nSchedule: a background sweep runs every ~1 min and captures a session once it has been idle ~15 min AND ≥80 chars of new work accrued since the last capture. An already-captured day re-distills at most once every 30 min. Closing a session tab deletes it — capture before then (or use Capture now).`}
-            >
-              <input type="checkbox" checked={selected.auto} onChange={() => void toggleAuto()} />
-              Auto-capture
-            </label>
+          <label
+            className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)] cursor-pointer"
+            title={`Auto-capture for ${selected.projectName} (per-project).\nSchedule: a background sweep runs every ~1 min and captures a session once it has been idle ~15 min AND ≥80 chars of new work accrued since the last capture. An already-captured day re-distills at most once every 30 min. Closing a session tab deletes it — capture before then (or use Capture).`}
+          >
+            <input type="checkbox" checked={selected.auto} onChange={() => void toggleAuto()} />
+            Auto-capture
+          </label>
+        )}
+        {mode === 'date' && (
+          <label className="flex items-center gap-1.5 text-xs">
+            <span className="text-[var(--color-ink-muted)]">Viewing</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs"
+            />
+          </label>
+        )}
+
+        {/* RIGHT — capture controls: target day + actions, grouped + labelled so
+            the capture date isn't mistaken for the view date. */}
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-muted)]">
+            Capture
+          </span>
+          <input
+            type="date"
+            value={captureDate}
+            max={localToday()}
+            title="Target day — pick a past day to backfill it"
+            onChange={(e) => setCaptureDate(e.target.value)}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1 text-xs"
+          />
+          {mode === 'project' && selected && (
             <button
               onClick={() => void captureNow()}
               disabled={busy}
-              title={`Capture / regenerate ${captureDate} for ${selected.projectName} now (from that day's sessions + git commits)`}
+              title={`Capture / regenerate ${captureDate} for ${selected.projectName} (from that day's sessions + git commits)`}
               className={captureBtnCls}
             >
-              <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> Capture now
+              <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> This project
             </button>
-          </>
-        )}
-        {mode === 'date' && (
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1"
-          />
-        )}
-        <input
-          type="date"
-          value={captureDate}
-          max={localToday()}
-          title="Which day Capture targets — pick a past day to backfill it"
-          onChange={(e) => setCaptureDate(e.target.value)}
-          className="text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1"
-        />
-        <button
-          onClick={() => void captureAll()}
-          disabled={busy || capturingAll}
-          title={`Capture / regenerate ${captureDate} for every project (runs in the background — progress shows here)`}
-          className={captureBtnCls}
-        >
-          <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
-          {capturingAll ? `Capturing ${capJob!.done}/${capJob!.total}…` : 'Capture all'}
-        </button>
-        {notice && <span className="text-xs text-[var(--color-ink-muted)]">{notice}</span>}
+          )}
+          <button
+            onClick={() => void captureAll()}
+            disabled={busy || capturingAll}
+            title={`Capture / regenerate ${captureDate} for every project (runs in the background — progress shows here)`}
+            className={captureBtnCls}
+          >
+            <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
+            {capturingAll ? `${capJob!.done}/${capJob!.total}…` : 'All projects'}
+          </button>
+          {notice && <span className="text-xs text-[var(--color-ink-muted)]">{notice}</span>}
+        </div>
       </header>
 
       <div className="flex-1 min-h-0 flex">
@@ -276,14 +323,71 @@ export function TimelinePage() {
                 ))
               )}
             </div>
-            {/* Column 3 — the entry */}
+            {/* Column 3 — the entry (with per-entry edit + open-in-editor) */}
             <div className="flex-1 overflow-y-auto p-4">
-              {entry?.markdown ? (
-                <Markdown content={entry.markdown} />
+              {selected && projDate ? (
+                <>
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="font-mono text-[11px] text-[var(--color-ink-muted)]">
+                      {selected.projectName} · {projDate}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {editing ? (
+                        <>
+                          <button
+                            onClick={() => setEditing(false)}
+                            disabled={savingEntry}
+                            className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-50"
+                          >
+                            <X size={12} /> Cancel
+                          </button>
+                          <button
+                            onClick={() => void saveEntry()}
+                            disabled={savingEntry}
+                            className="flex items-center gap-1 rounded bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-black disabled:opacity-50"
+                          >
+                            <Save size={12} /> {savingEntry ? 'Saving…' : 'Save'}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={startEditEntry}
+                            title="Edit this entry in place"
+                            className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs hover:border-[var(--color-accent)]"
+                          >
+                            <Pencil size={12} /> Edit
+                          </button>
+                          <button
+                            onClick={() => void openEntryFile()}
+                            disabled={!entry?.markdown}
+                            title="Open the markdown file in your default editor (macOS)"
+                            className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+                          >
+                            <ExternalLink size={12} /> Open
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {editing ? (
+                    <textarea
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      spellCheck={false}
+                      className="h-[calc(100%-2.5rem)] min-h-64 w-full resize-none rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 font-mono text-xs leading-relaxed"
+                      placeholder="# Markdown for this day…"
+                    />
+                  ) : entry?.markdown ? (
+                    <Markdown content={entry.markdown} />
+                  ) : (
+                    <div className="text-sm text-[var(--color-ink-muted)]">
+                      No entry for this day. <span className="text-[var(--color-ink-muted)]">Click Edit to write one.</span>
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="text-sm text-[var(--color-ink-muted)]">
-                  {selected && projDate ? 'No entry for this day.' : 'Pick a date.'}
-                </div>
+                <div className="text-sm text-[var(--color-ink-muted)]">Pick a date.</div>
               )}
             </div>
           </>
