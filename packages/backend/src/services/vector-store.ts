@@ -150,6 +150,20 @@ export function gcOrphans(db: Database, table: string, validIdsSql: string): num
   }
 }
 
+/** Read every stored vector (doc_id + values) — for pairwise work like the wiki
+ *  similarity graph. Uses vec_to_json so we don't reinterpret raw blob bytes. */
+export function readVectors(db: Database, table: string): { docId: string; vec: Float32Array }[] {
+  if (!isVectorAvailable()) return [];
+  try {
+    const rows = db
+      .prepare(`SELECT doc_id, vec_to_json(embedding) AS v FROM ${table}`)
+      .all() as { doc_id: string; v: string }[];
+    return rows.map((r) => ({ docId: r.doc_id, vec: Float32Array.from(JSON.parse(r.v) as number[]) }));
+  } catch {
+    return [];
+  }
+}
+
 export function vectorRowCount(db: Database, table: string): number {
   if (!isVectorAvailable()) return 0;
   try {

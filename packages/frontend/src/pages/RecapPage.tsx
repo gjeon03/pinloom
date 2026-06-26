@@ -132,6 +132,15 @@ export function RecapPage() {
                               [{src.n}] 🗓 {src.projectName} · {src.date}
                             </Link>
                           </li>
+                        ) : src.kind === 'wiki' ? (
+                          <li key={src.n} className="text-xs">
+                            <Link
+                              to={`/wiki/${encodeURIComponent(`${src.slug}.md`)}`}
+                              className="text-[var(--color-accent)] hover:underline"
+                            >
+                              [{src.n}] 📖 {src.title}
+                            </Link>
+                          </li>
                         ) : (
                           <li key={src.n} className="text-xs">
                             <Link to={`/s/${src.sessionId}`} className="text-[var(--color-accent)] hover:underline">

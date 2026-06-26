@@ -34,13 +34,21 @@ export type RecapSource =
       projectName: string;
       createdAt: string;
     }
-  | { kind: 'timeline'; n: number; projectId: string; projectName: string; date: string };
+  | { kind: 'timeline'; n: number; projectId: string; projectName: string; date: string }
+  | { kind: 'wiki'; n: number; slug: string; title: string };
 
 // A timeline entry hit from ⌘K search (semantic-only).
 export interface TimelineSearchHit {
   projectId: string;
   projectName: string;
   date: string;
+  excerpt: string;
+}
+
+// A wiki page hit from ⌘K search (semantic-only).
+export interface WikiSearchHit {
+  slug: string;
+  title: string;
   excerpt: string;
 }
 
@@ -106,9 +114,11 @@ export const api = {
     const params = new URLSearchParams({ q: query });
     if (opts?.projectId) params.set('projectId', opts.projectId);
     if (opts?.limit) params.set('limit', String(opts.limit));
-    return request<{ results: MessageSearchResult[]; timeline: TimelineSearchHit[] }>(
-      `/api/search?${params}`,
-    );
+    return request<{
+      results: MessageSearchResult[];
+      timeline: TimelineSearchHit[];
+      wiki: WikiSearchHit[];
+    }>(`/api/search?${params}`);
   },
 
   // Reusable prompt templates (global, manually ordered).
@@ -120,6 +130,12 @@ export const api = {
       ollamaModel: string;
       ollama: { running: boolean; models: string[] };
       modelPresent: boolean;
+      indexing: {
+        messages: { indexed: number; total: number };
+        timeline: { indexed: number };
+        wiki: { indexed: number; total: number };
+        lastError: { pass: string; message: string; at: string } | null;
+      };
     }>('/api/settings/embeddings'),
   setEmbeddingsBackend: (mode: 'in-process' | 'ollama' | 'off', model?: string) =>
     request<{ mode: string; ready: boolean }>('/api/settings/embeddings', {
@@ -164,6 +180,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ids }),
     }),
+
+  // Wiki similarity graph (nodes = pages, edges = nearest neighbours by embedding).
+  getWikiGraph: () =>
+    request<{
+      nodes: { id: string; title: string; group: string }[];
+      edges: { source: string; target: string; weight: number }[];
+      truncated: boolean;
+    }>('/api/wiki/graph'),
 
   // Wiki gardener proposals (Phase 2).
   runGardener: () =>

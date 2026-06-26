@@ -21,6 +21,7 @@ import type { EmbeddingProvider } from './embeddings/types.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { listDates, readEntry } from './timeline/store.js';
 import { TIMELINE_VECTORS } from './timeline/indexer.js';
+import { WIKI_VECTORS, readWikiPage, wikiTitle } from './wiki-indexer.js';
 import { getVectorMeta, knn } from './vector-store.js';
 import { isVectorAvailable } from '../db/connection.js';
 
@@ -28,6 +29,7 @@ const DEFAULT_RECAP_MODEL = 'claude-sonnet-4-6';
 const RECAP_TIMEOUT_MS = 5 * 60_000;
 const ANSWER_HITS = 12;
 const TIMELINE_HITS = 8;
+const WIKI_HITS = 6;
 const RRF_K = 60; // reciprocal-rank-fusion constant (matches message-search)
 const PER_MESSAGE_CAP = 4000; // chars per hydrated message / timeline entry
 const ANSWER_CONTEXT_BUDGET = 60_000;
@@ -101,7 +103,8 @@ type TimelineSourceData = {
   projectName: string;
   date: string;
 };
-type RecapSourceData = MessageSourceData | TimelineSourceData;
+type WikiSourceData = { kind: 'wiki'; slug: string; title: string };
+type RecapSourceData = MessageSourceData | TimelineSourceData | WikiSourceData;
 export type RecapSource = RecapSourceData & { n: number };
 export interface CorpusAnswer {
   answer: string;
@@ -114,7 +117,7 @@ function langLine(lang: RecapLanguage): string {
 }
 
 function answerSystem(lang: RecapLanguage): string {
-  return `You answer a developer's question using ONLY the numbered context excerpts from their own past coding conversations and dated work-journal entries. Each excerpt is tagged [n]. Ground every claim in the excerpts and CITE the ones you use inline as [n]. If the excerpts don't contain the answer, say so plainly — never invent. Be concise. ${langLine(lang)}`;
+  return `You answer a developer's question using ONLY the numbered context excerpts from their own past coding conversations, dated work-journal entries, and curated wiki notes. Each excerpt is tagged [n]. Ground every claim in the excerpts and CITE the ones you use inline as [n]. If the excerpts don't contain the answer, say so plainly — never invent. Be concise. ${langLine(lang)}`;
 }
 
 // One ranked candidate before budget-filling. `rrf` is the reciprocal-rank score
@@ -123,9 +126,9 @@ function answerSystem(lang: RecapLanguage): string {
 // messages (review M3).
 type Candidate = {
   rrf: number;
-  /** 0 = message, 1 = timeline — deterministic tie-break so equal RRF ranks are
-   *  stable across runs and messages (the richer primary corpus) win ties. */
-  arm: 0 | 1;
+  /** 0 = message, 1 = timeline, 2 = wiki — deterministic tie-break so equal RRF
+   *  ranks are stable and messages (the richer primary corpus) win ties. */
+  arm: 0 | 1 | 2;
   content: string;
   source: RecapSourceData;
   label: string;
@@ -208,6 +211,30 @@ export async function answerOverCorpus(
       });
     } catch {
       // embed/knn failure → degrade to messages-only
+    }
+  }
+
+  // --- arm 3: wiki (vector only) — curated convention notes (L2). Not
+  // project-scoped (wiki is cross-cutting). Same shared-space guard. ---
+  const wkMeta = isVectorAvailable() ? getVectorMeta(db, WIKI_VECTORS) : null;
+  if (provider && wkMeta && wkMeta.modelId === provider.id) {
+    try {
+      const qvec = await provider.embedQuery(q);
+      const wkHits = knn(db, WIKI_VECTORS, qvec, Math.min(WIKI_HITS * 2, 100)).slice(0, WIKI_HITS);
+      wkHits.forEach((hit, i) => {
+        const content = readWikiPage(hit.docId);
+        if (!content) return; // page gone since indexing
+        const title = wikiTitle(content, hit.docId);
+        candidates.push({
+          rrf: 1 / (RRF_K + i),
+          arm: 2,
+          content: content.slice(0, PER_MESSAGE_CAP),
+          label: `wiki · ${title}`,
+          source: { kind: 'wiki', slug: hit.docId, title },
+        });
+      });
+    } catch {
+      // embed/knn failure → degrade
     }
   }
 

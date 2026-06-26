@@ -29,6 +29,11 @@ import {
   gcTimelineVectors,
   runTimelineIndexPass,
 } from './timeline/indexer.js';
+import {
+  __resetWikiIndexerForTest,
+  gcWikiVectors,
+  runWikiIndexPass,
+} from './wiki-indexer.js';
 
 const BATCH = 32;
 const INTERVAL_MS = 5000;
@@ -99,31 +104,79 @@ let running = false;
 let schemaReady = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 
+/** The most recent indexing failure, surfaced to the Settings UI so a silent
+ *  embedding breakage (e.g. an Ollama 400 on oversized input) is visible instead
+ *  of buried in logs. Cleared after a fully-clean sweep. */
+export interface IndexError {
+  pass: 'schema' | 'timeline' | 'wiki' | 'message';
+  message: string;
+  at: string;
+}
+let lastIndexError: IndexError | null = null;
+export function getLastIndexError(): IndexError | null {
+  return lastIndexError;
+}
+
 async function tick(): Promise<void> {
   if (running) return; // single-flight
   const provider = getEmbeddingProvider();
   if (!provider) return; // not warm / FTS-only
   running = true;
+  let erroredThisTick = false;
+  const record = (pass: IndexError['pass'], err: unknown) => {
+    erroredThisTick = true;
+    lastIndexError = {
+      pass,
+      message: err instanceof Error ? err.message : String(err),
+      at: new Date().toISOString(),
+    };
+    // eslint-disable-next-line no-console
+    console.error(`[vector] ${pass} pass failed:`, lastIndexError.message);
+  };
   try {
     const db = getDb();
-    if (!schemaReady) {
-      ensureSchema(db, provider);
-      schemaReady = true;
+    try {
+      if (!schemaReady) {
+        ensureSchema(db, provider);
+        schemaReady = true;
+      }
+    } catch (err) {
+      record('schema', err);
+      return; // can't index without the message schema; try again next tick
     }
-    const processed = await runIndexPass(db, provider);
-    // Evict vectors orphaned by session/message deletes after a productive pass.
-    // (Orphans are otherwise harmless — never reused ids, filtered at search.)
-    if (processed > 0) {
-      gcOrphans(db, MESSAGE_VECTORS, 'SELECT id FROM messages');
+    // Each corpus is indexed in its OWN try/catch so one failing pass never
+    // starves the others (a single oversized message that an embedder rejects
+    // used to throw the shared pass and block timeline + wiki forever).
+    //
+    // The small curated corpora (timeline L1, wiki L2) go FIRST: they re-embed
+    // in seconds, so a large message backfill — e.g. a full re-embed after an
+    // embedding-model switch — can't keep them empty for the whole drain. In
+    // steady state both are a cheap unchanged-hash check, so messages still
+    // index promptly right after.
+    try {
+      const tl = await runTimelineIndexPass(db, provider);
+      gcTimelineVectors(db, tl);
+    } catch (err) {
+      record('timeline', err);
     }
-    // Same single-flight + same warm provider: index the Work Timeline (L1) too,
-    // so search/Recap span the curated journal. Runs after messages to keep the
-    // chat hot path first; GC is internally guarded against FS flakiness.
-    const tl = await runTimelineIndexPass(db, provider);
-    gcTimelineVectors(db, tl);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('[vector] index pass failed:', err instanceof Error ? err.message : err);
+    try {
+      const wk = await runWikiIndexPass(db, provider);
+      gcWikiVectors(db, wk);
+    } catch (err) {
+      record('wiki', err);
+    }
+    try {
+      const processed = await runIndexPass(db, provider);
+      // Evict vectors orphaned by session/message deletes after a productive
+      // pass. (Orphans are otherwise harmless — never reused ids, filtered out
+      // at search.)
+      if (processed > 0) {
+        gcOrphans(db, MESSAGE_VECTORS, 'SELECT id FROM messages');
+      }
+    } catch (err) {
+      record('message', err);
+    }
+    if (!erroredThisTick) lastIndexError = null; // a clean sweep clears the banner
   } finally {
     running = false;
   }
@@ -145,5 +198,7 @@ export function stopMessageIndexer(): void {
   }
   running = false;
   schemaReady = false;
+  lastIndexError = null;
   __resetTimelineIndexerForTest();
+  __resetWikiIndexerForTest();
 }
