@@ -9,10 +9,21 @@ import { readVectors } from './vector-store.js';
 import { WIKI_VECTORS, readWikiPage, wikiTitle } from './wiki-indexer.js';
 
 export interface WikiGraph {
-  nodes: { id: string; title: string }[];
+  nodes: { id: string; title: string; group: string }[];
   edges: { source: string; target: string; weight: number }[];
   /** True when the wiki exceeded MAX_NODES and the graph was capped. */
   truncated: boolean;
+}
+
+/** The page's owning project — first `applies_to` entry from the frontmatter
+ *  (e.g. `kso-frontend`), used to colour nodes by project. Falls back to the
+ *  trailing slug tokens, then 'global'. */
+function wikiGroup(content: string, slug: string): string {
+  const m = content.match(/^applies_to:\s*\[([^\]]*)\]/m);
+  const first = m?.[1]?.split(',')[0]?.trim();
+  if (first) return first;
+  const tail = slug.split('-').slice(-2).join('-');
+  return tail || 'global';
 }
 
 const TOP_K = 4; // neighbours kept per node
@@ -43,10 +54,19 @@ export function buildWikiGraph(db: Database, home?: string): WikiGraph {
     .slice(0, MAX_NODES)
     .map((v) => {
       const content = readWikiPage(v.docId, home); // one read per node
-      return content ? { docId: v.docId, vec: v.vec, title: wikiTitle(content, v.docId) } : null;
+      return content
+        ? {
+            docId: v.docId,
+            vec: v.vec,
+            title: wikiTitle(content, v.docId),
+            group: wikiGroup(content, v.docId),
+          }
+        : null;
     })
-    .filter((v): v is { docId: string; vec: Float32Array; title: string } => v !== null);
-  const nodes = vecs.map((v) => ({ id: v.docId, title: v.title }));
+    .filter(
+      (v): v is { docId: string; vec: Float32Array; title: string; group: string } => v !== null,
+    );
+  const nodes = vecs.map((v) => ({ id: v.docId, title: v.title, group: v.group }));
 
   // Top-K neighbours per node, collapsed to undirected edges (keep the max weight
   // when both directions propose the same pair).

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useSWR from 'swr';
 import { X } from 'lucide-react';
@@ -14,58 +14,164 @@ import {
 import { api } from '../api/client.js';
 
 // Wiki similarity graph — a "related notes" map. Nodes = pages, edges = nearest
-// neighbours by embedding (computed server-side). Layout is a one-shot d3-force
-// run (static, no animation — fine for the modest page count); click a node to
-// open it. Empty state when the wiki isn't vector-indexed yet.
+// neighbours by embedding (computed server-side). A one-shot d3-force run seeds
+// the layout; from there it's an interactive SVG: hover a node to spotlight its
+// neighbourhood, nodes are coloured by project, and the view pans/zooms/drags.
 interface GNode extends SimulationNodeDatum {
   id: string;
   title: string;
+  group: string;
 }
 type GLink = SimulationLinkDatum<GNode> & { weight: number };
 
-const W = 900;
-const H = 640;
-const PAD = 40;
+const W = 1000;
+const H = 700;
+const PAD = 48;
+const PALETTE = [
+  '#2dd4bf', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa',
+  '#34d399', '#fb7185', '#38bdf8', '#f59e0b', '#c084fc', '#4ade80', '#e879f9',
+];
+
+const labelWidth = (n: { title: string }) => 12 + Math.min(n.title.length, 28) * 5.6;
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+interface VBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export function WikiGraphModal({ onClose }: { onClose: () => void }) {
   const { data, isLoading } = useSWR('wiki:graph', () => api.getWikiGraph());
   const navigate = useNavigate();
+  const svgRef = useRef<SVGSVGElement | null>(null);
 
-  const layout = useMemo(() => {
+  // Per-group colour (distinct projects → palette, stable order).
+  const groupColor = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of data?.nodes ?? []) {
+      if (!m.has(n.group)) m.set(n.group, PALETTE[m.size % PALETTE.length]);
+    }
+    return m;
+  }, [data]);
+
+  // Adjacency for hover spotlight.
+  const adj = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const e of data?.edges ?? []) {
+      (m.get(e.source) ?? m.set(e.source, new Set()).get(e.source)!).add(e.target);
+      (m.get(e.target) ?? m.set(e.target, new Set()).get(e.target)!).add(e.source);
+    }
+    return m;
+  }, [data]);
+
+  // One-shot force layout → initial positions + a fitted viewBox (the viewBox
+  // bounds include label widths so right-edge labels aren't clipped).
+  const initial = useMemo(() => {
     if (!data || data.nodes.length === 0) return null;
     const nodes: GNode[] = data.nodes.map((n) => ({ ...n }));
-    const links: GLink[] = data.edges.map((e) => ({
-      source: e.source,
-      target: e.target,
-      weight: e.weight,
-    }));
-    const sim = forceSimulation(nodes)
-      .force(
-        'link',
-        forceLink<GNode, GLink>(links)
-          .id((d) => d.id)
-          .distance((l) => 60 + (1 - l.weight) * 160)
-          .strength(0.5),
-      )
-      .force('charge', forceManyBody().strength(-260))
+    const links: GLink[] = data.edges.map((e) => ({ source: e.source, target: e.target, weight: e.weight }));
+    forceSimulation(nodes)
+      .force('link', forceLink<GNode, GLink>(links).id((d) => d.id).distance((l) => 70 + (1 - l.weight) * 180).strength(0.5))
+      .force('charge', forceManyBody().strength(-380))
       .force('center', forceCenter(W / 2, H / 2))
-      .force('collide', forceCollide(34))
-      .stop();
-    for (let i = 0; i < 300; i++) sim.tick();
-    // Fit to viewBox.
+      .force('collide', forceCollide(40))
+      .stop()
+      .tick(320);
+    const pos: Record<string, { x: number; y: number }> = {};
+    for (const n of nodes) pos[n.id] = { x: n.x ?? 0, y: n.y ?? 0 };
     const xs = nodes.map((n) => n.x ?? 0);
     const ys = nodes.map((n) => n.y ?? 0);
     const minX = Math.min(...xs) - PAD;
     const minY = Math.min(...ys) - PAD;
-    const w = Math.max(...xs) - minX + PAD;
-    const h = Math.max(...ys) - minY + PAD;
-    return { nodes, links, viewBox: `${minX} ${minY} ${w} ${h}` };
+    const maxX = Math.max(...nodes.map((n) => (n.x ?? 0) + labelWidth(n))) + PAD;
+    const maxY = Math.max(...ys) + PAD;
+    return { pos, box: { x: minX, y: minY, w: maxX - minX, h: maxY - minY } as VBox };
   }, [data]);
 
-  function open(slug: string) {
-    navigate(`/wiki/${encodeURIComponent(`${slug}.md`)}`);
+  const [pos, setPos] = useState<Record<string, { x: number; y: number }>>({});
+  const [vb, setVb] = useState<VBox | null>(null);
+  const vbRef = useRef<VBox | null>(null);
+  vbRef.current = vb;
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  // Active drag (a ref so per-pixel moves don't thrash React state setters).
+  const drag = useRef<{ kind: 'pan' | 'node'; id?: string; cx: number; cy: number; moved: boolean } | null>(null);
+
+  useEffect(() => {
+    if (initial) {
+      setPos(initial.pos);
+      setVb(initial.box);
+    }
+  }, [initial]);
+
+  // Screen → world, accounting for the meet-letterboxing of preserveAspectRatio.
+  function toWorld(clientX: number, clientY: number) {
+    const svg = svgRef.current;
+    if (!svg || !vb) return { x: 0, y: 0, scale: 1 };
+    const r = svg.getBoundingClientRect();
+    const scale = Math.min(r.width / vb.w, r.height / vb.h); // "meet"
+    const offX = (r.width - vb.w * scale) / 2;
+    const offY = (r.height - vb.h * scale) / 2;
+    return { x: vb.x + (clientX - r.left - offX) / scale, y: vb.y + (clientY - r.top - offY) / scale, scale };
+  }
+
+  // Wheel zoom must use a NON-passive native listener — React's synthetic onWheel
+  // is passive, so preventDefault() there throws and the page scrolls instead.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const handler = (e: WheelEvent) => {
+      const cur = vbRef.current;
+      if (!cur) return;
+      e.preventDefault();
+      const p = toWorld(e.clientX, e.clientY);
+      const factor = e.deltaY < 0 ? 1 / 1.15 : 1.15;
+      const w = clamp(cur.w * factor, (initial?.box.w ?? W) / 6, (initial?.box.w ?? W) * 3);
+      const h = cur.h * (w / cur.w);
+      const fx = (p.x - cur.x) / cur.w;
+      const fy = (p.y - cur.y) / cur.h;
+      setVb({ x: p.x - fx * w, y: p.y - fy * h, w, h });
+    };
+    svg.addEventListener('wheel', handler, { passive: false });
+    return () => svg.removeEventListener('wheel', handler);
+    // Re-attach once the svg first mounts (vb flips null → set).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vb !== null]);
+
+  function onMouseDownBg(e: React.MouseEvent) {
+    drag.current = { kind: 'pan', cx: e.clientX, cy: e.clientY, moved: false };
+  }
+  function onMouseDownNode(e: React.MouseEvent, id: string) {
+    e.stopPropagation();
+    drag.current = { kind: 'node', id, cx: e.clientX, cy: e.clientY, moved: false };
+  }
+  function onMouseMove(e: React.MouseEvent) {
+    const d = drag.current;
+    if (!d || !vb) return;
+    if (Math.abs(e.clientX - d.cx) + Math.abs(e.clientY - d.cy) > 3) d.moved = true;
+    if (d.kind === 'pan') {
+      const r = svgRef.current!.getBoundingClientRect();
+      const scale = Math.min(r.width / vb.w, r.height / vb.h);
+      setVb({ ...vb, x: vb.x - (e.clientX - d.cx) / scale, y: vb.y - (e.clientY - d.cy) / scale });
+      d.cx = e.clientX;
+      d.cy = e.clientY;
+    } else if (d.kind === 'node' && d.id) {
+      const p = toWorld(e.clientX, e.clientY);
+      setPos((prev) => ({ ...prev, [d.id!]: { x: p.x, y: p.y } }));
+    }
+  }
+  function endDrag() {
+    drag.current = null;
+  }
+  function onNodeClick(id: string) {
+    if (drag.current?.moved) return; // a drag, not a click
+    navigate(`/wiki/${encodeURIComponent(`${id}.md`)}`);
     onClose();
   }
+
+  const active = hoverId ? new Set<string>([hoverId, ...(adj.get(hoverId) ?? [])]) : null;
+  const groups = [...groupColor.entries()];
 
   return (
     <div
@@ -76,14 +182,15 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Wiki graph"
-        className="flex w-full max-w-4xl flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] cursor-default"
-        style={{ height: 'min(80vh, 720px)' }}
+        className="relative flex w-full max-w-5xl flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] cursor-default"
+        style={{ height: 'min(84vh, 760px)' }}
       >
         <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2.5">
           <div className="text-sm font-semibold">
             Wiki graph
             <span className="ml-2 text-xs font-normal text-[var(--color-ink-muted)]">
-              related notes by meaning{data?.truncated ? ' · showing first 400' : ''}
+              related notes by meaning · hover to spotlight · scroll to zoom · drag to pan
+              {data?.truncated ? ' · showing first 400' : ''}
             </span>
           </div>
           <button
@@ -96,18 +203,31 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex-1 min-h-0 overflow-hidden">
-          {isLoading && !layout ? (
+          {isLoading && !vb ? (
             <div className="p-6 text-sm text-[var(--color-ink-muted)]">Building graph…</div>
-          ) : !layout ? (
+          ) : !data || data.nodes.length === 0 || !vb ? (
             <div className="p-6 text-sm text-[var(--color-ink-muted)]">
               No graph yet — the wiki isn’t semantically indexed (embeddings off or still
               warming). Once it indexes, related pages connect here.
             </div>
           ) : (
-            <svg viewBox={layout.viewBox} className="h-full w-full" preserveAspectRatio="xMidYMid meet">
-              {layout.links.map((l, i) => {
-                const s = l.source as GNode;
-                const t = l.target as GNode;
+            <svg
+              ref={svgRef}
+              viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
+              preserveAspectRatio="xMidYMid meet"
+              className="h-full w-full select-none"
+              style={{ cursor: drag.current?.kind === 'pan' ? 'grabbing' : 'grab' }}
+              onMouseDown={onMouseDownBg}
+              onMouseMove={onMouseMove}
+              onMouseUp={endDrag}
+              onMouseLeave={endDrag}
+            >
+              {data.edges.map((l, i) => {
+                const s = pos[l.source];
+                const t = pos[l.target];
+                if (!s || !t) return null;
+                const touch = hoverId && (l.source === hoverId || l.target === hoverId);
+                const dim = active && !touch;
                 return (
                   <line
                     key={i}
@@ -115,34 +235,54 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
                     y1={s.y}
                     x2={t.x}
                     y2={t.y}
-                    stroke="var(--color-border)"
-                    strokeWidth={0.5 + l.weight}
-                    strokeOpacity={0.25 + (l.weight - 0.6) * 1.2}
+                    stroke={touch ? 'var(--color-accent)' : 'var(--color-border)'}
+                    strokeWidth={(touch ? 1.2 : 0.5) + l.weight}
+                    strokeOpacity={dim ? 0.05 : touch ? 0.8 : 0.28 + (l.weight - 0.6) * 1.0}
                   />
                 );
               })}
-              {layout.nodes.map((n) => (
-                <g
-                  key={n.id}
-                  transform={`translate(${n.x},${n.y})`}
-                  className="cursor-pointer"
-                  onClick={() => open(n.id)}
-                >
-                  <circle r={6} fill="var(--color-accent)" stroke="var(--color-surface)" strokeWidth={1.5} />
-                  <text
-                    x={9}
-                    y={3.5}
-                    fontSize={9}
-                    className="fill-[var(--color-ink)]"
-                    style={{ pointerEvents: 'none' }}
+              {data.nodes.map((n) => {
+                const p = pos[n.id];
+                if (!p) return null;
+                const on = !active || active.has(n.id);
+                const color = groupColor.get(n.group) ?? '#888';
+                return (
+                  <g
+                    key={n.id}
+                    transform={`translate(${p.x},${p.y})`}
+                    style={{ cursor: 'pointer', opacity: on ? 1 : 0.12 }}
+                    onMouseEnter={() => !drag.current && setHoverId(n.id)}
+                    onMouseLeave={() => setHoverId(null)}
+                    onMouseDown={(e) => onMouseDownNode(e, n.id)}
+                    onClick={() => onNodeClick(n.id)}
                   >
-                    {n.title.length > 28 ? `${n.title.slice(0, 28)}…` : n.title}
-                  </text>
-                </g>
-              ))}
+                    <circle
+                      r={n.id === hoverId ? 8 : 6}
+                      fill={color}
+                      stroke="var(--color-surface)"
+                      strokeWidth={1.5}
+                    />
+                    <text x={9} y={3.5} fontSize={9} className="fill-[var(--color-ink)]" style={{ pointerEvents: 'none' }}>
+                      {n.title.length > 28 ? `${n.title.slice(0, 28)}…` : n.title}
+                    </text>
+                  </g>
+                );
+              })}
             </svg>
           )}
         </div>
+
+        {/* Project legend */}
+        {vb && groups.length > 0 && (
+          <div className="absolute bottom-2 left-2 flex max-w-[70%] flex-wrap gap-x-3 gap-y-1 rounded bg-[var(--color-surface)]/80 px-2 py-1 text-[10px] text-[var(--color-ink-muted)] backdrop-blur">
+            {groups.map(([g, c]) => (
+              <span key={g} className="flex items-center gap-1">
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: c }} />
+                {g}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

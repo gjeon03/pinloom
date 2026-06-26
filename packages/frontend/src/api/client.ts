@@ -184,7 +184,7 @@ export const api = {
   // Wiki similarity graph (nodes = pages, edges = nearest neighbours by embedding).
   getWikiGraph: () =>
     request<{
-      nodes: { id: string; title: string }[];
+      nodes: { id: string; title: string; group: string }[];
       edges: { source: string; target: string; weight: number }[];
       truncated: boolean;
     }>('/api/wiki/graph'),
