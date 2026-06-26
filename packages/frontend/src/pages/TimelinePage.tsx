@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
-import { CalendarDays, ChevronDown, ExternalLink, Pencil, RefreshCw, Save, X, ChevronRight } from 'lucide-react';
+import { CalendarDays, ChevronDown, FolderOpen, Pencil, RefreshCw, Save, X, ChevronRight } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
 
@@ -431,10 +431,10 @@ export function TimelinePage() {
                           <button
                             onClick={() => void openEntryFile()}
                             disabled={!entry?.markdown}
-                            title="Open the markdown file in your default editor (macOS)"
+                            title="Reveal this entry's .md file in Finder (opens its folder)"
                             className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
                           >
-                            <ExternalLink size={12} /> Open
+                            <FolderOpen size={12} /> Reveal
                           </button>
                         </>
                       )}
