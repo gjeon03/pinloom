@@ -139,7 +139,11 @@ export function WikiDetailPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-2)] pl-6 pr-16 py-3 flex items-center justify-between gap-4">
+      {/* pr-60 reserves room for the global top-right control cluster (search /
+          templates / bots / notepad / notifications) which floats over every
+          page at `absolute right-3` (~210px wide) — otherwise it covers this
+          header's own Edit/Open buttons. */}
+      <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-2)] pl-6 pr-60 py-3 flex items-center justify-between gap-4">
         <Link
           to="/wiki"
           className="flex items-center gap-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
