@@ -624,6 +624,23 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 36,
+    // Auto wiki generation: a background sweep periodically re-runs the
+    // conventions analyzer per project and STAGES the result as a replace_page
+    // proposal (the human gate stays — wiki is injected into every prompt).
+    // `projects.wiki_auto` is the per-project opt-out (default on). The state
+    // table tracks what was last analyzed so the sweep only spends an LLM call
+    // when enough new work has accrued + a min interval has passed.
+    sql: `
+      ALTER TABLE projects ADD COLUMN wiki_auto INTEGER NOT NULL DEFAULT 1;
+      CREATE TABLE IF NOT EXISTS wiki_analyze_state (
+        project_id     TEXT PRIMARY KEY,
+        last_message_at TEXT,
+        last_run_at    TEXT
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

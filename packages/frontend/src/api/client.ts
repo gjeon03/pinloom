@@ -288,6 +288,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ auto }),
     }),
+  setProjectWikiAuto: (projectId: string, auto: boolean) =>
+    request<{ ok: true; auto: boolean }>(`/api/wiki/projects/${projectId}/auto`, {
+      method: 'PATCH',
+      body: JSON.stringify({ auto }),
+    }),
   captureTimeline: (projectId: string, date?: string) =>
     request<{ ok: true; date: string; written: boolean }>(
       `/api/timeline/projects/${projectId}/capture`,

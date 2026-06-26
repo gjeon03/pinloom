@@ -72,6 +72,50 @@ describe('edit_section proposals', () => {
     );
     expect(listProposals('applied').map((x) => x.id)).toEqual([p.id]);
   });
+});
+
+describe('replace_page proposals', () => {
+  it('replaces an existing page wholesale on accept', async () => {
+    await seed('conventions-myrepo.md', '---\nold\n---\n# Old page\n');
+    const p = await createProposal(
+      {
+        kind: 'replace_page',
+        title: 'Auto: refresh conventions',
+        relPath: 'conventions-myrepo.md',
+        payload: { markdown: '---\nnew\n---\n# Fresh page\n' },
+      },
+      { root, now: NOW },
+    );
+    const diff = await getProposalDiff(p.id, root);
+    expect(diff.before).toContain('Old page');
+    expect(diff.after).toContain('Fresh page');
+    await acceptProposal(p.id, { root, now: NOW });
+    expect(await read('conventions-myrepo.md')).toBe('---\nnew\n---\n# Fresh page\n');
+  });
+
+  it('creates the page when it did not exist (auto first-run)', async () => {
+    const p = await createProposal(
+      {
+        kind: 'replace_page',
+        title: 'Auto: new conventions',
+        relPath: 'conventions-new.md',
+        payload: { markdown: '# Brand new\n' },
+      },
+      { root, now: NOW },
+    );
+    expect(existsSync(path.join(root, 'pages', 'conventions-new.md'))).toBe(false);
+    await acceptProposal(p.id, { root, now: NOW });
+    expect(await read('conventions-new.md')).toBe('# Brand new\n');
+  });
+
+  it('rejects an empty markdown payload', async () => {
+    await expect(
+      createProposal(
+        { kind: 'replace_page', title: 'x', relPath: 'c.md', payload: { markdown: '  ' } },
+        { root, now: NOW },
+      ),
+    ).rejects.toBeInstanceOf(ProposalError);
+  });
 
   it('blocks accept when the page changed since the proposal (stale)', async () => {
     await seed('p.md', page('v1'));
