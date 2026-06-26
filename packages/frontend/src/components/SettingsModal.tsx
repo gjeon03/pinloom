@@ -570,6 +570,7 @@ function EmbeddingsSection() {
     refreshInterval: 4000,
   });
   const [busy, setBusy] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [pull, setPull] = useState<Awaited<ReturnType<typeof api.ollamaPullStatus>> | null>(null);
 
   async function setMode(mode: 'in-process' | 'ollama' | 'off') {
@@ -638,17 +639,14 @@ function EmbeddingsSection() {
           <>
             {!data.ollama.running ? (
               <div className="text-[var(--color-ink-muted)]">
-                Ollama isn’t running. Install it (
-                <code>brew install ollama</code> ·{' '}
-                <a
-                  href="https://ollama.com/download"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                Ollama isn’t reachable. Already installed? It just needs to be{' '}
+                <em>started</em>.{' '}
+                <button
+                  onClick={() => setGuideOpen(true)}
                   className="text-[var(--color-accent)] hover:underline"
                 >
-                  ollama.com
-                </a>
-                ) and start it — then this updates automatically.
+                  Setup guide →
+                </button>
               </div>
             ) : pull ? (
               <div className="text-[var(--color-ink-muted)]">
@@ -672,7 +670,109 @@ function EmbeddingsSection() {
           </>
         )}
       </div>
+      {guideOpen && (
+        <OllamaGuideModal model={data?.ollamaModel ?? 'bge-m3'} onClose={() => setGuideOpen(false)} />
+      )}
     </section>
+  );
+}
+
+// Compact, self-contained "how to get Ollama running" guide. The one thing
+// pinloom can't do for the user is install + start a system daemon, so this
+// covers exactly that (install → start → back here). Renders above the Settings
+// modal. The most common trap: `brew install ollama` installs the binary but
+// does NOT start the server, so the status stays "not reachable" until `ollama
+// serve` (or the app) is running — step 2 calls that out explicitly.
+function OllamaCmd({ children }: { children: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard?.writeText(children).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          },
+          () => {
+            /* clipboard blocked — selection still works */
+          },
+        );
+      }}
+      title="Copy"
+      className="group inline-flex items-center gap-1.5 rounded bg-[var(--color-surface-3)] px-2 py-1 font-mono text-xs hover:ring-1 hover:ring-[var(--color-accent)]"
+    >
+      <span>{children}</span>
+      <span className="text-[10px] text-[var(--color-ink-muted)] group-hover:text-[var(--color-accent)]">
+        {copied ? 'copied' : 'copy'}
+      </span>
+    </button>
+  );
+}
+
+function OllamaGuideModal({ model, onClose }: { model: string; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Ollama setup guide"
+        className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 text-sm"
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-semibold">Use Ollama for embeddings</h3>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded p-1 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <ol className="space-y-3">
+          <li>
+            <div className="font-medium">1. Install (once)</div>
+            <div className="mt-1 text-[var(--color-ink-muted)]">
+              macOS: <OllamaCmd>brew install ollama</OllamaCmd> — or download from{' '}
+              <a
+                href="https://ollama.com/download"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[var(--color-accent)] hover:underline"
+              >
+                ollama.com
+              </a>
+              .
+            </div>
+          </li>
+          <li>
+            <div className="font-medium">2. Start the server</div>
+            <div className="mt-1 text-[var(--color-ink-muted)]">
+              Installing alone isn’t enough — the server must run. Either run{' '}
+              <OllamaCmd>ollama serve</OllamaCmd> in a terminal, or open the{' '}
+              <strong>Ollama app</strong> (menu-bar icon). To keep it always on:{' '}
+              <OllamaCmd>brew services start ollama</OllamaCmd>.
+            </div>
+          </li>
+          <li>
+            <div className="font-medium">3. Back here</div>
+            <div className="mt-1 text-[var(--color-ink-muted)]">
+              This panel auto-detects it within a few seconds, then a{' '}
+              <strong>Download {model}</strong> button appears — click it and pinloom pulls the
+              model (with a progress bar) and re-embeds in the background.
+            </div>
+          </li>
+        </ol>
+
+        <p className="mt-4 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-ink-muted)]">
+          pinloom checks <code>http://localhost:11434</code>. Running Ollama on another host or
+          port? Set <code>PINLOOM_OLLAMA_URL</code> and restart the backend.
+        </p>
+      </div>
+    </div>
   );
 }
 
