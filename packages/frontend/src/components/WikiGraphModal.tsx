@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useSWR from 'swr';
-import { X } from 'lucide-react';
+import { Maximize, X, ZoomIn, ZoomOut } from 'lucide-react';
 import {
   forceCenter,
   forceCollide,
@@ -116,22 +116,35 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
     return { x: vb.x + (clientX - r.left - offX) / scale, y: vb.y + (clientY - r.top - offY) / scale, scale };
   }
 
+  // Zoom by `factor` (<1 = in) about a world anchor, kept fixed on screen.
+  // Shared by the wheel + the +/−/fit buttons.
+  function zoomTo(factor: number, wx: number, wy: number) {
+    const cur = vbRef.current;
+    if (!cur) return;
+    const w = clamp(cur.w * factor, (initial?.box.w ?? W) / 6, (initial?.box.w ?? W) * 3);
+    const h = cur.h * (w / cur.w);
+    const fx = (wx - cur.x) / cur.w;
+    const fy = (wy - cur.y) / cur.h;
+    setVb({ x: wx - fx * w, y: wy - fy * h, w, h });
+  }
+  function zoomCenter(factor: number) {
+    const cur = vbRef.current;
+    if (cur) zoomTo(factor, cur.x + cur.w / 2, cur.y + cur.h / 2);
+  }
+
   // Wheel zoom must use a NON-passive native listener — React's synthetic onWheel
   // is passive, so preventDefault() there throws and the page scrolls instead.
+  // Gentle: zoom is proportional to scroll delta and capped at ±8% per event, so
+  // a fast trackpad flick doesn't slam between min/max.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const handler = (e: WheelEvent) => {
-      const cur = vbRef.current;
-      if (!cur) return;
+      if (!vbRef.current) return;
       e.preventDefault();
+      const factor = clamp(Math.exp(e.deltaY * 0.0012), 0.92, 1.08);
       const p = toWorld(e.clientX, e.clientY);
-      const factor = e.deltaY < 0 ? 1 / 1.15 : 1.15;
-      const w = clamp(cur.w * factor, (initial?.box.w ?? W) / 6, (initial?.box.w ?? W) * 3);
-      const h = cur.h * (w / cur.w);
-      const fx = (p.x - cur.x) / cur.w;
-      const fy = (p.y - cur.y) / cur.h;
-      setVb({ x: p.x - fx * w, y: p.y - fy * h, w, h });
+      zoomTo(factor, p.x, p.y);
     };
     svg.addEventListener('wheel', handler, { passive: false });
     return () => svg.removeEventListener('wheel', handler);
@@ -202,7 +215,35 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="relative flex-1 min-h-0 overflow-hidden">
+          {vb && (
+            <div className="absolute right-3 top-3 z-10 flex flex-col overflow-hidden rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow">
+              <button
+                onClick={() => zoomCenter(1 / 1.4)}
+                title="Zoom in"
+                aria-label="Zoom in"
+                className="flex h-7 w-7 items-center justify-center text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
+              >
+                <ZoomIn size={14} />
+              </button>
+              <button
+                onClick={() => zoomCenter(1.4)}
+                title="Zoom out"
+                aria-label="Zoom out"
+                className="flex h-7 w-7 items-center justify-center border-t border-[var(--color-border)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
+              >
+                <ZoomOut size={14} />
+              </button>
+              <button
+                onClick={() => initial && setVb(initial.box)}
+                title="Fit to view"
+                aria-label="Fit to view"
+                className="flex h-7 w-7 items-center justify-center border-t border-[var(--color-border)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
+              >
+                <Maximize size={13} />
+              </button>
+            </div>
+          )}
           {isLoading && !vb ? (
             <div className="p-6 text-sm text-[var(--color-ink-muted)]">Building graph…</div>
           ) : !data || data.nodes.length === 0 || !vb ? (
