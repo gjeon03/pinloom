@@ -3,10 +3,12 @@
 // exact flows the old strip shipped.
 
 import { useEffect, useMemo, useState } from 'react';
-import { Crown, Plus, X } from 'lucide-react';
-import type { Project, Session, Team } from '@pinloom/shared';
+import { Check, Crown, Plus, X } from 'lucide-react';
+import type { Project, ProjectGroup, Session, Team } from '@pinloom/shared';
 import { api } from '../../api/client.js';
 import { AgentBadge } from '../AgentBadge.js';
+import { GroupedSessionList } from '../GroupedSessionList.js';
+import { useGroupedSessions } from '../../hooks/useGroupedSessions.js';
 import { parseTagsInput } from './teamRoles.js';
 
 // Modal listing every other project so the user can move the current
@@ -26,15 +28,17 @@ export function MoveSessionModal({
   onMoved: (targetProjectId: string) => void;
 }) {
   const [projects, setProjects] = useState<Project[] | null>(null);
+  const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listProjects()
-      .then((p) => {
-        if (!cancelled) setProjects(p);
+    Promise.all([api.listProjects(), api.listProjectGroups()])
+      .then(([p, g]) => {
+        if (cancelled) return;
+        setProjects(p);
+        setGroups(g);
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -53,6 +57,24 @@ export function MoveSessionModal({
   }, [onClose]);
 
   const candidates = (projects ?? []).filter((p) => p.id !== currentProjectId);
+  // group → project, mirroring the sidebar (named groups by order, Ungrouped tail).
+  const grouped = useMemo(() => {
+    const byGroup = new Map<string | null, Project[]>();
+    for (const p of candidates) {
+      const arr = byGroup.get(p.groupId) ?? [];
+      arr.push(p);
+      byGroup.set(p.groupId, arr);
+    }
+    for (const arr of byGroup.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+    const out: { key: string; label: string; isUngrouped: boolean; projects: Project[] }[] = [];
+    for (const g of [...groups].sort((a, b) => a.orderIndex - b.orderIndex)) {
+      const ps = byGroup.get(g.id);
+      if (ps?.length) out.push({ key: g.id, label: g.name, isUngrouped: false, projects: ps });
+    }
+    const ung = byGroup.get(null);
+    if (ung?.length) out.push({ key: '__ung__', label: 'Ungrouped', isUngrouped: true, projects: ung });
+    return out;
+  }, [candidates, groups]);
 
   return (
     <div
@@ -86,35 +108,47 @@ export function MoveSessionModal({
               first.
             </p>
           ) : (
-            <ul className="space-y-1 max-h-80 overflow-y-auto">
-              {candidates.map((p) => (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    disabled={submitting !== null}
-                    onClick={async () => {
-                      setError(null);
-                      setSubmitting(p.id);
-                      try {
-                        await api.moveSession(sessionId, p.id);
-                        onMoved(p.id);
-                      } catch (err) {
-                        setError(
-                          err instanceof Error ? err.message : String(err),
-                        );
-                        setSubmitting(null);
-                      }
-                    }}
-                    className="w-full text-left rounded border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] disabled:opacity-50 px-3 py-2 text-xs"
-                  >
-                    <div className="font-medium">{p.name}</div>
-                    <div className="text-[10px] text-[var(--color-ink-muted)] font-mono truncate">
-                      {p.cwd}
-                    </div>
-                  </button>
-                </li>
+            <div className="max-h-80 overflow-y-auto rounded border border-[var(--color-border)] bg-[var(--color-surface)]">
+              {grouped.map((sec) => (
+                <div key={sec.key} className="border-b border-[var(--color-border)] last:border-b-0">
+                  <div className="bg-[var(--color-surface-2)] px-3 py-1">
+                    <span
+                      className={`text-[10px] font-semibold uppercase tracking-wide ${
+                        sec.isUngrouped
+                          ? 'italic text-[var(--color-ink-muted)]'
+                          : 'text-[var(--color-ink)]'
+                      }`}
+                    >
+                      {sec.label}
+                    </span>
+                  </div>
+                  {sec.projects.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      disabled={submitting !== null}
+                      onClick={async () => {
+                        setError(null);
+                        setSubmitting(p.id);
+                        try {
+                          await api.moveSession(sessionId, p.id);
+                          onMoved(p.id);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : String(err));
+                          setSubmitting(null);
+                        }
+                      }}
+                      className="block w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+                    >
+                      <div className="font-medium">{p.name}</div>
+                      <div className="truncate font-mono text-[10px] text-[var(--color-ink-muted)]">
+                        {p.cwd}
+                      </div>
+                    </button>
+                  ))}
+                </div>
               ))}
-            </ul>
+            </div>
           )}
           {error && (
             <p
@@ -156,8 +190,11 @@ export function AddWorkerFromTabModal({
 }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [boundIds, setBoundIds] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
+  // A just-created session to reveal (expand its project + scroll + flash).
+  const [revealId, setRevealId] = useState<string | null>(null);
   const [alias, setAlias] = useState('');
   const [instructions, setInstructions] = useState('');
   const [tagsInput, setTagsInput] = useState('');
@@ -177,8 +214,13 @@ export function AddWorkerFromTabModal({
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.listAllSessions(), api.listProjects(), api.listTeams()])
-      .then(([s, p, t]) => {
+    Promise.all([
+      api.listAllSessions(),
+      api.listProjects(),
+      api.listTeams(),
+      api.listProjectGroups(),
+    ])
+      .then(([s, p, t, g]) => {
         if (cancelled) return;
         const bound = new Set<string>();
         for (const team of t) {
@@ -187,6 +229,7 @@ export function AddWorkerFromTabModal({
         }
         setSessions(s);
         setProjects(p);
+        setGroups(g);
         setBoundIds(bound);
         setLoading(false);
       })
@@ -214,16 +257,23 @@ export function AddWorkerFromTabModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, submitting, creatingSubmit]);
 
-  const projectsById = useMemo(() => {
-    const map = new Map<string, Project>();
-    for (const p of projects) map.set(p.id, p);
-    return map;
-  }, [projects]);
+  useEffect(() => {
+    if (!revealId) return;
+    const t = setTimeout(() => setRevealId(null), 1600); // stop the flash
+    return () => clearTimeout(t);
+  }, [revealId]);
 
   const candidates = useMemo(
     () => sessions.filter((s) => !boundIds.has(s.id)),
     [sessions, boundIds],
   );
+  const sections = useGroupedSessions({
+    sessions: candidates,
+    projects,
+    groups,
+    currentProjectId,
+    hideEmptyProjects: true,
+  });
 
   async function submit() {
     const a = alias.trim();
@@ -255,6 +305,7 @@ export function AddWorkerFromTabModal({
       });
       setSessions((prev) => [...prev, created]);
       setSelected(created.id);
+      setRevealId(created.id); // expand its project + scroll + flash in the list
       setCreating(false);
       setNewTitle('');
       // Notify any listening surface — most importantly the parent
@@ -429,42 +480,33 @@ export function AddWorkerFromTabModal({
                 Create new session
               </button>
             )}
-            {loading ? (
-              <p className="text-xs text-[var(--color-ink-muted)]">Loading…</p>
-            ) : candidates.length === 0 ? (
-              <p className="text-xs text-[var(--color-ink-muted)]">
-                No free sessions. Create one above.
-              </p>
-            ) : (
-              <ul className="space-y-1 max-h-60 overflow-y-auto">
-                {candidates.map((s) => {
-                  const project = projectsById.get(s.projectId);
-                  const title = s.title ?? `Chat ${s.id.slice(0, 6)}`;
-                  const active = selected === s.id;
-                  return (
-                    <li key={s.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelected(s.id)}
-                        className={`w-full text-left rounded border px-3 py-2 text-xs flex items-center gap-2 ${
-                          active
-                            ? 'border-[var(--color-accent)] bg-[var(--color-surface)]'
-                            : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]'
-                        }`}
-                      >
-                        <AgentBadge agent={s.agent} size="xs" />
-                        <span className="truncate flex-1 font-medium">
-                          {title}
-                        </span>
-                        <span className="text-[10px] text-[var(--color-ink-muted)] truncate">
-                          {project?.name ?? '(unknown)'}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            <GroupedSessionList
+              sections={sections}
+              loading={loading}
+              initialExpandedProjectIds={[currentProjectId]}
+              revealSessionId={revealId}
+              emptyHint="No free sessions. Create one above."
+              renderSession={(s) => {
+                const title = s.title ?? `Chat ${s.id.slice(0, 6)}`;
+                const active = selected === s.id;
+                const flash = revealId === s.id;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setSelected(s.id)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs ${
+                      active
+                        ? 'bg-[var(--color-surface-3)] ring-1 ring-inset ring-[var(--color-accent)]'
+                        : 'hover:bg-[var(--color-surface-3)]'
+                    } ${flash ? 'animate-pulse' : ''}`}
+                  >
+                    <AgentBadge agent={s.agent} size="xs" />
+                    <span className="flex-1 truncate font-medium">{title}</span>
+                    {active && <Check size={13} className="shrink-0 text-[var(--color-accent)]" />}
+                  </button>
+                );
+              }}
+            />
           </div>
           {error && (
             <p

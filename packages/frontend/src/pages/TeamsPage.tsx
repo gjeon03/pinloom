@@ -27,6 +27,8 @@ import { api } from '../api/client.js';
 import { gotoSessionTab } from '../utils/gotoSession.js';
 import { AgentBadge } from '../components/AgentBadge.js';
 import { DirectoryPicker } from '../components/DirectoryPicker.js';
+import { GroupedSessionList } from '../components/GroupedSessionList.js';
+import { useGroupedSessions } from '../hooks/useGroupedSessions.js';
 
 function basenameOfPath(path: string): string {
   const trimmed = path.replace(/\/+$/, '');
@@ -1003,6 +1005,7 @@ function AddMemberModal({
   const [selected, setSelected] = useState<string | null>(null);
   const [alias, setAlias] = useState('');
   const [creating, setCreating] = useState(false);
+  const [revealId, setRevealId] = useState<string | null>(null);
   // Sessions/projects just-created via the inline form. Held locally
   // because the parent's `lookup` won't refresh until we commit the
   // team membership; we still want to show + select them right away.
@@ -1024,14 +1027,20 @@ function AddMemberModal({
     return [...extras, ...filteredBase];
   }, [lookup, extras]);
 
-  function describe(s: Session): SessionLabel {
-    const project = projectsById[s.projectId];
-    return {
-      title: s.title ?? `Chat ${s.id.slice(0, 6)}`,
-      subtitle: project?.name ?? '(unknown project)',
-      agent: s.agent,
-    };
-  }
+  const allProjects = useMemo(() => Object.values(projectsById), [projectsById]);
+  const sections = useGroupedSessions({
+    sessions: candidates,
+    projects: allProjects,
+    groups: lookup.projectGroups,
+    currentProjectId: '',
+    hideEmptyProjects: true,
+  });
+
+  useEffect(() => {
+    if (!revealId) return;
+    const t = setTimeout(() => setRevealId(null), 1600);
+    return () => clearTimeout(t);
+  }, [revealId]);
 
   async function add() {
     if (!selected || !alias.trim()) return;
@@ -1079,6 +1088,7 @@ function AddMemberModal({
               onCreated={(s) => {
                 setExtras((prev) => [...prev, s]);
                 setSelected(s.id);
+                setRevealId(s.id); // expand + scroll + flash in the grouped list
                 setCreating(false);
               }}
               onProjectCreated={(p) =>
@@ -1095,37 +1105,31 @@ function AddMemberModal({
                 <Plus size={12} />
                 Create new session
               </button>
-              {candidates.length === 0 ? (
-                <p className="text-xs text-[var(--color-ink-muted)]">
-                  No free sessions. Create one above.
-                </p>
-              ) : (
-                <ul className="space-y-1 max-h-60 overflow-y-auto">
-                  {candidates.map((s) => {
-                    const meta = describe(s);
-                    const active = selected === s.id;
-                    return (
-                      <li key={s.id}>
-                        <button
-                          type="button"
-                          onClick={() => setSelected(s.id)}
-                          className={`w-full text-left rounded border px-3 py-2 text-xs flex items-center gap-2 ${
-                            active
-                              ? 'border-[var(--color-accent)] bg-[var(--color-surface-3)]/50'
-                              : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]'
-                          }`}
-                        >
-                          {meta.agent && <AgentBadge agent={meta.agent} size="xs" />}
-                          <span className="truncate flex-1">{meta.title}</span>
-                          <span className="text-[var(--color-ink-muted)] shrink-0">
-                            {meta.subtitle}
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              <GroupedSessionList
+                sections={sections}
+                revealSessionId={revealId}
+                emptyHint="No free sessions. Create one above."
+                renderSession={(s) => {
+                  const title = s.title ?? `Chat ${s.id.slice(0, 6)}`;
+                  const active = selected === s.id;
+                  const flash = revealId === s.id;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setSelected(s.id)}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs ${
+                        active
+                          ? 'bg-[var(--color-surface-3)] ring-1 ring-inset ring-[var(--color-accent)]'
+                          : 'hover:bg-[var(--color-surface-3)]'
+                      } ${flash ? 'animate-pulse' : ''}`}
+                    >
+                      {s.agent && <AgentBadge agent={s.agent} size="xs" />}
+                      <span className="flex-1 truncate">{title}</span>
+                      {active && <Check size={13} className="shrink-0 text-[var(--color-accent)]" />}
+                    </button>
+                  );
+                }}
+              />
             </>
           )}
         </div>
