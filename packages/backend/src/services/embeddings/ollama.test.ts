@@ -35,6 +35,24 @@ describe('OllamaEmbeddingProvider', () => {
     expect(body).toMatchObject({ model: 'bge-m3', input: ['a', 'b', 'c'] });
   });
 
+  it('truncates oversized inputs to stay under the model context window', async () => {
+    const f = fakeFetch([[1]]);
+    const p = new OllamaEmbeddingProvider({ fetchImpl: f });
+    await p.embedPassages(['x'.repeat(50_000)]);
+    const body = JSON.parse(String((f as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body));
+    expect(body.input[0]).toHaveLength(4000); // default cap
+  });
+
+  it('honors PINLOOM_OLLAMA_MAX_CHARS for the input cap', async () => {
+    vi.stubEnv('PINLOOM_OLLAMA_MAX_CHARS', '10');
+    const f = fakeFetch([[1]]);
+    const p = new OllamaEmbeddingProvider({ fetchImpl: f });
+    await p.embedPassages(['abcdefghijklmnop']);
+    const body = JSON.parse(String((f as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body));
+    expect(body.input[0]).toBe('abcdefghij');
+    vi.unstubAllEnvs();
+  });
+
   it('returns [] for an empty passage list without calling the server', async () => {
     const f = fakeFetch([]);
     const p = new OllamaEmbeddingProvider({ fetchImpl: f });

@@ -115,22 +115,41 @@ async function tick(): Promise<void> {
       ensureSchema(db, provider);
       schemaReady = true;
     }
-    const processed = await runIndexPass(db, provider);
-    // Evict vectors orphaned by session/message deletes after a productive pass.
-    // (Orphans are otherwise harmless — never reused ids, filtered at search.)
-    if (processed > 0) {
-      gcOrphans(db, MESSAGE_VECTORS, 'SELECT id FROM messages');
+    // Each corpus is indexed in its OWN try/catch so one failing pass never
+    // starves the others (a single oversized message that an embedder rejects
+    // used to throw the shared pass and block timeline + wiki forever).
+    //
+    // The small curated corpora (timeline L1, wiki L2) go FIRST: they re-embed
+    // in seconds, so a large message backfill — e.g. a full re-embed after an
+    // embedding-model switch — can't keep them empty for the whole drain. In
+    // steady state both are a cheap unchanged-hash check, so messages still
+    // index promptly right after.
+    try {
+      const tl = await runTimelineIndexPass(db, provider);
+      gcTimelineVectors(db, tl);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[vector] timeline pass failed:', err instanceof Error ? err.message : err);
     }
-    // Same single-flight + same warm provider: index the Work Timeline (L1) and
-    // wiki (L2) too, so search/Recap span the whole corpus. After messages to
-    // keep the chat hot path first; each GC is guarded against FS flakiness.
-    const tl = await runTimelineIndexPass(db, provider);
-    gcTimelineVectors(db, tl);
-    const wk = await runWikiIndexPass(db, provider);
-    gcWikiVectors(db, wk);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('[vector] index pass failed:', err instanceof Error ? err.message : err);
+    try {
+      const wk = await runWikiIndexPass(db, provider);
+      gcWikiVectors(db, wk);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[vector] wiki pass failed:', err instanceof Error ? err.message : err);
+    }
+    try {
+      const processed = await runIndexPass(db, provider);
+      // Evict vectors orphaned by session/message deletes after a productive
+      // pass. (Orphans are otherwise harmless — never reused ids, filtered out
+      // at search.)
+      if (processed > 0) {
+        gcOrphans(db, MESSAGE_VECTORS, 'SELECT id FROM messages');
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[vector] message pass failed:', err instanceof Error ? err.message : err);
+    }
   } finally {
     running = false;
   }

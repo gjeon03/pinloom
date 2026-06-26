@@ -17,6 +17,20 @@ import type { EmbeddingProvider } from './types.js';
 
 type FetchLike = typeof fetch;
 
+// Cap each input's length before sending. Ollama HARD-rejects inputs over the
+// model's context window with a 400 ("input length exceeds the context length")
+// — and one oversized message (a long tool dump / transcript) would otherwise
+// throw the whole index pass every sweep, starving ALL corpora (the bug that
+// left the wiki graph empty). The in-process e5 model silently truncates to 512
+// tokens, so capping here is parity, not a regression. Default 4000 chars stays
+// safely under bge-m3's 8192-token window even for dense Korean (xlm-roberta can
+// run ~1.5–2 tokens/char on CJK) while still giving it ~8× what e5 ever saw.
+// Override with PINLOOM_OLLAMA_MAX_CHARS for English-heavy corpora + bigger ctx.
+function maxInputChars(): number {
+  const n = Number(process.env.PINLOOM_OLLAMA_MAX_CHARS);
+  return Number.isFinite(n) && n > 0 ? n : 4000;
+}
+
 export interface OllamaConfig {
   baseUrl?: string;
   model?: string;
@@ -59,10 +73,12 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   }
 
   private async embed(inputs: string[]): Promise<Float32Array[]> {
+    const cap = maxInputChars();
+    const clipped = inputs.map((t) => (t.length > cap ? t.slice(0, cap) : t));
     const res = await this.doFetch(`${this.baseUrl}/api/embed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.model, input: inputs }),
+      body: JSON.stringify({ model: this.model, input: clipped }),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
