@@ -262,6 +262,16 @@ export const api = {
     request<{ date: string; markdown: string | null }>(
       `/api/timeline/projects/${projectId}/entries/${date}`,
     ),
+  saveTimelineEntry: (projectId: string, date: string, markdown: string) =>
+    request<{ ok: true; date: string }>(
+      `/api/timeline/projects/${projectId}/entries/${date}`,
+      { method: 'PUT', body: JSON.stringify({ markdown }) },
+    ),
+  openTimelineInEditor: (projectId: string, date: string) =>
+    request<{ ok: true; path: string }>(
+      `/api/timeline/projects/${projectId}/entries/${date}/open`,
+      { method: 'POST' },
+    ),
   getTimelineForDate: (date: string) =>
     request<{
       date: string;

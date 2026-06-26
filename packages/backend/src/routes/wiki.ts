@@ -1,7 +1,7 @@
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../db/connection.js';
+import { openExternal } from '../services/open-external.js';
 import {
   getWikiOverview,
   getWikiRoot,
@@ -34,24 +34,6 @@ interface SessionWithProject extends SessionRow {
   project_cwd: string;
 }
 
-function openExternal(filePath: string): { ok: boolean; error?: string } {
-  // macOS-only for now: `open` launches the file in the user's default
-  // handler. Linux/Windows users can fall back to the manual path shown
-  // in the UI.
-  if (process.platform !== 'darwin') {
-    return {
-      ok: false,
-      error: `Auto-open is only supported on macOS for now. Path: ${filePath}`,
-    };
-  }
-  try {
-    const child = spawn('open', [filePath], { stdio: 'ignore', detached: true });
-    child.unref();
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
 
 export async function wikiRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();

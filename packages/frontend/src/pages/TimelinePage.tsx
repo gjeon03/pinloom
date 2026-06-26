@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
-import { CalendarDays, RefreshCw, ChevronRight } from 'lucide-react';
+import { CalendarDays, ExternalLink, Pencil, RefreshCw, Save, X, ChevronRight } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
 
@@ -86,6 +86,41 @@ export function TimelinePage() {
     mode === 'date' && date ? ['timeline:date', date] : null,
     () => api.getTimelineForDate(date),
   );
+
+  // In-place edit of the current project-day entry (mirrors the wiki's edit).
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [savingEntry, setSavingEntry] = useState(false);
+  // Leave edit mode whenever the viewed entry changes (project/date switch).
+  useEffect(() => {
+    setEditing(false);
+  }, [projectId, projDate]);
+
+  function startEditEntry() {
+    setDraft(entry?.markdown ?? '');
+    setEditing(true);
+  }
+  async function saveEntry() {
+    if (!projectId || !projDate) return;
+    setSavingEntry(true);
+    try {
+      await api.saveTimelineEntry(projectId, projDate, draft);
+      await globalMutate(['timeline:entry', projectId, projDate]);
+      setEditing(false);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingEntry(false);
+    }
+  }
+  async function openEntryFile() {
+    if (!projectId || !projDate) return;
+    try {
+      await api.openTimelineInEditor(projectId, projDate);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   // "Capture all" runs as a backend job; poll its status so progress survives
   // navigation AND reload (the backend owns the state). Poll only while running.
@@ -276,14 +311,71 @@ export function TimelinePage() {
                 ))
               )}
             </div>
-            {/* Column 3 — the entry */}
+            {/* Column 3 — the entry (with per-entry edit + open-in-editor) */}
             <div className="flex-1 overflow-y-auto p-4">
-              {entry?.markdown ? (
-                <Markdown content={entry.markdown} />
+              {selected && projDate ? (
+                <>
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="font-mono text-[11px] text-[var(--color-ink-muted)]">
+                      {selected.projectName} · {projDate}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {editing ? (
+                        <>
+                          <button
+                            onClick={() => setEditing(false)}
+                            disabled={savingEntry}
+                            className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-50"
+                          >
+                            <X size={12} /> Cancel
+                          </button>
+                          <button
+                            onClick={() => void saveEntry()}
+                            disabled={savingEntry}
+                            className="flex items-center gap-1 rounded bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-black disabled:opacity-50"
+                          >
+                            <Save size={12} /> {savingEntry ? 'Saving…' : 'Save'}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={startEditEntry}
+                            title="Edit this entry in place"
+                            className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs hover:border-[var(--color-accent)]"
+                          >
+                            <Pencil size={12} /> Edit
+                          </button>
+                          <button
+                            onClick={() => void openEntryFile()}
+                            disabled={!entry?.markdown}
+                            title="Open the markdown file in your default editor (macOS)"
+                            className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
+                          >
+                            <ExternalLink size={12} /> Open
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {editing ? (
+                    <textarea
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      spellCheck={false}
+                      className="h-[calc(100%-2.5rem)] min-h-64 w-full resize-none rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 font-mono text-xs leading-relaxed"
+                      placeholder="# Markdown for this day…"
+                    />
+                  ) : entry?.markdown ? (
+                    <Markdown content={entry.markdown} />
+                  ) : (
+                    <div className="text-sm text-[var(--color-ink-muted)]">
+                      No entry for this day. <span className="text-[var(--color-ink-muted)]">Click Edit to write one.</span>
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="text-sm text-[var(--color-ink-muted)]">
-                  {selected && projDate ? 'No entry for this day.' : 'Pick a date.'}
-                </div>
+                <div className="text-sm text-[var(--color-ink-muted)]">Pick a date.</div>
               )}
             </div>
           </>

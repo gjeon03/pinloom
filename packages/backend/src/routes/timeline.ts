@@ -8,11 +8,14 @@ import type { FastifyInstance } from 'fastify';
 import { getDb } from '../db/connection.js';
 import { getProjectWikiSlugByProjectId } from '../services/wiki-sync.js';
 import { manualCaptureProjectDay } from '../services/timeline/capture.js';
+import { openExternal } from '../services/open-external.js';
 import {
   assertDate,
+  entryPath,
   globalDateView,
   listDates,
   readEntry,
+  writeEntry,
 } from '../services/timeline/store.js';
 
 interface CaptureAllJob {
@@ -92,6 +95,61 @@ export async function timelineRoutes(app: FastifyInstance) {
       }
       const slug = getProjectWikiSlugByProjectId(req.params.projectId);
       return { date: req.params.date, markdown: readEntry(slug, req.params.date) };
+    },
+  );
+
+  // Save an edited entry in place (the timeline is the user's to curate — same
+  // as the wiki's edit-in-place). Empty body deletes nothing; we just write what
+  // the user kept. assertDate guards the path.
+  app.put<{ Params: { projectId: string; date: string }; Body: { markdown?: string } }>(
+    '/api/timeline/projects/:projectId/entries/:date',
+    async (req, reply) => {
+      try {
+        assertDate(req.params.date);
+      } catch {
+        reply.code(400);
+        return { error: 'invalid date' };
+      }
+      if (!projectOr404(req.params.projectId)) {
+        reply.code(404);
+        return { error: 'project not found' };
+      }
+      if (typeof req.body?.markdown !== 'string') {
+        reply.code(400);
+        return { error: 'markdown (string) is required' };
+      }
+      const slug = getProjectWikiSlugByProjectId(req.params.projectId);
+      writeEntry(slug, req.params.date, req.body.markdown);
+      return { ok: true as const, date: req.params.date };
+    },
+  );
+
+  // Open the entry's markdown file in the OS default editor (macOS).
+  app.post<{ Params: { projectId: string; date: string } }>(
+    '/api/timeline/projects/:projectId/entries/:date/open',
+    async (req, reply) => {
+      try {
+        assertDate(req.params.date);
+      } catch {
+        reply.code(400);
+        return { error: 'invalid date' };
+      }
+      if (!projectOr404(req.params.projectId)) {
+        reply.code(404);
+        return { error: 'project not found' };
+      }
+      const slug = getProjectWikiSlugByProjectId(req.params.projectId);
+      if (readEntry(slug, req.params.date) === null) {
+        reply.code(404);
+        return { error: 'no entry for this day yet' };
+      }
+      const full = entryPath(slug, req.params.date);
+      const result = openExternal(full);
+      if (!result.ok) {
+        reply.code(500);
+        return { error: result.error ?? 'open failed' };
+      }
+      return { ok: true as const, path: full };
     },
   );
 
