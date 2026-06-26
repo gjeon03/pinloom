@@ -443,6 +443,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
           <DefaultTransportSection />
 
+          <EmbeddingsSection />
+
           <InstallAppSection />
 
           <AutostartSection />
@@ -553,6 +555,227 @@ function DefaultTransportSection() {
 
 // Install pinloom as a standalone PWA so it gets a dock/taskbar icon and its
 // own window (no browser chrome). The service worker only precaches the static
+// Which backend powers semantic search (⌘K + Recap). Live toggle: switching
+// persists the choice, re-warms, and re-embeds the corpus in the background.
+// Ollama is managed in-place (detect server, download the model with progress)
+// — only installing the Ollama app itself is left to the user.
+const EMB_MODES = [
+  { id: 'in-process', label: 'In-process' },
+  { id: 'ollama', label: 'Ollama' },
+  { id: 'off', label: 'Off' },
+] as const;
+
+function EmbeddingsSection() {
+  const { data, mutate } = useSWR('settings:embeddings', () => api.getEmbeddingsStatus(), {
+    refreshInterval: 4000,
+  });
+  const [busy, setBusy] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [pull, setPull] = useState<Awaited<ReturnType<typeof api.ollamaPullStatus>> | null>(null);
+
+  async function setMode(mode: 'in-process' | 'ollama' | 'off') {
+    if (busy || mode === data?.mode) return;
+    setBusy(true);
+    try {
+      await api.setEmbeddingsBackend(mode);
+      await mutate();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function download() {
+    if (!data) return;
+    await api.pullOllamaModel(data.ollamaModel);
+    const iv = setInterval(async () => {
+      const s = await api.ollamaPullStatus();
+      setPull(s);
+      if (!s.pulling) {
+        clearInterval(iv);
+        setPull(null);
+        if (s.done) await api.setEmbeddingsBackend('ollama'); // re-warm against the now-present model
+        await mutate();
+      }
+    }, 1000);
+  }
+
+  const mode = data?.mode ?? 'in-process';
+  const pct = pull && pull.total > 0 ? Math.floor((pull.completed / pull.total) * 100) : 0;
+
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        Search embeddings
+      </h3>
+      <p className="mb-2 text-xs text-[var(--color-ink-muted)]">
+        Powers semantic ⌘K search + Recap. Ollama gives stronger embeddings (esp. Korean);
+        switching re-embeds in the background (keyword-only meanwhile).
+      </p>
+      <div className="flex rounded border border-[var(--color-border)] overflow-hidden text-xs w-fit">
+        {EMB_MODES.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => void setMode(m.id)}
+            disabled={busy}
+            className={`px-3 py-1.5 ${
+              mode === m.id
+                ? 'bg-[var(--color-accent)] text-black'
+                : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
+            } disabled:opacity-50`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-2 text-xs">
+        {mode === 'off' && <span className="text-[var(--color-ink-muted)]">Keyword search only.</span>}
+        {mode === 'in-process' && (
+          <span className="text-[var(--color-ink-muted)]">
+            {data?.ready ? `✓ ready (${data.id})` : 'warming up…'}
+          </span>
+        )}
+        {mode === 'ollama' && data && (
+          <>
+            {!data.ollama.running ? (
+              <div className="text-[var(--color-ink-muted)]">
+                Ollama isn’t reachable. Already installed? It just needs to be{' '}
+                <em>started</em>.{' '}
+                <button
+                  onClick={() => setGuideOpen(true)}
+                  className="text-[var(--color-accent)] hover:underline"
+                >
+                  Setup guide →
+                </button>
+              </div>
+            ) : pull ? (
+              <div className="text-[var(--color-ink-muted)]">
+                Downloading {data.ollamaModel}… {pull.status} {pct > 0 ? `${pct}%` : ''}
+                <div className="mt-1 h-1.5 w-full max-w-xs rounded bg-[var(--color-surface-3)]">
+                  <div className="h-full rounded bg-[var(--color-accent)]" style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            ) : !data.modelPresent ? (
+              <button
+                onClick={() => void download()}
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1 hover:border-[var(--color-accent)]"
+              >
+                Download {data.ollamaModel}
+              </button>
+            ) : (
+              <span className="text-[var(--color-ink-muted)]">
+                {data.ready ? `✓ ${data.id} ready` : 're-embedding corpus… (keyword search meanwhile)'}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      {guideOpen && (
+        <OllamaGuideModal model={data?.ollamaModel ?? 'bge-m3'} onClose={() => setGuideOpen(false)} />
+      )}
+    </section>
+  );
+}
+
+// Compact, self-contained "how to get Ollama running" guide. The one thing
+// pinloom can't do for the user is install + start a system daemon, so this
+// covers exactly that (install → start → back here). Renders above the Settings
+// modal. The most common trap: `brew install ollama` installs the binary but
+// does NOT start the server, so the status stays "not reachable" until `ollama
+// serve` (or the app) is running — step 2 calls that out explicitly.
+function OllamaCmd({ children }: { children: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard?.writeText(children).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          },
+          () => {
+            /* clipboard blocked — selection still works */
+          },
+        );
+      }}
+      title="Copy"
+      className="group inline-flex items-center gap-1.5 rounded bg-[var(--color-surface-3)] px-2 py-1 font-mono text-xs hover:ring-1 hover:ring-[var(--color-accent)]"
+    >
+      <span>{children}</span>
+      <span className="text-[10px] text-[var(--color-ink-muted)] group-hover:text-[var(--color-accent)]">
+        {copied ? 'copied' : 'copy'}
+      </span>
+    </button>
+  );
+}
+
+function OllamaGuideModal({ model, onClose }: { model: string; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Ollama setup guide"
+        className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 text-sm"
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-semibold">Use Ollama for embeddings</h3>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded p-1 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <ol className="space-y-3">
+          <li>
+            <div className="font-medium">1. Install (once)</div>
+            <div className="mt-1 text-[var(--color-ink-muted)]">
+              macOS: <OllamaCmd>brew install ollama</OllamaCmd> — or download from{' '}
+              <a
+                href="https://ollama.com/download"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[var(--color-accent)] hover:underline"
+              >
+                ollama.com
+              </a>
+              .
+            </div>
+          </li>
+          <li>
+            <div className="font-medium">2. Start the server</div>
+            <div className="mt-1 text-[var(--color-ink-muted)]">
+              Installing alone isn’t enough — the server must run. Either run{' '}
+              <OllamaCmd>ollama serve</OllamaCmd> in a terminal, or open the{' '}
+              <strong>Ollama app</strong> (menu-bar icon). To keep it always on:{' '}
+              <OllamaCmd>brew services start ollama</OllamaCmd>.
+            </div>
+          </li>
+          <li>
+            <div className="font-medium">3. Back here</div>
+            <div className="mt-1 text-[var(--color-ink-muted)]">
+              This panel auto-detects it within a few seconds, then a{' '}
+              <strong>Download {model}</strong> button appears — click it and pinloom pulls the
+              model (with a progress bar) and re-embeds in the background.
+            </div>
+          </li>
+        </ol>
+
+        <p className="mt-4 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-ink-muted)]">
+          pinloom checks <code>http://localhost:11434</code>. Running Ollama on another host or
+          port? Set <code>PINLOOM_OLLAMA_URL</code> and restart the backend.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // shell — the app still needs the backend running, which pairs with the
 // login-autostart setting. Chromium fires `beforeinstallprompt` (button drives
 // the native dialog); iOS Safari has no programmatic prompt, so we fall back to
