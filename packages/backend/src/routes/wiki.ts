@@ -47,6 +47,25 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
   // Empty when the wiki isn't vector-indexed yet.
   app.get('/api/wiki/graph', async () => buildWikiGraph(db));
 
+  // Toggle per-project automatic conventions analysis (background → proposal).
+  app.patch<{ Params: { projectId: string }; Body: { auto?: boolean } }>(
+    '/api/wiki/projects/:projectId/auto',
+    async (req, reply) => {
+      if (typeof req.body?.auto !== 'boolean') {
+        reply.code(400);
+        return { error: 'auto (boolean) is required' };
+      }
+      const info = db
+        .prepare('UPDATE projects SET wiki_auto = ? WHERE id = ?')
+        .run(req.body.auto ? 1 : 0, req.params.projectId);
+      if (info.changes === 0) {
+        reply.code(404);
+        return { error: 'project not found' };
+      }
+      return { ok: true as const, auto: req.body.auto };
+    },
+  );
+
   app.get<{ Params: { '*': string } }>(
     '/api/wiki/pages/*',
     async (req, reply) => {

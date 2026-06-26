@@ -5,6 +5,8 @@ export interface Project {
   groupId: string | null;
   /** Per-project automatic Work Timeline capture (default true). */
   timelineAuto: boolean;
+  /** Per-project automatic wiki conventions analysis → staged proposal (default true). */
+  wikiAuto: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -162,7 +164,7 @@ export interface MessageSearchResult {
 // A staged wiki gardener change (knowledge-system v2 Phase 2). The gardener
 // proposes; the user reviews + accepts/rejects. Applying routes through the
 // deterministic curation primitives — the agent never writes pages directly.
-export type WikiProposalKind = 'edit_section' | 'archive_page';
+export type WikiProposalKind = 'edit_section' | 'archive_page' | 'replace_page';
 export type WikiProposalStatus = 'pending' | 'applied' | 'rejected';
 
 export interface WikiProposal {
@@ -173,7 +175,8 @@ export interface WikiProposal {
   title: string;
   /** Target page, relative to the wiki pages/ dir. */
   relPath: string;
-  /** kind-specific: edit_section → { newSectionContent }; archive_page → { reason, supersededBy? }. */
+  /** kind-specific: edit_section → { newSectionContent }; archive_page → { reason,
+   *  supersededBy? }; replace_page → { markdown } (full new page, may create it). */
   payload: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;

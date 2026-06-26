@@ -5,6 +5,7 @@ interface Props {
   projects: Project[];
   runningProjectIds: Set<string>;
   onAnalyze: (project: Project) => void;
+  onToggleAuto: (project: Project, auto: boolean) => void;
   onClose: () => void;
 }
 
@@ -12,6 +13,7 @@ export function WikiAnalyzePicker({
   projects,
   runningProjectIds,
   onAnalyze,
+  onToggleAuto,
   onClose,
 }: Props) {
   return (
@@ -34,8 +36,9 @@ export function WikiAnalyzePicker({
             </h2>
             <p className="mt-0.5 text-[11px] text-[var(--color-ink-muted)]">
               An AI agent reads the project read-only and writes
-              <span className="font-mono"> conventions-&lt;slug&gt;.md</span>.
-              Runs in the background — track progress in the notification bell.
+              <span className="font-mono"> conventions-&lt;slug&gt;.md</span>. “Auto”
+              re-analyzes in the background as work accrues and stages the result
+              as a proposal you review under Proposals.
             </p>
           </div>
           <button
@@ -56,31 +59,47 @@ export function WikiAnalyzePicker({
           {projects.map((p) => {
             const running = runningProjectIds.has(p.id);
             return (
-              <button
+              <div
                 key={p.id}
-                onClick={() => {
-                  if (running) return;
-                  onAnalyze(p);
-                  onClose();
-                }}
-                disabled={running}
-                className="w-full text-left px-4 py-3 border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-3)] disabled:cursor-not-allowed flex items-start justify-between gap-3"
+                className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-3 last:border-b-0"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">{p.name}</div>
-                  <div className="mt-0.5 text-[11px] font-mono text-[var(--color-ink-muted)] truncate">
+                  <div className="truncate text-sm font-medium">{p.name}</div>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--color-ink-muted)]">
                     {p.cwd}
                   </div>
                 </div>
-                <div className="shrink-0 mt-1">
-                  {running && (
-                    <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-accent)]">
-                      <Loader2 size={12} className="animate-spin" />
-                      Analyzing…
-                    </div>
+                <label
+                  className="flex shrink-0 cursor-pointer items-center gap-1 text-[11px] text-[var(--color-ink-muted)]"
+                  title="Auto-analyze this project in the background (stages a proposal to review)"
+                >
+                  <input
+                    type="checkbox"
+                    checked={p.wikiAuto}
+                    onChange={(e) => onToggleAuto(p, e.target.checked)}
+                  />
+                  Auto
+                </label>
+                <button
+                  onClick={() => {
+                    if (running) return;
+                    onAnalyze(p);
+                    onClose();
+                  }}
+                  disabled={running}
+                  className="flex shrink-0 items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {running ? (
+                    <>
+                      <Loader2 size={12} className="animate-spin" /> Analyzing…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={12} /> Analyze now
+                    </>
                   )}
-                </div>
-              </button>
+                </button>
+              </div>
             );
           })}
         </div>

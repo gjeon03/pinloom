@@ -3,8 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { getDb } from '../db/connection.js';
-import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
+import { getProjectWikiSlugByProjectId, runOnWikiChain } from './wiki-sync.js';
 import { getPagesDir } from './wiki-reader.js';
+import { createProposal } from './wiki-proposals.js';
 
 interface ProjectRow {
   id: string;
@@ -21,6 +22,7 @@ export interface AnalyzeResult {
 }
 
 const DEFAULT_ANALYZE_MODEL = 'claude-sonnet-4-6';
+const ANALYZE_TIMEOUT_MS = 8 * 60_000; // abort a hung analyze after 8 min
 
 function buildConventionsSystemPrompt(args: {
   projectName: string | null;
@@ -223,7 +225,7 @@ export function getAnalysisStatus(): {
 
 export async function runConventionsAnalysis(
   projectId: string,
-  options?: { model?: string; startedAt?: string },
+  options?: { model?: string; startedAt?: string; stageProposal?: boolean },
 ): Promise<AnalyzeResult> {
   if (activeAnalyses.has(projectId)) {
     throw new Error('analysis already in progress for this project');
@@ -263,6 +265,9 @@ export async function runConventionsAnalysis(
 
   const abortController = new AbortController();
   activeAnalyses.set(projectId, abortController);
+  // Hard ceiling so a hung agent can't pin `activeAnalyses` (and, for the auto
+  // sweep, the single-flight `running` flag) forever.
+  const analyzeTimeout = setTimeout(() => abortController.abort(), ANALYZE_TIMEOUT_MS);
 
   const logEntry = pushLog({
     projectId,
@@ -350,7 +355,31 @@ export async function runConventionsAnalysis(
       '',
     ].join('\n');
 
-    await writeFile(pageFile, frontmatter + body + '\n', 'utf8');
+    const fullPage = frontmatter + body + '\n';
+
+    // Auto path: stage the regenerated page as a proposal for the user to
+    // review/accept instead of writing it — the wiki is injected into every
+    // system prompt, so auto-generated content must pass the human gate. Manual
+    // (button) analysis keeps writing directly (the click IS the consent).
+    if (options?.stageProposal) {
+      await createProposal({
+        kind: 'replace_page',
+        title: `Auto: refresh conventions for ${project.name ?? slug}`,
+        relPath: pageRelPath,
+        payload: { markdown: fullPage },
+      });
+      const output = `Staged conventions proposal for ${pageRelPath} (${body.length} chars). ${summary}`;
+      logEntry.status = 'success';
+      logEntry.finishedAt = new Date().toISOString();
+      logEntry.detail = output;
+      logEntry.pageRelPath = pageRelPath;
+      return { output, pageFile, pageRelPath, pageWritten: false, charCount: body.length };
+    }
+
+    // Serialize the direct write on the wiki chain — the same chain
+    // acceptProposal uses — so a manual analyze can't race a proposal accept
+    // (or a session sync) into a lost update on the conventions page.
+    await runOnWikiChain(() => writeFile(pageFile, fullPage, 'utf8'));
 
     const output = `Wrote ${pageRelPath} (${body.length} chars). ${summary}`;
     logEntry.status = 'success';
@@ -371,6 +400,7 @@ export async function runConventionsAnalysis(
     logEntry.detail = err instanceof Error ? err.message : String(err);
     throw err;
   } finally {
+    clearTimeout(analyzeTimeout);
     if (activeAnalyses.get(projectId) === abortController) {
       activeAnalyses.delete(projectId);
     }

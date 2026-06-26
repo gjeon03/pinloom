@@ -46,6 +46,7 @@ import { startEventLoopMonitor } from './services/event-loop-monitor.js';
 import { initEmbeddings } from './services/embeddings/index.js';
 import { startMessageIndexer, stopMessageIndexer } from './services/message-indexer.js';
 import { startTimelineCapture, stopTimelineCapture } from './services/timeline/capture.js';
+import { startWikiAuto, stopWikiAuto } from './services/wiki-auto.js';
 
 // Guard the WebSocket routes against cross-site hijacking. The terminal
 // socket is effectively local RCE, so a malicious page the user happens to
@@ -90,6 +91,7 @@ export async function createApp() {
   app.addHook('onClose', async () => {
     stopMessageIndexer();
     stopTimelineCapture();
+    stopWikiAuto();
     await killAllTerminals();
     await killAllAgentTerminals();
     await killAllCodexTerminals();
@@ -125,6 +127,10 @@ export async function createApp() {
     // activity into per-project journal entries. Out of the runner hot path,
     // degrade-safe (a distill failure is caught per-sweep).
     startTimelineCapture();
+    // Auto wiki (knowledge flywheel): periodically re-analyze active projects'
+    // conventions and stage them as proposals for review. Conservative gates +
+    // human accept keep it from polluting the always-injected wiki.
+    startWikiAuto();
   }
 
   await app.register(cors, { origin: true });

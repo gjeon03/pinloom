@@ -615,6 +615,13 @@ export function WikiPage() {
           projects={projects}
           runningProjectIds={runningAnalyzeProjectIds}
           onAnalyze={analyzeProject}
+          onToggleAuto={(project, auto) => {
+            // optimistic flip so the checkbox responds immediately
+            setProjects((prev) =>
+              prev.map((p) => (p.id === project.id ? { ...p, wikiAuto: auto } : p)),
+            );
+            void api.setProjectWikiAuto(project.id, auto).catch(() => void refresh());
+          }}
           onClose={() => setShowAnalyzePicker(false)}
         />
       )}

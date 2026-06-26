@@ -1,13 +1,15 @@
-// Wiki gardener proposal store (docs/knowledge-system-v2.md, Phase 2a). The
-// durable staging layer between the gardener (which proposes) and the user
-// (who accepts/rejects). Applying a proposal NEVER lets an agent write a page
-// directly — it routes through the deterministic curation primitives
-// (spliceAutoSection / archivePage, #125) on the shared wiki write chain, and
-// is blocked if the target page changed since the proposal was computed.
+// Wiki proposal store (docs/knowledge-system-v2.md, Phase 2a). The durable
+// staging layer between a proposer (gardener / auto-analyzer) and the user (who
+// accepts/rejects). Section/archive edits route through the deterministic
+// curation primitives (spliceAutoSection / archivePage, #125); `replace_page`
+// (auto-analyzer) writes the whole conventions page — the human reviews the FULL
+// before/after diff before accepting, which is the gate against clobbering any
+// hand edits. All applies run on the shared wiki write chain and are blocked if
+// the target page changed since the proposal was computed.
 
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
 import type {
@@ -105,6 +107,12 @@ export async function createProposal(
       );
     }
   }
+  if (input.kind === 'replace_page') {
+    const md = input.payload.markdown;
+    if (typeof md !== 'string' || md.trim() === '') {
+      throw new ProposalError('replace_page requires a non-empty string payload.markdown');
+    }
+  }
   const root = opts.root ?? getWikiRoot();
   const now = opts.now ?? new Date().toISOString();
   const current = await readPageOrNull(root, input.relPath);
@@ -155,6 +163,11 @@ function computeAfter(
   if (kind === 'edit_section') {
     if (before === null) throw new ProposalError('target page not found', 404);
     return spliceAutoSection(before, String(payload.newSectionContent ?? ''));
+  }
+  if (kind === 'replace_page') {
+    // Full-page replacement (or creation when `before` is null). Used by the
+    // auto-analyzer to stage a regenerated conventions page for review.
+    return String(payload.markdown ?? '');
   }
   if (kind === 'archive_page') return null; // the page moves to the archive
   throw new ProposalError(`unknown proposal kind: ${kind}`, 400);
@@ -225,6 +238,11 @@ export function acceptProposal(
         String(payload.newSectionContent ?? ''),
       );
       await writeFile(pageFile(root, row.rel_path), next, 'utf8');
+    } else if (row.kind === 'replace_page') {
+      assertSafeRelPath(row.rel_path);
+      // Full-page write — creates the file if it didn't exist (auto-analyzer).
+      await mkdir(path.dirname(pageFile(root, row.rel_path)), { recursive: true });
+      await writeFile(pageFile(root, row.rel_path), String(payload.markdown ?? ''), 'utf8');
     } else if (row.kind === 'archive_page') {
       await archivePage(
         row.rel_path,
