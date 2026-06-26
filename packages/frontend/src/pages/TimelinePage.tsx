@@ -212,51 +212,63 @@ export function TimelinePage() {
           </button>
         </div>
 
+        {/* LEFT — view controls: what you're looking at */}
         {mode === 'project' && selected && (
-          <>
-            <label
-              className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)] cursor-pointer"
-              title={`Auto-capture for ${selected.projectName} (per-project).\nSchedule: a background sweep runs every ~1 min and captures a session once it has been idle ~15 min AND ≥80 chars of new work accrued since the last capture. An already-captured day re-distills at most once every 30 min. Closing a session tab deletes it — capture before then (or use Capture now).`}
-            >
-              <input type="checkbox" checked={selected.auto} onChange={() => void toggleAuto()} />
-              Auto-capture
-            </label>
+          <label
+            className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)] cursor-pointer"
+            title={`Auto-capture for ${selected.projectName} (per-project).\nSchedule: a background sweep runs every ~1 min and captures a session once it has been idle ~15 min AND ≥80 chars of new work accrued since the last capture. An already-captured day re-distills at most once every 30 min. Closing a session tab deletes it — capture before then (or use Capture).`}
+          >
+            <input type="checkbox" checked={selected.auto} onChange={() => void toggleAuto()} />
+            Auto-capture
+          </label>
+        )}
+        {mode === 'date' && (
+          <label className="flex items-center gap-1.5 text-xs">
+            <span className="text-[var(--color-ink-muted)]">Viewing</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs"
+            />
+          </label>
+        )}
+
+        {/* RIGHT — capture controls: target day + actions, grouped + labelled so
+            the capture date isn't mistaken for the view date. */}
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-muted)]">
+            Capture
+          </span>
+          <input
+            type="date"
+            value={captureDate}
+            max={localToday()}
+            title="Target day — pick a past day to backfill it"
+            onChange={(e) => setCaptureDate(e.target.value)}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1 text-xs"
+          />
+          {mode === 'project' && selected && (
             <button
               onClick={() => void captureNow()}
               disabled={busy}
-              title={`Capture / regenerate ${captureDate} for ${selected.projectName} now (from that day's sessions + git commits)`}
+              title={`Capture / regenerate ${captureDate} for ${selected.projectName} (from that day's sessions + git commits)`}
               className={captureBtnCls}
             >
-              <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> Capture now
+              <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> This project
             </button>
-          </>
-        )}
-        {mode === 'date' && (
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1"
-          />
-        )}
-        <input
-          type="date"
-          value={captureDate}
-          max={localToday()}
-          title="Which day Capture targets — pick a past day to backfill it"
-          onChange={(e) => setCaptureDate(e.target.value)}
-          className="text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1"
-        />
-        <button
-          onClick={() => void captureAll()}
-          disabled={busy || capturingAll}
-          title={`Capture / regenerate ${captureDate} for every project (runs in the background — progress shows here)`}
-          className={captureBtnCls}
-        >
-          <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
-          {capturingAll ? `Capturing ${capJob!.done}/${capJob!.total}…` : 'Capture all'}
-        </button>
-        {notice && <span className="text-xs text-[var(--color-ink-muted)]">{notice}</span>}
+          )}
+          <button
+            onClick={() => void captureAll()}
+            disabled={busy || capturingAll}
+            title={`Capture / regenerate ${captureDate} for every project (runs in the background — progress shows here)`}
+            className={captureBtnCls}
+          >
+            <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
+            {capturingAll ? `${capJob!.done}/${capJob!.total}…` : 'All projects'}
+          </button>
+          {notice && <span className="text-xs text-[var(--color-ink-muted)]">{notice}</span>}
+        </div>
       </header>
 
       <div className="flex-1 min-h-0 flex">
