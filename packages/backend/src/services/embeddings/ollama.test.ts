@@ -35,6 +35,18 @@ describe('OllamaEmbeddingProvider', () => {
     expect(body).toMatchObject({ model: 'bge-m3', input: ['a', 'b', 'c'] });
   });
 
+  it('sends an asymmetric keep_alive: warm for queries, short for indexing', async () => {
+    const fq = fakeFetch([[1]]);
+    await new OllamaEmbeddingProvider({ fetchImpl: fq }).embedQuery('hi');
+    const qBody = JSON.parse(String((fq as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body));
+    expect(qBody.keep_alive).toBe('5m'); // queries keep the model resident
+
+    const fp = fakeFetch([[1]]);
+    await new OllamaEmbeddingProvider({ fetchImpl: fp }).embedPassages(['doc']);
+    const pBody = JSON.parse(String((fp as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body));
+    expect(pBody.keep_alive).toBe('2m'); // background indexing releases it soon after idle
+  });
+
   it('truncates oversized inputs to stay under the model context window', async () => {
     const f = fakeFetch([[1]]);
     const p = new OllamaEmbeddingProvider({ fetchImpl: f });

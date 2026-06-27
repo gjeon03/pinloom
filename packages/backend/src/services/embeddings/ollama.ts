@@ -31,6 +31,25 @@ function maxInputChars(): number {
   return Number.isFinite(n) && n > 0 ? n : 4000;
 }
 
+// How long Ollama keeps the model resident after a request (its `keep_alive`).
+// Without it Ollama defaults to 5 min, and because the background indexer
+// re-embeds within that window it keeps resetting the timer — so bge-m3 (~600MB)
+// effectively never unloads. We send it explicitly and ASYMMETRICALLY:
+//   - QUERY (⌘K / Recap, latency-sensitive) → stay warm so search is snappy.
+//   - INDEX (background passage embeds) → release a couple minutes after the
+//     pass, so the model unloads when you walk away and the RAM comes back. The
+//     indexer sweeps every 5s but only embeds NEW content, so "2m" stays warm
+//     through normal chatting/thinking pauses yet frees up when you're idle; the
+//     next pass pays a ~1-2s cold reload off the (background) hot path. Lower it
+//     (e.g. "30s") for more aggressive reclaim. Env-tunable (Ollama duration
+//     syntax: "30s", "2m", "0" = unload now, "-1" = forever).
+function queryKeepAlive(): string {
+  return process.env.PINLOOM_OLLAMA_KEEP_ALIVE_QUERY ?? '5m';
+}
+function indexKeepAlive(): string {
+  return process.env.PINLOOM_OLLAMA_KEEP_ALIVE_INDEX ?? '2m';
+}
+
 export interface OllamaConfig {
   baseUrl?: string;
   model?: string;
@@ -64,21 +83,21 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   }
 
   async embedQuery(text: string): Promise<Float32Array> {
-    return (await this.embed([text]))[0];
+    return (await this.embed([text], queryKeepAlive()))[0];
   }
 
   async embedPassages(texts: string[]): Promise<Float32Array[]> {
     if (texts.length === 0) return [];
-    return this.embed(texts);
+    return this.embed(texts, indexKeepAlive());
   }
 
-  private async embed(inputs: string[]): Promise<Float32Array[]> {
+  private async embed(inputs: string[], keepAlive: string): Promise<Float32Array[]> {
     const cap = maxInputChars();
     const clipped = inputs.map((t) => (t.length > cap ? t.slice(0, cap) : t));
     const res = await this.doFetch(`${this.baseUrl}/api/embed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.model, input: clipped }),
+      body: JSON.stringify({ model: this.model, input: clipped, keep_alive: keepAlive }),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
