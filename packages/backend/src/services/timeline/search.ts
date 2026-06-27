@@ -36,7 +36,7 @@ function parseDocId(docId: string): { projectId: string; date: string } | null {
 export async function searchTimeline(
   db: Database,
   query: string,
-  opts: { projectId?: string; limit?: number },
+  opts: { projectId?: string; projectIds?: string[]; limit?: number },
   provider: EmbeddingProvider | null,
 ): Promise<TimelineHit[]> {
   const q = query.trim();
@@ -51,7 +51,9 @@ export async function searchTimeline(
   } catch {
     return [];
   }
-  const k = Math.min(opts.projectId ? limit * 4 : limit * 2, 100);
+  const scoped = (opts.projectIds && opts.projectIds.length > 0) || !!opts.projectId;
+  const projectSet = opts.projectIds ? new Set(opts.projectIds) : null;
+  const k = Math.min(scoped ? limit * 4 : limit * 2, 100);
   // Resolve slug + name ONCE per project (getProjectWikiSlugByProjectId loads the
   // whole project table on each call — don't run it per knn hit, review H2).
   const nameStmt = db.prepare('SELECT name FROM projects WHERE id = ?');
@@ -75,7 +77,9 @@ export async function searchTimeline(
     const parsed = parseDocId(h.docId);
     if (!parsed) continue;
     const { projectId, date } = parsed;
-    if (opts.projectId && projectId !== opts.projectId) continue;
+    if (projectSet) {
+      if (!projectSet.has(projectId)) continue;
+    } else if (opts.projectId && projectId !== opts.projectId) continue;
     const proj = resolveProject(projectId);
     if (!proj) continue;
     let content: string | null;

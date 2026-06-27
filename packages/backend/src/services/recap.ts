@@ -39,6 +39,12 @@ const TIMELINE_BUDGET = 100_000; // concatenated timeline markdown for 4B
 // (no colon) → first colon is the separator; validate the date so a malformed
 // docId can't reach readEntry's assertDate (returns null → caller skips it).
 const TL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// A wiki page's applies_to slugs (empty ⇒ global / unscoped).
+function wikiAppliesTo(content: string): string[] {
+  const m = content.match(/^applies_to:\s*\[([^\]]*)\]/m);
+  return m ? m[1].split(',').map((s) => s.trim()).filter(Boolean) : [];
+}
+
 function splitTimelineDocId(docId: string): { projectId: string; date: string } | null {
   const i = docId.indexOf(':');
   if (i < 0) return null;
@@ -139,6 +145,9 @@ export async function answerOverCorpus(
   question: string,
   opts: {
     projectId?: string;
+    /** Scope messages + timeline to a project group; wiki uses projectSlugs. */
+    projectIds?: string[];
+    projectSlugs?: string[];
     provider?: EmbeddingProvider | null;
     limit?: number;
     runRecap?: RunRecap;
@@ -155,7 +164,7 @@ export async function answerOverCorpus(
   const hits = await searchMessagesHybrid(
     db,
     q,
-    { projectId: opts.projectId, limit: opts.limit ?? ANSWER_HITS },
+    { projectId: opts.projectId, projectIds: opts.projectIds, limit: opts.limit ?? ANSWER_HITS },
     provider,
   );
   const contentStmt = db.prepare('SELECT content FROM messages WHERE id = ?');
@@ -183,13 +192,18 @@ export async function answerOverCorpus(
   if (provider && tlMeta && tlMeta.modelId === provider.id) {
     try {
       const qvec = await provider.embedQuery(q);
-      const k = Math.min(opts.projectId ? TIMELINE_HITS * 4 : TIMELINE_HITS * 2, 100);
+      const projectSet =
+        opts.projectIds && opts.projectIds.length > 0 ? new Set(opts.projectIds) : null;
+      const scoped = projectSet !== null || !!opts.projectId;
+      const k = Math.min(scoped ? TIMELINE_HITS * 4 : TIMELINE_HITS * 2, 100);
       const nameStmt = db.prepare('SELECT name FROM projects WHERE id = ?');
       const tlHits = knn(db, TIMELINE_VECTORS, qvec, k)
         .map((hit) => splitTimelineDocId(hit.docId))
-        .filter((t): t is { projectId: string; date: string } =>
-          t !== null && (!opts.projectId || t.projectId === opts.projectId),
-        )
+        .filter((t): t is { projectId: string; date: string } => {
+          if (t === null) return false;
+          if (projectSet) return projectSet.has(t.projectId);
+          return !opts.projectId || t.projectId === opts.projectId;
+        })
         .slice(0, TIMELINE_HITS);
       tlHits.forEach((t, i) => {
         let content: string | null;
@@ -220,19 +234,29 @@ export async function answerOverCorpus(
   if (provider && wkMeta && wkMeta.modelId === provider.id) {
     try {
       const qvec = await provider.embedQuery(q);
-      const wkHits = knn(db, WIKI_VECTORS, qvec, Math.min(WIKI_HITS * 2, 100)).slice(0, WIKI_HITS);
-      wkHits.forEach((hit, i) => {
+      const slugSet =
+        opts.projectSlugs && opts.projectSlugs.length > 0 ? new Set(opts.projectSlugs) : null;
+      const wkRaw = knn(db, WIKI_VECTORS, qvec, Math.min(WIKI_HITS * (slugSet ? 4 : 2), 100));
+      let wi = 0;
+      for (const hit of wkRaw) {
+        if (wi >= WIKI_HITS) break;
         const content = readWikiPage(hit.docId);
-        if (!content) return; // page gone since indexing
+        if (!content) continue; // page gone since indexing
+        if (slugSet) {
+          const scopes = wikiAppliesTo(content);
+          const global = scopes.length === 0 || scopes.includes('global');
+          if (!global && !scopes.some((s) => slugSet.has(s))) continue;
+        }
         const title = wikiTitle(content, hit.docId);
         candidates.push({
-          rrf: 1 / (RRF_K + i),
+          rrf: 1 / (RRF_K + wi),
           arm: 2,
           content: content.slice(0, PER_MESSAGE_CAP),
           label: `wiki · ${title}`,
           source: { kind: 'wiki', slug: hit.docId, title },
         });
-      });
+        wi++;
+      }
     } catch {
       // embed/knn failure → degrade
     }

@@ -126,7 +126,22 @@ export function buildExcerpt(
 
 export interface SearchOptions {
   projectId?: string;
+  /** Scope to a SET of projects (e.g. a project group). Supersedes projectId. */
+  projectIds?: string[];
   limit?: number;
+}
+
+/** SQL fragment + pushed params scoping to a project / project set, or null. */
+function projectScope(opts: SearchOptions, params: unknown[], col = 's.project_id'): string | null {
+  if (opts.projectIds && opts.projectIds.length > 0) {
+    params.push(...opts.projectIds);
+    return `${col} IN (${opts.projectIds.map(() => '?').join(',')})`;
+  }
+  if (opts.projectId) {
+    params.push(opts.projectId);
+    return `${col} = ?`;
+  }
+  return null;
 }
 
 /** Search conversation history. Returns [] for an empty/whitespace query. */
@@ -167,10 +182,8 @@ export function searchMessages(
     where.push("m.content LIKE ? ESCAPE '\\'");
     params.push(toLikeParam(tok));
   }
-  if (opts.projectId) {
-    where.push('s.project_id = ?');
-    params.push(opts.projectId);
-  }
+  const scope = projectScope(opts, params);
+  if (scope) where.push(scope);
 
   const sql = `
     SELECT m.id, m.session_id, m.role, m.content, m.created_at,
@@ -217,10 +230,8 @@ function hydrateByIds(
   const placeholders = ids.map(() => '?').join(',');
   const params: unknown[] = [...ids];
   let where = `m.id IN (${placeholders}) AND m.role IN ('user','assistant') AND m.source_message_id IS NULL`;
-  if (opts.projectId) {
-    where += ' AND s.project_id = ?';
-    params.push(opts.projectId);
-  }
+  const scope = projectScope(opts, params);
+  if (scope) where += ` AND ${scope}`;
   const rows = db
     .prepare(
       `SELECT m.id, m.session_id, m.role, m.content, m.created_at,

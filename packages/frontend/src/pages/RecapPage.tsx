@@ -12,6 +12,7 @@ import { useState } from 'react';
 // result survive navigating away and back.
 export function RecapPage() {
   const { data: projects } = useSWR('recap:projects', () => api.listProjects());
+  const { data: groups = [] } = useSWR('project-groups', () => api.listProjectGroups());
   const s = useRecapStore();
   const [copied, setCopied] = useState(false);
 
@@ -20,7 +21,7 @@ export function RecapPage() {
     if (!q || s.asking) return;
     setRecap({ asking: true, askResult: null });
     try {
-      const r = await api.recapAsk(q, s.askProject || undefined, s.askLang);
+      const r = await api.recapAsk(q, s.askProject || undefined, s.askLang, s.askGroup || undefined);
       setRecap({ askResult: r });
     } catch (e) {
       setRecap({ askResult: { answer: `Error: ${String(e)}`, sources: [] } });
@@ -88,6 +89,7 @@ export function RecapPage() {
             value={s.askProject}
             onChange={(e) => setRecap({ askProject: e.target.value })}
             className={inputCls}
+            title="Scope to one project"
           >
             <option value="">All projects</option>
             {(projects ?? []).map((p) => (
@@ -96,6 +98,22 @@ export function RecapPage() {
               </option>
             ))}
           </select>
+          {groups.length > 0 && (
+            <select
+              value={s.askGroup}
+              onChange={(e) => setRecap({ askGroup: e.target.value })}
+              className={inputCls}
+              title="Scope to a project group"
+            >
+              <option value="">Any group</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+              <option value="__ungrouped__">Ungrouped</option>
+            </select>
+          )}
           <LangSel value={s.askLang} onChange={(l) => setRecap({ askLang: l })} />
           <button onClick={() => void ask()} disabled={s.asking || !s.question.trim()} className={btnCls}>
             {s.asking ? 'Searching…' : 'Ask'}

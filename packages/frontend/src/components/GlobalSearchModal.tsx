@@ -66,11 +66,15 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
   // text-selection drag that releases outside the input doesn't dismiss.
   const downOnBackdropRef = useRef(false);
 
+  // Group scope filter (All / a project group / Ungrouped). '' = all.
+  const [groupId, setGroupId] = useState('');
+  const { data: groups = [] } = useSWR('project-groups', () => api.listProjectGroups());
+
   const debounced = useDebounce(query.trim(), DEBOUNCE_MS);
   const active = debounced.length >= MIN_CHARS;
   const { data, isLoading } = useSWR(
-    active ? cacheKeys.search(debounced, null) : null,
-    () => api.search(debounced, { limit: 30 }),
+    active ? ['search', debounced, groupId] : null,
+    () => api.search(debounced, { limit: 30, groupId: groupId || undefined }),
     { keepPreviousData: true },
   );
   const results = data?.results ?? [];
@@ -173,6 +177,22 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
             placeholder="Search conversation history…"
             className="flex-1 bg-transparent text-sm text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-muted)]"
           />
+          {groups.length > 0 && (
+            <select
+              value={groupId}
+              onChange={(e) => setGroupId(e.target.value)}
+              title="Scope to a project group"
+              className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1 text-xs text-[var(--color-ink-muted)]"
+            >
+              <option value="">All</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+              <option value="__ungrouped__">Ungrouped</option>
+            </select>
+          )}
           <button
             onClick={onClose}
             className="rounded p-1 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"

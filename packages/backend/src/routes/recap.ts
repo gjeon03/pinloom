@@ -11,13 +11,16 @@ import {
   generateRecap,
   type RecapKind,
 } from '../services/recap.js';
+import { resolveGroupProjects } from './search.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function recapRoutes(app: FastifyInstance) {
   const db = getDb();
 
-  app.post<{ Body: { question?: string; projectId?: string; language?: string } }>(
+  app.post<{
+    Body: { question?: string; projectId?: string; groupId?: string; language?: string };
+  }>(
     '/api/recap/ask',
     async (req, reply) => {
       const question = (req.body?.question ?? '').trim();
@@ -25,9 +28,15 @@ export async function recapRoutes(app: FastifyInstance) {
         reply.code(400);
         return { error: 'question is required' };
       }
+      const group = resolveGroupProjects(db, req.body?.groupId || undefined);
+      if (group && group.projectIds.length === 0) {
+        return { answer: '이 그룹에 자료가 없어요.', sources: [] };
+      }
       try {
         return await answerOverCorpus(db, question, {
           projectId: req.body?.projectId || undefined,
+          projectIds: group?.projectIds,
+          projectSlugs: group?.projectSlugs,
           provider: getEmbeddingProvider(),
           language: req.body?.language === 'en' ? 'en' : 'ko',
         });

@@ -34,6 +34,7 @@ export interface RecapState {
   // ask
   question: string;
   askProject: string;
+  askGroup: string;
   askLang: Lang;
   asking: boolean;
   askResult: AskResult;
@@ -50,6 +51,7 @@ export interface RecapState {
 let state: RecapState = {
   question: '',
   askProject: '',
+  askGroup: '',
   askLang: loadLang('pinloom:recap:askLang', 'ko'),
   asking: false,
   askResult: null,
