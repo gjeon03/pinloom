@@ -30,7 +30,8 @@ import {
   TransportConvertError,
 } from '../services/transport-convert.js';
 import { broadcast } from '../ws/hub.js';
-import { runWikiSync } from '../services/wiki-sync.js';
+import { runSandboxedSync } from '../services/wiki-sync.js';
+import { createProposal } from '../services/wiki-proposals.js';
 
 const ALLOWED_IMAGE_MIME: ReadonlySet<ImageMediaType> = new Set<ImageMediaType>([
   'image/jpeg',
@@ -583,12 +584,53 @@ export async function sessionRoutes(app: FastifyInstance) {
     Params: { sessionId: string };
     Body: { model?: string };
   }>('/api/sessions/:sessionId/wiki-sync', async (req, reply) => {
+    const { sessionId } = req.params;
     try {
-      const result = await runWikiSync({
-        sessionId: req.params.sessionId,
-        model: req.body?.model,
-      });
-      return result;
+      // Run the distill agent in a sandbox and diff it into a changeset — no
+      // bytes touched in the real wiki, the session cursor stays put. Each
+      // change is staged as a reviewable proposal the user accepts/rejects in
+      // the git-diff UI; on accept the page is applied + the cursor advances.
+      const { changeset, syncedThroughMessageId, messageCount } =
+        await runSandboxedSync({ sessionId, model: req.body?.model });
+
+      if (changeset.length === 0) {
+        return { staged: 0, messageCount };
+      }
+
+      const titleRow = db
+        .prepare('SELECT title FROM sessions WHERE id = ?')
+        .get(sessionId) as { title: string | null } | undefined;
+      const sessionTitle = titleRow?.title ?? null;
+
+      const pendingByPath = db.prepare(
+        "SELECT 1 FROM wiki_proposals WHERE status = 'pending' AND rel_path = ? LIMIT 1",
+      );
+
+      const batchId = nanoid();
+      let staged = 0;
+      let skipped = 0;
+      for (const item of changeset) {
+        // Don't stack a second proposal on a page that already has one pending —
+        // the user would otherwise see duplicate diffs racing on the same file.
+        if (pendingByPath.get(item.relPath)) {
+          skipped += 1;
+          continue;
+        }
+        await createProposal({
+          kind: item.op === 'archive' ? 'archive_page' : 'replace_page',
+          title: `Sync: ${sessionTitle ?? 'session'} → ${item.relPath}`,
+          relPath: item.relPath,
+          payload: {
+            markdown: item.after ?? '',
+            sessionId,
+            syncedThroughMessageId,
+            batchId,
+          },
+        });
+        staged += 1;
+      }
+
+      return { staged, skipped, batchId, messageCount, syncedThroughMessageId };
     } catch (err) {
       reply.code(500);
       return { error: err instanceof Error ? err.message : String(err) };

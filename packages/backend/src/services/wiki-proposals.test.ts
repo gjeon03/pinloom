@@ -28,6 +28,42 @@ beforeEach(async () => {
   await mkdir(path.join(root, 'pages'), { recursive: true });
   getDb().exec('DELETE FROM wiki_proposals;');
 });
+
+// ─── helpers for the sandboxed-sync accept hook (cursor advance) ───
+function seedSessionWithMessages(args: {
+  sessionId: string;
+  syncedTo: string | null;
+  // [id, created_at] pairs, chronological
+  messages: Array<[string, string]>;
+}): void {
+  const db = getDb();
+  const now = '2026-06-22T00:00:00.000Z';
+  const projectId = `proj-${args.sessionId}`;
+  db.prepare(
+    'INSERT INTO projects (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(projectId, 'p', `/tmp/${projectId}`, now, now);
+  db.prepare(
+    'INSERT INTO sessions (id, project_id, title, last_synced_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(args.sessionId, projectId, 'My session', args.syncedTo, now, now);
+  for (const [id, createdAt] of args.messages) {
+    db.prepare(
+      'INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(id, args.sessionId, 'user', 'hi', createdAt);
+  }
+}
+
+function syncedCursor(sessionId: string): string | null {
+  const row = getDb()
+    .prepare('SELECT last_synced_message_id FROM sessions WHERE id = ?')
+    .get(sessionId) as { last_synced_message_id: string | null } | undefined;
+  return row?.last_synced_message_id ?? null;
+}
+
+function clearSeed(sessionId: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+  db.prepare('DELETE FROM projects WHERE id = ?').run(`proj-${sessionId}`);
+}
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
@@ -242,5 +278,92 @@ describe('lifecycle', () => {
       { root, now: '2026-06-22T01:00:00.000Z' },
     );
     expect(listProposals('pending').map((x) => x.title)).toEqual(['B', 'A']);
+  });
+});
+
+describe('sandboxed-sync accept hook (synced cursor advance)', () => {
+  it('advances last_synced_message_id when accepting a replace_page carrying session metadata', async () => {
+    const sid = 'sess-advance';
+    seedSessionWithMessages({
+      sessionId: sid,
+      syncedTo: 'm1',
+      messages: [
+        ['m1', '2026-06-22T00:00:01.000Z'],
+        ['m2', '2026-06-22T00:00:02.000Z'],
+        ['m3', '2026-06-22T00:00:03.000Z'],
+      ],
+    });
+    try {
+      const p = await createProposal(
+        {
+          kind: 'replace_page',
+          title: 'Sync: My session → sync-note.md',
+          relPath: 'sync-note.md',
+          payload: {
+            markdown: '---\napplies_to: [global]\n---\n# Note\n',
+            sessionId: sid,
+            syncedThroughMessageId: 'm3',
+          },
+        },
+        { root, now: NOW },
+      );
+      await acceptProposal(p.id, { root, now: NOW });
+      expect(syncedCursor(sid)).toBe('m3');
+      expect(await read('sync-note.md')).toContain('# Note');
+    } finally {
+      clearSeed(sid);
+    }
+  });
+
+  it('never moves the cursor backwards', async () => {
+    const sid = 'sess-backwards';
+    seedSessionWithMessages({
+      sessionId: sid,
+      syncedTo: 'm3', // already synced ahead
+      messages: [
+        ['m1', '2026-06-22T00:00:01.000Z'],
+        ['m2', '2026-06-22T00:00:02.000Z'],
+        ['m3', '2026-06-22T00:00:03.000Z'],
+      ],
+    });
+    try {
+      const p = await createProposal(
+        {
+          kind: 'replace_page',
+          title: 'Sync: My session → back.md',
+          relPath: 'back.md',
+          payload: {
+            markdown: '# Back\n',
+            sessionId: sid,
+            syncedThroughMessageId: 'm1', // older than current cursor m3
+          },
+        },
+        { root, now: NOW },
+      );
+      await acceptProposal(p.id, { root, now: NOW });
+      expect(syncedCursor(sid)).toBe('m3'); // unchanged
+    } finally {
+      clearSeed(sid);
+    }
+  });
+
+  it('is a safe no-op when the session row is gone', async () => {
+    const p = await createProposal(
+      {
+        kind: 'replace_page',
+        title: 'Sync: ghost → ghost.md',
+        relPath: 'ghost.md',
+        payload: {
+          markdown: '# Ghost\n',
+          sessionId: 'sess-does-not-exist',
+          syncedThroughMessageId: 'mX',
+        },
+      },
+      { root, now: NOW },
+    );
+    // The page write still succeeds even though the session/message don't exist.
+    await acceptProposal(p.id, { root, now: NOW });
+    expect(await read('ghost.md')).toContain('# Ghost');
+    expect(listProposals('applied').some((x) => x.id === p.id)).toBe(true);
   });
 });

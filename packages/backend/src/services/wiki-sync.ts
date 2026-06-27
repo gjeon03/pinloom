@@ -1,5 +1,7 @@
 import {
+  copyFile,
   mkdir,
+  mkdtemp,
   readFile,
   readdir,
   rename,
@@ -796,6 +798,287 @@ async function runWikiSyncInner(args: {
     messageCount: messages.length,
     migration,
   };
+}
+
+// ─── Sandboxed sync → changeset (proposal-preview path) ───
+//
+// The manual "Sync" button used to run the distill agent directly against the
+// real wiki (runWikiSyncInner). The proposal-preview flow instead runs the SAME
+// agent inside a throwaway tempdir copy of the wiki, diffs the result against a
+// baseline snapshot, and returns a changeset the route stages as reviewable
+// proposals. Nothing in the real wiki is touched here, and the session's synced
+// cursor is NOT advanced (that happens on accept).
+
+const SANDBOX_TIMEOUT_MS = 8 * 60_000; // abort a hung sandbox distill after 8 min
+
+export interface PageChange {
+  relPath: string;
+  before: string | null;
+  after: string | null;
+  op: 'replace' | 'archive';
+}
+
+// HARD sandbox containment (exported for tests). The sync agent runs
+// bypassPermissions with a system prompt that still names the real wiki root
+// (`~/.pinloom/wiki/`), so without this an absolute-path Write/Edit would escape
+// the sandbox tempdir and mutate the LIVE wiki — silently defeating the whole
+// preview gate. Deny any file mutation resolving outside tmpRoot; reads
+// (Read/Glob/Grep) are unrestricted.
+export function sandboxWriteGuard(
+  tmpRoot: string,
+  toolName: string,
+  input: Record<string, unknown>,
+): { behavior: 'allow' } | { behavior: 'deny'; message: string } {
+  if (toolName === 'Write' || toolName === 'Edit' || toolName === 'NotebookEdit') {
+    const fp = (input.file_path ?? input.path ?? input.notebook_path) as unknown;
+    if (typeof fp === 'string') {
+      const rel = path.relative(tmpRoot, path.resolve(tmpRoot, fp));
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        return {
+          behavior: 'deny',
+          message: `Refused: ${toolName} outside the wiki sandbox. Write only to relative paths under pages/ in your working directory.`,
+        };
+      }
+    }
+  }
+  return { behavior: 'allow' };
+}
+
+const CONVENTIONS_PAGE_RE = /^conventions-.*\.md$/;
+
+// Pure diff/filter step (exported for unit tests). `baseline` is the original
+// bytes of every page that existed before the agent run; `current` is the bytes
+// of every page present after. Produces the reviewable changeset:
+//   - changed bytes  → replace
+//   - baseline page gone in current → archive
+//   - new file in current (not in baseline) → replace (creation)
+// Filters out: conventions-*.md (owned by the conventions auto-wiki), no-ops,
+// and never includes index.md / _schema.md (callers must not pass those keys,
+// but we guard anyway).
+export function computeChangeset(
+  baseline: Map<string, string>,
+  current: Map<string, string>,
+): PageChange[] {
+  const out: PageChange[] = [];
+  const skip = (rel: string): boolean =>
+    rel === 'index.md' ||
+    rel === '_schema.md' ||
+    CONVENTIONS_PAGE_RE.test(rel);
+
+  // Replaces + creations (everything currently present).
+  for (const [rel, after] of current) {
+    if (skip(rel)) continue;
+    const before = baseline.has(rel) ? baseline.get(rel)! : null;
+    if (before === after) continue; // no-op
+    out.push({ relPath: rel, before, after, op: 'replace' });
+  }
+  // Archives (baseline pages no longer present).
+  for (const [rel, before] of baseline) {
+    if (skip(rel)) continue;
+    if (current.has(rel)) continue;
+    out.push({ relPath: rel, before, after: null, op: 'archive' });
+  }
+  out.sort((a, b) => a.relPath.localeCompare(b.relPath));
+  return out;
+}
+
+// Recursively collect every page under <dir>/pages into a Map<relPath, bytes>.
+// Mirrors readWikiPagesFlat's flat + promoted-dir handling but against an
+// arbitrary pages directory (the real one or the sandbox copy).
+async function readPagesMap(pagesDir: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!existsSync(pagesDir)) return out;
+  const entries = await readdir(pagesDir);
+  for (const entry of entries) {
+    const full = path.join(pagesDir, entry);
+    const st = await stat(full).catch(() => null);
+    if (!st) continue;
+    if (st.isDirectory()) {
+      const inner = path.join(full, 'index.md');
+      if (existsSync(inner)) {
+        out.set(`${entry}/index.md`, await readFile(inner, 'utf8'));
+      }
+      continue;
+    }
+    if (!entry.endsWith('.md')) continue;
+    out.set(entry, await readFile(full, 'utf8'));
+  }
+  return out;
+}
+
+// Recursively copy a pages directory into <destPagesDir>, preserving the
+// flat-file / promoted-dir layout. Returns the baseline Map of original bytes.
+async function copyPagesInto(
+  srcPagesDir: string,
+  destPagesDir: string,
+): Promise<Map<string, string>> {
+  await mkdir(destPagesDir, { recursive: true });
+  const baseline = new Map<string, string>();
+  if (!existsSync(srcPagesDir)) return baseline;
+  const entries = await readdir(srcPagesDir);
+  for (const entry of entries) {
+    const srcFull = path.join(srcPagesDir, entry);
+    const st = await stat(srcFull).catch(() => null);
+    if (!st) continue;
+    if (st.isDirectory()) {
+      const inner = path.join(srcFull, 'index.md');
+      if (existsSync(inner)) {
+        const body = await readFile(inner, 'utf8');
+        await mkdir(path.join(destPagesDir, entry), { recursive: true });
+        await writeFile(path.join(destPagesDir, entry, 'index.md'), body, 'utf8');
+        baseline.set(`${entry}/index.md`, body);
+      }
+      continue;
+    }
+    if (!entry.endsWith('.md')) continue;
+    const body = await readFile(srcFull, 'utf8');
+    await writeFile(path.join(destPagesDir, entry), body, 'utf8');
+    baseline.set(entry, body);
+  }
+  return baseline;
+}
+
+// Build a ROOT-RELATIVE wiki snapshot from a sandbox dir (mirrors
+// readWikiSnapshot but with `### pages/<rel>` / `### index.md` / `### _schema.md`
+// headers — no absolute `~/.pinloom/wiki/` prefix, since the agent's cwd is the
+// sandbox root).
+async function readSandboxSnapshot(tmpRoot: string): Promise<string> {
+  const parts: string[] = [];
+  const schemaFile = path.join(tmpRoot, '_schema.md');
+  const indexFile = path.join(tmpRoot, 'index.md');
+  if (existsSync(schemaFile)) {
+    parts.push(`### _schema.md\n\n${await readFile(schemaFile, 'utf8')}`);
+  }
+  if (existsSync(indexFile)) {
+    parts.push(`### index.md\n\n${await readFile(indexFile, 'utf8')}`);
+  }
+  const pagesMap = await readPagesMap(path.join(tmpRoot, 'pages'));
+  const rels = [...pagesMap.keys()].sort((a, b) => a.localeCompare(b));
+  for (const rel of rels) {
+    parts.push(`### pages/${rel}\n\n${pagesMap.get(rel)!}`);
+  }
+  return parts.length === 0 ? '_(wiki is empty)_' : parts.join('\n\n---\n\n');
+}
+
+export async function runSandboxedSync(args: {
+  sessionId: string;
+  model?: string;
+}): Promise<{
+  changeset: PageChange[];
+  syncedThroughMessageId: string | null;
+  messageCount: number;
+}> {
+  const { sessionId, model = DEFAULT_SYNC_MODEL } = args;
+
+  const ctx = loadSessionContext(sessionId);
+  const allProjects = loadAllProjects();
+  const scopes = buildProjectScopes(ctx.projectId, allProjects);
+
+  const { messages, lastMessageId } = loadMessagesSinceSync(
+    sessionId,
+    ctx.lastSyncedMessageId,
+  );
+  if (messages.length === 0) {
+    return { changeset: [], syncedThroughMessageId: null, messageCount: 0 };
+  }
+
+  const filtered = filterMessages(messages);
+  if (filtered.length === 0) {
+    return {
+      changeset: [],
+      syncedThroughMessageId: lastMessageId,
+      messageCount: messages.length,
+    };
+  }
+
+  // Take a consistent snapshot of the real wiki INSIDE the chain (so a
+  // concurrent sync/apply can't change the bytes mid-copy), but run the slow
+  // agent OUTSIDE the chain.
+  const { tmpRoot, baseline } = await runOnWikiChain(async () => {
+    await ensureWikiLayout();
+    const root = await mkdtemp(path.join(os.tmpdir(), 'pinloom-sync-'));
+    const bl = await copyPagesInto(PAGES_DIR, path.join(root, 'pages'));
+    if (existsSync(INDEX_FILE)) {
+      await copyFile(INDEX_FILE, path.join(root, 'index.md'));
+    }
+    if (existsSync(SCHEMA_FILE)) {
+      await copyFile(SCHEMA_FILE, path.join(root, '_schema.md'));
+    }
+    return { tmpRoot: root, baseline: bl };
+  });
+
+  try {
+    const wikiSnapshot = await readSandboxSnapshot(tmpRoot);
+    const transcript = filtered
+      .map((m) => `### ${m.role === 'user' ? 'User' : 'AI'}\n\n${m.content}`)
+      .join('\n\n---\n\n');
+    const prompt = [
+      '# Existing wiki snapshot',
+      '',
+      wikiSnapshot,
+      '',
+      '---',
+      '',
+      '# Conversation snippet to ingest',
+      '',
+      transcript,
+    ].join('\n');
+
+    const abortController = new AbortController();
+    const timeout = setTimeout(
+      () => abortController.abort(),
+      SANDBOX_TIMEOUT_MS,
+    );
+    const guardSandboxWrite = async (
+      toolName: string,
+      input: Record<string, unknown>,
+    ): Promise<{ behavior: 'allow' } | { behavior: 'deny'; message: string }> =>
+      sandboxWriteGuard(tmpRoot, toolName, input);
+    const sandboxAddendum =
+      '\n\n## Sandbox (IMPORTANT)\nYour working directory IS the wiki root. Read and write ONLY relative paths (`pages/<name>.md`, `index.md`). Never use absolute paths like `~/.pinloom/wiki/...` — writes outside the working directory are rejected.';
+    try {
+      const q = query({
+        prompt,
+        options: {
+          cwd: tmpRoot,
+          systemPrompt: buildSyncSystemPrompt(scopes) + sandboxAddendum,
+          model,
+          maxTurns: 30,
+          permissionMode: 'bypassPermissions',
+          allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep'],
+          canUseTool: guardSandboxWrite,
+          abortController,
+        } as Parameters<typeof query>[0]['options'],
+      });
+      try {
+        for await (const message of q) {
+          if (abortController.signal.aborted) break;
+          // We don't need the text result — the changeset is derived from the
+          // resulting files on disk.
+          void message;
+        }
+      } finally {
+        try {
+          const maybeClose = (q as unknown as { close?: () => void }).close;
+          if (typeof maybeClose === 'function') maybeClose.call(q);
+        } catch {
+          // best-effort cleanup
+        }
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const current = await readPagesMap(path.join(tmpRoot, 'pages'));
+    const changeset = computeChangeset(baseline, current);
+    return {
+      changeset,
+      syncedThroughMessageId: lastMessageId,
+      messageCount: messages.length,
+    };
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 // Exported so the legacy `rename`/migration tests can be added later if needed.

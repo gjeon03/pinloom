@@ -716,7 +716,12 @@ function WikiTab({ sessionId, projectCwd }: { sessionId: string; projectCwd: str
     });
     try {
       const result = await api.syncWiki(sessionId);
-      notifications.resolve(id, result.output);
+      notifications.resolve(
+        id,
+        result.staged > 0
+          ? `${result.staged}개 변경이 검토 대기 — Proposals에서 확인`
+          : '새로 담을 지식이 없어요',
+      );
       void loadPages(); // surface any newly written pages in the list
     } catch (err) {
       notifications.fail(id, err instanceof Error ? err.message : String(err));

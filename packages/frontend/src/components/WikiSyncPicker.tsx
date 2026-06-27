@@ -41,7 +41,12 @@ export function WikiSyncPicker({ onClose, onSynced }: Props) {
     try {
       const result = await api.syncWiki(c.id);
       setDoneId(c.id);
-      onSynced(c, result.output);
+      onSynced(
+        c,
+        result.staged > 0
+          ? `${result.staged}개 변경이 검토 대기 — Proposals에서 확인`
+          : '새로 담을 지식이 없어요',
+      );
       setTimeout(() => onClose(), 700);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

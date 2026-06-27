@@ -522,13 +522,16 @@ export const api = {
       },
     ),
   syncWiki: (sessionId: string, body?: { model?: string }) =>
-    request<{ output: string; lastSyncedMessageId: string | null; messageCount: number }>(
-      `/api/sessions/${sessionId}/wiki-sync`,
-      {
-        method: 'POST',
-        body: JSON.stringify(body ?? {}),
-      },
-    ),
+    request<{
+      staged: number;
+      skipped?: number;
+      batchId?: string;
+      messageCount: number;
+      syncedThroughMessageId?: string | null;
+    }>(`/api/sessions/${sessionId}/wiki-sync`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
   updateMessage: (
     messageId: string,
     body: { pinned?: boolean; pinTitle?: string | null },
