@@ -141,8 +141,15 @@ export function AgentTerminal({
     const rafId = requestAnimationFrame(safeFit);
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    // Forward the app theme so the backend launches the claude TUI in a matching
+    // light/dark theme — otherwise its dark UI chrome shows as black bars on a
+    // light terminal. Applied at spawn; toggling mid-session needs a reopen.
+    const appTheme =
+      document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
     const ws = new WebSocket(
-      `${proto}://${location.host}/ws/agent-terminal?session=${encodeURIComponent(sessionId)}`,
+      `${proto}://${location.host}/ws/agent-terminal?session=${encodeURIComponent(
+        sessionId,
+      )}&theme=${appTheme}`,
     );
     wsRef.current = ws;
     let exited = false;

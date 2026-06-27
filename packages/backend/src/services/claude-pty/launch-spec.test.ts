@@ -26,6 +26,22 @@ describe('buildClaudeLaunch', () => {
     expect(existsSync(settingsPath)).toBe(false); // cleanup removed the temp dir
   });
 
+  it('writes the claude TUI theme into settings when given (omits it otherwise)', () => {
+    const lit = buildClaudeLaunch({ systemPrompt: 's', theme: 'light' }, URL);
+    const litSettings = JSON.parse(
+      readFileSync(lit.args[lit.args.indexOf('--settings') + 1], 'utf8'),
+    );
+    expect(litSettings.theme).toBe('light');
+    lit.cleanup();
+
+    const none = buildClaudeLaunch({ systemPrompt: 's' }, URL);
+    const noneSettings = JSON.parse(
+      readFileSync(none.args[none.args.indexOf('--settings') + 1], 'utf8'),
+    );
+    expect('theme' in noneSettings).toBe(false);
+    none.cleanup();
+  });
+
   it('maps model, effort, resume, and seeds a positional prompt', () => {
     const b = buildClaudeLaunch(
       {

@@ -84,6 +84,12 @@ export interface ClaudeLaunchInput {
    * Null/undefined = no positional (e.g. terminal mode where the human types).
    */
   initialText?: string | null;
+  /**
+   * Claude TUI colour theme, mirrored from the app theme so the TUI paints its
+   * own UI chrome (input box, dividers) light-on-light instead of dark fills
+   * that show as black bars on a light terminal. Undefined = leave to claude.
+   */
+  theme?: 'light' | 'dark';
 }
 
 export interface BuiltClaudeLaunch {
@@ -119,7 +125,13 @@ export function buildClaudeLaunch(
   writeFileSync(
     settingsPath,
     JSON.stringify(
-      { hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } },
+      {
+        hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
+        // Mirror the app theme so the claude TUI's own UI chrome matches the
+        // terminal background (no black bars on a light terminal). The explicit
+        // --settings file outranks the user's global theme for this session.
+        ...(input.theme ? { theme: input.theme } : {}),
+      },
       null,
       2,
     ),

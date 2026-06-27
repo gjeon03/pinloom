@@ -115,6 +115,8 @@ async function spawnAgentTerminal(
   // arg (auto-runs) — injecting into a freshly-launched TUI is unreliable. The
   // human attach path leaves this null and types directly.
   seedText: string | null = null,
+  // App colour theme, so the TUI paints its UI to match the terminal background.
+  theme?: 'light' | 'dark',
 ): Promise<AgentTerminalSession | { reason: 'no-session' | 'no-cwd' }> {
   const launchInput = buildSessionLaunchInput(sessionId);
   if (!launchInput) return { reason: 'no-session' };
@@ -134,6 +136,7 @@ async function spawnAgentTerminal(
       resume: launchInput.resume,
       mcpServers: launchInput.mcpServers,
       initialText: seedText,
+      theme,
     },
     server.url(),
     { pinloomSessionId: sessionId },
@@ -210,6 +213,9 @@ export async function attachAgentTerminal(
   rows: number,
   onData: (data: string) => void,
   onExit: (code: number) => void,
+  // App theme, forwarded only on a cold spawn (a reattach keeps the live pty —
+  // its TUI theme was fixed at launch, so toggling the app theme needs a reopen).
+  theme?: 'light' | 'dark',
 ): Promise<AttachAgentResult> {
   let session = sessions.get(sessionId);
 
@@ -221,7 +227,7 @@ export async function attachAgentTerminal(
       if (sessions.size + spawning.size >= MAX_AGENT_TERMINALS) {
         return { ok: false, reason: 'capped' };
       }
-      inflight = spawnAgentTerminal(sessionId, cols, rows);
+      inflight = spawnAgentTerminal(sessionId, cols, rows, null, theme);
       spawning.set(sessionId, inflight);
       inflight.finally(() => spawning.delete(sessionId));
     }

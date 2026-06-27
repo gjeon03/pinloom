@@ -266,12 +266,15 @@ export async function createApp() {
         socket.close(4403, 'forbidden origin');
         return;
       }
-      const q = request.query as { session?: string };
+      const q = request.query as { session?: string; theme?: string };
       const sessionId = q.session;
       if (!sessionId) {
         socket.close(4000, 'session query parameter required');
         return;
       }
+      // App colour theme → claude TUI theme (so its UI matches the terminal bg).
+      const themeArg: 'light' | 'dark' | undefined =
+        q.theme === 'light' ? 'light' : q.theme === 'dark' ? 'dark' : undefined;
       const send = (msg: unknown) => {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
       };
@@ -279,17 +282,15 @@ export async function createApp() {
       const agentRow = getDb()
         .prepare('SELECT agent FROM sessions WHERE id = ?')
         .get(sessionId) as { agent: string | null } | undefined;
-      const agentName = agentRow?.agent === 'codex' ? 'codex' : 'claude';
-      const attach = agentRow?.agent === 'codex' ? attachCodexTerminal : attachAgentTerminal;
-      let result: Awaited<ReturnType<typeof attach>>;
+      const isCodex = agentRow?.agent === 'codex';
+      const agentName = isCodex ? 'codex' : 'claude';
+      const onOut = (data: string) => send({ t: 'o', d: data });
+      const onExit = (code: number) => send({ t: 'x', code });
+      let result: Awaited<ReturnType<typeof attachAgentTerminal>>;
       try {
-        result = await attach(
-          sessionId,
-          120,
-          40,
-          (data) => send({ t: 'o', d: data }),
-          (code) => send({ t: 'x', code }),
-        );
+        result = isCodex
+          ? await attachCodexTerminal(sessionId, 120, 40, onOut, onExit)
+          : await attachAgentTerminal(sessionId, 120, 40, onOut, onExit, themeArg);
       } catch (err) {
         // The CLI binary isn't on PATH (or pty.spawn otherwise failed). Without
         // this the rejection escapes the handler, the socket just drops with no
