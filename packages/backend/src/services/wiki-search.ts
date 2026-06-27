@@ -16,6 +16,16 @@ export interface WikiHit {
 
 const EXCERPT_LEN = 160;
 
+/** The page's `applies_to` slugs (empty ⇒ global / unscoped). */
+function appliesTo(content: string): string[] {
+  const m = content.match(/^applies_to:\s*\[([^\]]*)\]/m);
+  if (!m) return [];
+  return m[1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** Strip YAML frontmatter + headings/markers so the teaser is real prose. */
 function teaser(content: string): string {
   const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
@@ -30,7 +40,9 @@ function teaser(content: string): string {
 export async function searchWiki(
   db: Database,
   query: string,
-  opts: { limit?: number },
+  // projectSlugs scopes to a project group: a hit shows iff it's global
+  // (applies_to empty / 'global') or its applies_to intersects the set.
+  opts: { limit?: number; projectSlugs?: string[] },
   provider: EmbeddingProvider | null,
   home?: string,
 ): Promise<WikiHit[]> {
@@ -46,10 +58,19 @@ export async function searchWiki(
   } catch {
     return [];
   }
+  const slugSet =
+    opts.projectSlugs && opts.projectSlugs.length > 0 ? new Set(opts.projectSlugs) : null;
   const hits: WikiHit[] = [];
-  for (const h of knn(db, WIKI_VECTORS, qvec, Math.min(limit * 2, 100))) {
+  for (const h of knn(db, WIKI_VECTORS, qvec, Math.min(limit * (slugSet ? 4 : 2), 100))) {
     const content = readWikiPage(h.docId, home);
     if (!content) continue; // page gone since indexing
+    if (slugSet) {
+      const scopes = appliesTo(content);
+      // Keep global/unscoped pages in every scope; drop pages owned only by
+      // projects outside the group.
+      const global = scopes.length === 0 || scopes.includes('global');
+      if (!global && !scopes.some((s) => slugSet.has(s))) continue;
+    }
     hits.push({ slug: h.docId, title: wikiTitle(content, h.docId), excerpt: teaser(content) });
     if (hits.length >= limit) break;
   }

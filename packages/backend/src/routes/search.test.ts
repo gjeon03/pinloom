@@ -69,3 +69,47 @@ describe('GET /api/search', () => {
     expect(status).toBe(200);
   });
 });
+
+describe('GET /api/search — group scope', () => {
+  beforeEach(() => {
+    const db = getDb();
+    db.exec('DELETE FROM project_groups;');
+    db.prepare(
+      'INSERT INTO project_groups (id,name,order_index,created_at,updated_at) VALUES (?,?,?,?,?)',
+    ).run('g1', 'Work', 0, 't', 't');
+    db.prepare('UPDATE projects SET group_id = ? WHERE id = ?').run('g1', 'p1'); // p1 → Work
+    // p2 stays ungrouped, with its own matching message.
+    db.prepare(
+      'INSERT INTO projects (id,name,cwd,created_at,updated_at) VALUES (?,?,?,?,?)',
+    ).run('p2', 'Proj Two', '/tmp/search-p2', 't', 't');
+    db.prepare(
+      'INSERT INTO sessions (id,project_id,title,created_at,updated_at) VALUES (?,?,?,?,?)',
+    ).run('s2', 'p2', 'S2', 't', 't');
+    db.prepare(
+      'INSERT INTO messages (id,session_id,role,content,created_at) VALUES (?,?,?,?,?)',
+    ).run('m2', 's2', 'user', 'deploy other thing', 't');
+  });
+
+  const ids = (body: { results: { projectId: string }[] }) =>
+    body.results.map((r) => r.projectId).sort();
+
+  it('scopes results to the group', async () => {
+    const { body } = await search('?q=deploy&groupId=g1');
+    expect(ids(body as never)).toEqual(['p1']);
+  });
+  it('scopes to ungrouped projects', async () => {
+    const { body } = await search('?q=deploy&groupId=__ungrouped__');
+    expect(ids(body as never)).toEqual(['p2']);
+  });
+  it('returns both with no group filter', async () => {
+    const { body } = await search('?q=deploy');
+    expect(ids(body as never)).toEqual(['p1', 'p2']);
+  });
+  it('returns nothing for an empty group', async () => {
+    getDb()
+      .prepare('INSERT INTO project_groups (id,name,order_index,created_at,updated_at) VALUES (?,?,?,?,?)')
+      .run('g2', 'Empty', 1, 't', 't');
+    const { body } = await search('?q=deploy&groupId=g2');
+    expect((body as { results: unknown[] }).results).toHaveLength(0);
+  });
+});

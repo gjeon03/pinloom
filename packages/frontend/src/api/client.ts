@@ -110,9 +110,10 @@ export const api = {
   homeDir: () => request<{ home: string }>('/api/fs/home'),
 
   // Full-text search over conversation history (knowledge-system v2 Phase 1).
-  search: (query: string, opts?: { projectId?: string; limit?: number }) => {
+  search: (query: string, opts?: { projectId?: string; groupId?: string; limit?: number }) => {
     const params = new URLSearchParams({ q: query });
     if (opts?.projectId) params.set('projectId', opts.projectId);
+    if (opts?.groupId) params.set('groupId', opts.groupId);
     if (opts?.limit) params.set('limit', String(opts.limit));
     return request<{
       results: MessageSearchResult[];
@@ -231,13 +232,18 @@ export const api = {
     ),
 
   // Corpus recap (Phase 4)
-  recapAsk: (question: string, projectId?: string, language?: 'ko' | 'en') =>
+  recapAsk: (
+    question: string,
+    projectId?: string,
+    language?: 'ko' | 'en',
+    groupId?: string,
+  ) =>
     request<{
       answer: string;
       sources: RecapSource[];
     }>('/api/recap/ask', {
       method: 'POST',
-      body: JSON.stringify({ question, projectId, language }),
+      body: JSON.stringify({ question, projectId, language, groupId }),
     }),
   recapGenerate: (body: {
     kind: 'detailed' | 'concise';
