@@ -8,7 +8,8 @@ import {
   rejectProposal,
 } from '../services/wiki-proposals.js';
 import { CurationError } from '../services/wiki-curation.js';
-import { GardenerError, runGardener } from '../services/wiki-gardener.js';
+import { GardenerError, runGardener, findDuplicateCandidates } from '../services/wiki-gardener.js';
+import { getDb } from '../db/connection.js';
 
 // Map a thrown error to an HTTP reply. ProposalError carries its own status;
 // a CurationError (e.g. malformed markers) is a 400; anything else re-throws.
@@ -28,6 +29,7 @@ function fail(reply: FastifyReply, err: unknown): { error: string } {
 // inbox, inspect a proposal's diff, accept (applies via the curation
 // primitives) or reject. Proposals are authored by the gardener (Phase 2b).
 export async function wikiProposalRoutes(app: FastifyInstance) {
+  const db = getDb();
   const STATUSES: WikiProposalStatus[] = ['pending', 'applied', 'rejected'];
   app.get<{ Querystring: { status?: string } }>(
     '/api/wiki/proposals',
@@ -86,8 +88,11 @@ export async function wikiProposalRoutes(app: FastifyInstance) {
     }
     gardening = true;
     try {
-      const { created, skipped, truncated } = await runGardener();
-      return { created: created.length, skipped, truncated };
+      // Embedding pre-check: hand the gardener the specific near-duplicate page
+      // pairs so it merges them instead of hoping to notice in the snapshot.
+      const duplicateHints = findDuplicateCandidates(db);
+      const { created, skipped, truncated } = await runGardener({ duplicateHints });
+      return { created: created.length, skipped, truncated, duplicateCandidates: duplicateHints.length };
     } catch (err) {
       if (err instanceof GardenerError) {
         reply.code(502);

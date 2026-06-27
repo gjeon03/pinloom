@@ -192,10 +192,12 @@ export const api = {
 
   // Wiki gardener proposals (Phase 2).
   runGardener: () =>
-    request<{ created: number; skipped: number; truncated: boolean }>(
-      '/api/wiki/garden',
-      { method: 'POST' },
-    ),
+    request<{
+      created: number;
+      skipped: number;
+      truncated: boolean;
+      duplicateCandidates?: number;
+    }>('/api/wiki/garden', { method: 'POST' }),
   listWikiProposals: (status?: WikiProposal['status']) =>
     request<WikiProposal[]>(
       `/api/wiki/proposals${status ? `?status=${status}` : ''}`,

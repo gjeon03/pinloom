@@ -11,10 +11,58 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import type { Database } from 'better-sqlite3';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { WikiProposal, WikiProposalKind } from '@pinloom/shared';
 import { getWikiRoot } from './wiki-reader.js';
 import { createProposal } from './wiki-proposals.js';
+import { readVectors } from './vector-store.js';
+import { WIKI_VECTORS } from './wiki-indexer.js';
+
+export interface DuplicateCandidate {
+  a: string; // page docId (e.g. "react-hooks-patterns.md")
+  b: string;
+  sim: number; // cosine similarity in [0,1]
+}
+
+// Cap the O(n²) scan so a large wiki can't stall the request thread.
+const MAX_DEDUP_NODES = 400;
+
+function cosineSim(a: Float32Array, b: Float32Array): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  return na > 0 && nb > 0 ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+}
+
+// Embedding-guided dedup: surface page pairs the LLM should consider MERGING.
+// This is the cheap pre-check the research (Mem0/A-MEM/AMAC) puts before the
+// expensive LLM pass — instead of hoping the gardener notices duplicates while
+// scanning a (possibly truncated) full snapshot, we hand it the specific pairs.
+// Threshold 0.86 ≈ Mem0's merge-candidate band (0.85). Returns the strongest
+// `limit` pairs, highest similarity first.
+export function findDuplicateCandidates(
+  db: Database,
+  opts: { threshold?: number; limit?: number } = {},
+): DuplicateCandidate[] {
+  const threshold = opts.threshold ?? 0.86;
+  const limit = opts.limit ?? 12;
+  const vecs = readVectors(db, WIKI_VECTORS).slice(0, MAX_DEDUP_NODES);
+  const out: DuplicateCandidate[] = [];
+  for (let i = 0; i < vecs.length; i++) {
+    for (let j = i + 1; j < vecs.length; j++) {
+      const sim = cosineSim(vecs[i].vec, vecs[j].vec);
+      if (sim >= threshold) out.push({ a: vecs[i].docId, b: vecs[j].docId, sim });
+    }
+  }
+  out.sort((x, y) => y.sim - x.sim);
+  return out.slice(0, limit);
+}
 
 export class GardenerError extends Error {
   constructor(message: string) {
@@ -94,6 +142,7 @@ wiki is already clean.`;
 
 async function readSnapshot(
   root: string,
+  priority: Set<string> = new Set(),
 ): Promise<{ text: string; truncated: boolean }> {
   const parts: string[] = [];
   let budget = SNAPSHOT_CHAR_BUDGET;
@@ -106,7 +155,14 @@ async function readSnapshot(
   }
   const pagesDir = path.join(root, 'pages');
   if (existsSync(pagesDir)) {
-    const files = (await readdir(pagesDir)).filter((f) => f.endsWith('.md')).sort();
+    const all = (await readdir(pagesDir)).filter((f) => f.endsWith('.md')).sort();
+    // Duplicate-candidate pages first, so a budget truncation never hides the
+    // very pairs we asked the gardener to merge.
+    const files = [...all].sort((a, b) => {
+      const pa = priority.has(a) ? 0 : 1;
+      const pb = priority.has(b) ? 0 : 1;
+      return pa - pb || a.localeCompare(b);
+    });
     for (const f of files) {
       if (budget <= 0) {
         truncated = true; // remaining pages weren't shown to the gardener
@@ -118,6 +174,24 @@ async function readSnapshot(
     }
   }
   return { text: parts.join('\n\n---\n\n'), truncated };
+}
+
+// The prompt block that hands the gardener the embedding-found duplicate pairs.
+function renderDuplicateHints(hints: DuplicateCandidate[]): string {
+  if (hints.length === 0) return '';
+  const lines = hints
+    .map((h) => `- \`${h.a}\` ↔ \`${h.b}\` (similarity ${h.sim.toFixed(2)})`)
+    .join('\n');
+  return [
+    '## Likely duplicate pairs (by embedding similarity)',
+    '',
+    'These page pairs look semantically near-duplicate. For each pair that genuinely overlaps, MERGE them: rewrite the survivor page\'s auto-section (edit_section) to absorb both, and archive the redundant page (archive_page with `supersededBy` = the survivor). If a pair is actually distinct (a false positive), leave both untouched.',
+    '',
+    lines,
+    '',
+    '---',
+    '',
+  ].join('\n');
 }
 
 // Keep only the payload keys each kind actually uses, so an LLM can't smuggle
@@ -214,14 +288,23 @@ export interface GardenResult {
  * staleness hash). Malformed proposals are skipped, not fatal.
  */
 export async function runGardener(
-  opts: { model?: string; root?: string; runAgent?: RunAgent; now?: string } = {},
+  opts: {
+    model?: string;
+    root?: string;
+    runAgent?: RunAgent;
+    now?: string;
+    duplicateHints?: DuplicateCandidate[];
+  } = {},
 ): Promise<GardenResult> {
   const root = opts.root ?? getWikiRoot();
-  const { text: snapshot, truncated } = await readSnapshot(root);
+  const hints = opts.duplicateHints ?? [];
+  const priority = new Set(hints.flatMap((h) => [h.a, h.b]));
+  const { text: snapshot, truncated } = await readSnapshot(root, priority);
   if (snapshot.trim() === '') return { created: [], skipped: 0, truncated };
 
+  const prompt = renderDuplicateHints(hints) + snapshot;
   const text = await (opts.runAgent ?? defaultRunAgent)(
-    snapshot,
+    prompt,
     opts.model ?? DEFAULT_GARDENER_MODEL,
   );
   const raw = parseProposals(text);

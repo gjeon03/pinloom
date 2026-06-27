@@ -301,13 +301,14 @@ export function acceptProposal(
       throw new ProposalError(`unknown proposal kind: ${row.kind}`, 400);
     }
 
-    // Sandboxed-sync accept hook: a proposal staged by runSandboxedSync carries
-    // the originating session + the message id it distilled through. Now that
-    // the page is written, advance that session's synced cursor and rebuild the
-    // deterministic index so the new/removed page is reflected. Wrapped so a
-    // cursor/index failure can never fail the page write itself. We're already
-    // inside runOnWikiChain — call rebuildWikiIndexInner (NOT the chain-wrapping
-    // public rebuildWikiIndex) to avoid a self-deadlock.
+    // Accept bookkeeping (wrapped so a failure here never fails the page write;
+    // we're already inside runOnWikiChain, so call the NON-chain-wrapping
+    // rebuildWikiIndexInner to avoid a self-deadlock):
+    //  - sandboxed-sync proposals carry the originating session + the message id
+    //    distilled through → advance that session's synced cursor.
+    //  - ALWAYS rebuild the deterministic index after a page-changing accept
+    //    (sync, conventions auto-wiki, or a gardener merge) so index.md never
+    //    drifts — conventions pages used to be missing from it entirely.
     try {
       const sessionId = payload.sessionId;
       const syncedThroughMessageId = payload.syncedThroughMessageId;
@@ -318,8 +319,8 @@ export function acceptProposal(
         syncedThroughMessageId
       ) {
         advanceSyncedCursor(sessionId, syncedThroughMessageId, now);
-        await rebuildWikiIndexInner(root);
       }
+      await rebuildWikiIndexInner(root);
     } catch {
       // Never fail the apply over a cursor/index bookkeeping error.
     }

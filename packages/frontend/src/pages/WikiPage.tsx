@@ -91,14 +91,18 @@ export function WikiPage() {
     setGardening(true);
     setGardenMsg(null);
     try {
-      const { created, skipped, truncated } = await api.runGardener();
+      const { created, skipped, truncated, duplicateCandidates } = await api.runGardener();
       await mutate(cacheKeys.wikiProposals('pending'));
       if (!mountedRef.current) return;
       const trunc = truncated ? ' (wiki was large — some pages not reviewed)' : '';
+      const dup =
+        duplicateCandidates && duplicateCandidates > 0
+          ? ` · ${duplicateCandidates} near-duplicate pair${duplicateCandidates === 1 ? '' : 's'} flagged`
+          : '';
       setGardenMsg(
         created === 0
-          ? `Gardener found nothing to propose.${trunc}`
-          : `Staged ${created} proposal${created === 1 ? '' : 's'}${skipped ? ` (${skipped} skipped)` : ''} — review them under Proposals.${trunc}`,
+          ? `Gardener found nothing to propose.${dup}${trunc}`
+          : `Staged ${created} proposal${created === 1 ? '' : 's'}${skipped ? ` (${skipped} skipped)` : ''} — review them under Proposals.${dup}${trunc}`,
       );
     } catch (e) {
       if (!mountedRef.current) return;
