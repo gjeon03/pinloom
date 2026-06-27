@@ -6,13 +6,26 @@
 
 import type { Database } from 'better-sqlite3';
 import { readVectors } from './vector-store.js';
+import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { WIKI_VECTORS, readWikiPage, wikiTitle } from './wiki-indexer.js';
 
 export interface WikiGraph {
-  nodes: { id: string; title: string; group: string }[];
+  // group = applies_to slug (node colour); groupId = that project's group
+  // (Work/Personal/…) for the group-scope filter, null for global/ungrouped.
+  nodes: { id: string; title: string; group: string; groupId: string | null }[];
   edges: { source: string; target: string; weight: number }[];
   /** True when the wiki exceeded MAX_NODES and the graph was capped. */
   truncated: boolean;
+}
+
+/** Map each project's wiki slug → its group_id, to resolve a node's project group. */
+function buildSlugToGroup(db: Database): Map<string, string | null> {
+  const rows = db
+    .prepare('SELECT id, group_id FROM projects WHERE hidden = 0')
+    .all() as { id: string; group_id: string | null }[];
+  const map = new Map<string, string | null>();
+  for (const r of rows) map.set(getProjectWikiSlugByProjectId(r.id), r.group_id);
+  return map;
 }
 
 /** The page's owning project — first `applies_to` entry from the frontmatter
@@ -66,7 +79,13 @@ export function buildWikiGraph(db: Database, home?: string): WikiGraph {
     .filter(
       (v): v is { docId: string; vec: Float32Array; title: string; group: string } => v !== null,
     );
-  const nodes = vecs.map((v) => ({ id: v.docId, title: v.title, group: v.group }));
+  const slugToGroup = buildSlugToGroup(db);
+  const nodes = vecs.map((v) => ({
+    id: v.docId,
+    title: v.title,
+    group: v.group,
+    groupId: slugToGroup.get(v.group) ?? null,
+  }));
 
   // Top-K neighbours per node, collapsed to undirected edges (keep the max weight
   // when both directions propose the same pair).

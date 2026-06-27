@@ -66,4 +66,26 @@ describe.skipIf(!available)('buildWikiGraph', () => {
     db.exec(`DELETE FROM ${WIKI_VECTORS};`);
     expect(buildWikiGraph(db, home)).toEqual({ nodes: [], edges: [], truncated: false });
   });
+
+  it('attaches the project group to each node (slug → project → group_id)', async () => {
+    db.exec('DELETE FROM projects; DELETE FROM project_groups;');
+    db.prepare(
+      'INSERT INTO project_groups (id,name,order_index,created_at,updated_at) VALUES (?,?,?,?,?)',
+    ).run('g1', 'Work', 0, 't', 't');
+    // cwd basename → slug 'work-app', which the wiki page's applies_to references.
+    db.prepare(
+      'INSERT INTO projects (id,name,cwd,group_id,created_at,updated_at) VALUES (?,?,?,?,?,?)',
+    ).run('pw', 'Work App', '/tmp/work-app', 'g1', 't', 't');
+    upsertVector(db, WIKI_VECTORS, 'conventions-work', new Float32Array([1, 0, 0]));
+    upsertVector(db, WIKI_VECTORS, 'conventions-misc', new Float32Array([0, 1, 0]));
+    await writePage(home, 'conventions-work', '---\napplies_to: [work-app]\n---\n# Work conv');
+    await writePage(home, 'conventions-misc', '---\napplies_to: [nobody]\n---\n# Misc conv');
+
+    const g = buildWikiGraph(db, home);
+    const work = g.nodes.find((n) => n.id === 'conventions-work');
+    const misc = g.nodes.find((n) => n.id === 'conventions-misc');
+    expect(work?.group).toBe('work-app');
+    expect(work?.groupId).toBe('g1'); // mapped through the owning project's group
+    expect(misc?.groupId).toBeNull(); // applies_to matches no project → ungrouped
+  });
 });
