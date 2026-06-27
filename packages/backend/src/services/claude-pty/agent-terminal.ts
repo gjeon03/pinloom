@@ -297,6 +297,67 @@ export function killAgentTerminal(sessionId: string): void {
   teardownSession(sessionId);
 }
 
+// Idle agent-terminal reaper. A detached terminal keeps its claude TUI (~80MB)
+// alive so a momentary disconnect doesn't kill a long turn — but with no time
+// bound those linger: open a terminal, walk away, and the process survives until
+// session delete or shutdown (worst case MAX_AGENT_TERMINALS × ~80MB). We reap
+// ones that are detached (no attached client), NOT running a turn, and idle past
+// the threshold. Safe because pinloom stores the claude session id and reopening
+// relaunches with `--resume` — the full session restores; the only cost is a
+// ~1-2s respawn on return, so we keep the threshold generous (90 min default).
+const REAP_SWEEP_MS = 10 * 60_000;
+function reapIdleMs(): number {
+  const n = Number(process.env.PINLOOM_AGENT_TERMINAL_REAP_MS);
+  return Number.isFinite(n) && n > 0 ? n : 90 * 60_000; // 90 min
+}
+
+/** Pure reap predicate (exported for tests): detached + no turn + idle. */
+export function shouldReapTerminal(
+  s: { onData: unknown; turnInFlight: boolean; lockedBy: unknown; lastDataAt: number },
+  nowMs: number,
+  idleMs: number,
+): boolean {
+  if (s.onData !== null) return false; // a client is attached — leave it
+  if (s.turnInFlight) return false; // a turn is in flight — never interrupt
+  if (s.lockedBy !== null) return false; // a driver holds the write lock
+  return nowMs - s.lastDataAt >= idleMs; // idle long enough
+}
+
+/** Kill detached + idle + no-turn agent terminals. Returns the reaped ids. */
+export function reapIdleAgentTerminals(nowMs: number, idleMs: number): string[] {
+  const reaped: string[] = [];
+  for (const [sessionId, s] of sessions) {
+    if (!shouldReapTerminal(s, nowMs, idleMs)) continue;
+    killAgentTerminal(sessionId);
+    reaped.push(sessionId);
+  }
+  return reaped;
+}
+
+let reapTimer: ReturnType<typeof setInterval> | null = null;
+export function startAgentTerminalReaper(): void {
+  if (reapTimer) return;
+  reapTimer = setInterval(() => {
+    try {
+      const reaped = reapIdleAgentTerminals(Date.now(), reapIdleMs());
+      if (reaped.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[agent-terminal] reaped ${reaped.length} idle terminal(s)`);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[agent-terminal] reaper failed:', err instanceof Error ? err.message : err);
+    }
+  }, REAP_SWEEP_MS);
+  reapTimer.unref?.();
+}
+export function stopAgentTerminalReaper(): void {
+  if (reapTimer) {
+    clearInterval(reapTimer);
+    reapTimer = null;
+  }
+}
+
 /**
  * Tear down every agent terminal on backend shutdown — SIGHUP the TUI (hangs up
  * its jobs), then SIGKILL the process group after a grace period. Mirrors

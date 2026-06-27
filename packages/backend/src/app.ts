@@ -34,6 +34,8 @@ import { shutdownClaudePty } from './services/claude-pty/index.js';
 import {
   attachAgentTerminal,
   killAllAgentTerminals,
+  startAgentTerminalReaper,
+  stopAgentTerminalReaper,
 } from './services/claude-pty/agent-terminal.js';
 import {
   attachCodexTerminal,
@@ -92,6 +94,7 @@ export async function createApp() {
     stopMessageIndexer();
     stopTimelineCapture();
     stopWikiAuto();
+    stopAgentTerminalReaper();
     await killAllTerminals();
     await killAllAgentTerminals();
     await killAllCodexTerminals();
@@ -131,6 +134,10 @@ export async function createApp() {
     // conventions and stage them as proposals for review. Conservative gates +
     // human accept keep it from polluting the always-injected wiki.
     startWikiAuto();
+    // Reap detached + idle agent-terminal claude TUIs (~80MB each) after a
+    // generous idle window. Safe: reopening relaunches with `--resume`, so the
+    // session restores; this just bounds lingering processes.
+    startAgentTerminalReaper();
   }
 
   await app.register(cors, { origin: true });
