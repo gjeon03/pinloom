@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import useSWR, { mutate } from 'swr';
+import { diffLines } from 'diff';
 import { ArrowLeft, Archive, FileEdit, Check, X, AlertTriangle } from 'lucide-react';
 import type { WikiProposal } from '@pinloom/shared';
 import { api } from '../api/client.js';
@@ -15,18 +16,42 @@ function KindIcon({ kind }: { kind: WikiProposal['kind'] }) {
   return kind === 'archive_page' ? <Archive size={13} /> : <FileEdit size={13} />;
 }
 
-function DiffPane({ label, text }: { label: string; text: string | null }) {
+// Unified git-style line diff between the page now (before) and what the
+// proposal would produce (after). Added lines are green (+), removed red (−),
+// context grey — so it's obvious WHAT changed, not just two full blobs.
+function DiffView({ before, after }: { before: string | null; after: string | null }) {
+  const parts = useMemo(() => diffLines(before ?? '', after ?? ''), [before, after]);
+  const adds = parts.filter((p) => p.added).reduce((n, p) => n + (p.count ?? 0), 0);
+  const dels = parts.filter((p) => p.removed).reduce((n, p) => n + (p.count ?? 0), 0);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-        {label}
+      <div className="flex items-center gap-2 px-1 py-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
+        Diff
+        {adds > 0 && <span className="text-emerald-400">+{adds}</span>}
+        {dels > 0 && <span className="text-[#f7768e]">−{dels}</span>}
+        {after === null && <span className="text-[#f7768e]">page removed → archive</span>}
       </div>
-      <pre
-        tabIndex={0}
-        className="flex-1 overflow-auto whitespace-pre-wrap break-words rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-[11px] leading-relaxed"
-      >
-        {text ?? '(page removed — moved to archive)'}
-      </pre>
+      <div className="flex-1 overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] font-mono text-[11px] leading-relaxed">
+        {parts.map((part, i) => {
+          const sign = part.added ? '+' : part.removed ? '-' : ' ';
+          const cls = part.added
+            ? 'bg-emerald-500/12 text-emerald-300'
+            : part.removed
+              ? 'bg-[#f7768e]/12 text-[#f7768e]'
+              : 'text-[var(--color-ink-muted)]';
+          // diffLines keeps the trailing newline on each part; drop it so the
+          // final empty line doesn't render as a stray row.
+          return part.value
+            .replace(/\n$/, '')
+            .split('\n')
+            .map((line, j) => (
+              <div key={`${i}-${j}`} className={`flex ${cls}`}>
+                <span className="w-4 shrink-0 select-none text-center opacity-50">{sign}</span>
+                <span className="whitespace-pre-wrap break-words pr-2">{line || ' '}</span>
+              </div>
+            ));
+        })}
+      </div>
     </div>
   );
 }
@@ -91,10 +116,7 @@ function ProposalDetail({
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 gap-2">
-        <DiffPane label="Before" text={before} />
-        <DiffPane label="After" text={after} />
-      </div>
+      <DiffView before={before} after={after} />
 
       {error && <div className="text-[11px] text-[#f7768e]">{error}</div>}
       <div className="flex items-center gap-2">
