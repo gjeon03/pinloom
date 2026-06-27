@@ -129,6 +129,30 @@ describe('replace_page proposals', () => {
     expect(await read('conventions-myrepo.md')).toBe('---\nnew\n---\n# Fresh page\n');
   });
 
+  it('rebuilds index.md on accept even for a non-sync proposal (C)', async () => {
+    await writeFile(
+      path.join(root, 'index.md'),
+      '# Wiki\n\n<!-- pinloom:auto-section -->\n\n<!-- /pinloom:auto-section -->\n',
+      'utf8',
+    );
+    const p = await createProposal(
+      {
+        kind: 'replace_page',
+        title: 'Auto: conventions for foo',
+        relPath: 'conventions-foo.md',
+        // no sessionId in payload — this is the conventions auto-wiki path
+        payload: {
+          markdown: '---\napplies_to: [foo]\ntopic: [conventions]\nsummary: "foo rules"\n---\n# Foo\n',
+        },
+      },
+      { root, now: NOW },
+    );
+    await acceptProposal(p.id, { root, now: NOW });
+    const index = await readFile(path.join(root, 'index.md'), 'utf8');
+    expect(index).toContain('conventions-foo.md'); // now listed in the index
+    expect(index).toContain('# Wiki'); // user header above the marker preserved
+  });
+
   it('creates the page when it did not exist (auto first-run)', async () => {
     const p = await createProposal(
       {
