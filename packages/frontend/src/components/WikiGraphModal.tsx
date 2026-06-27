@@ -44,6 +44,20 @@ interface VBox {
 
 export function WikiGraphModal({ onClose }: { onClose: () => void }) {
   const { data, isLoading } = useSWR('wiki:graph', () => api.getWikiGraph());
+  // Group-scope filter (Work / Personal / …). '' = all. Dims (not hides) nodes
+  // outside the group so the force layout stays put and context is preserved.
+  const { data: projectGroups = [] } = useSWR('project-groups', () => api.listProjectGroups());
+  const [filterGroupId, setFilterGroupId] = useState('');
+  const groupSet = useMemo(() => {
+    if (!filterGroupId || !data) return null;
+    const ids = new Set<string>();
+    for (const n of data.nodes) {
+      const match =
+        filterGroupId === '__ungrouped__' ? n.groupId === null : n.groupId === filterGroupId;
+      if (match) ids.add(n.id);
+    }
+    return ids;
+  }, [filterGroupId, data]);
   const navigate = useNavigate();
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -216,6 +230,22 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="relative flex-1 min-h-0 overflow-hidden">
+          {vb && projectGroups.length > 0 && (
+            <select
+              value={filterGroupId}
+              onChange={(e) => setFilterGroupId(e.target.value)}
+              title="Highlight a project group"
+              className="absolute left-3 top-3 z-10 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs text-[var(--color-ink-muted)] shadow"
+            >
+              <option value="">All groups</option>
+              {projectGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+              <option value="__ungrouped__">Ungrouped</option>
+            </select>
+          )}
           {vb && (
             <div className="absolute right-3 top-3 z-10 flex flex-col overflow-hidden rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow">
               <button
@@ -269,6 +299,8 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
                 if (!s || !t) return null;
                 const touch = hoverId && (l.source === hoverId || l.target === hoverId);
                 const dim = active && !touch;
+                // Edge belongs to the filtered group only if BOTH endpoints do.
+                const outGroup = groupSet && !(groupSet.has(l.source) && groupSet.has(l.target));
                 return (
                   <line
                     key={i}
@@ -278,7 +310,9 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
                     y2={t.y}
                     stroke={touch ? 'var(--color-accent)' : 'var(--color-border)'}
                     strokeWidth={(touch ? 1.2 : 0.5) + l.weight}
-                    strokeOpacity={dim ? 0.05 : touch ? 0.8 : 0.28 + (l.weight - 0.6) * 1.0}
+                    strokeOpacity={
+                      outGroup ? 0.03 : dim ? 0.05 : touch ? 0.8 : 0.28 + (l.weight - 0.6) * 1.0
+                    }
                   />
                 );
               })}
@@ -286,12 +320,13 @@ export function WikiGraphModal({ onClose }: { onClose: () => void }) {
                 const p = pos[n.id];
                 if (!p) return null;
                 const on = !active || active.has(n.id);
+                const inGroup = !groupSet || groupSet.has(n.id);
                 const color = groupColor.get(n.group) ?? '#888';
                 return (
                   <g
                     key={n.id}
                     transform={`translate(${p.x},${p.y})`}
-                    style={{ cursor: 'pointer', opacity: on ? 1 : 0.12 }}
+                    style={{ cursor: 'pointer', opacity: inGroup ? (on ? 1 : 0.12) : 0.05 }}
                     onMouseEnter={() => !drag.current && setHoverId(n.id)}
                     onMouseLeave={() => setHoverId(null)}
                     onMouseDown={(e) => onMouseDownNode(e, n.id)}

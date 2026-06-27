@@ -89,6 +89,15 @@ export function TimelinePage() {
     return out;
   }, [projects, groups]);
 
+  // Group-scope filter for the project column. '' = all groups.
+  const [filterGroupId, setFilterGroupId] = useState('');
+  const visibleSections = useMemo(() => {
+    if (!filterGroupId) return groupedProjects;
+    return groupedProjects.filter((sec) =>
+      filterGroupId === '__ungrouped__' ? sec.isUngrouped : sec.key === filterGroupId,
+    );
+  }, [groupedProjects, filterGroupId]);
+
   const selected = useMemo(
     () => projects.find((p) => p.projectId === projectId) ?? null,
     [projects, projectId],
@@ -269,6 +278,24 @@ export function TimelinePage() {
             />
           </label>
         )}
+        {mode === 'project' && groups.length > 0 && (
+          <select
+            value={filterGroupId}
+            onChange={(e) => setFilterGroupId(e.target.value)}
+            title="Filter the project column by group"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs text-[var(--color-ink-muted)]"
+          >
+            <option value="">All groups</option>
+            {[...groups]
+              .sort((a, b) => a.orderIndex - b.orderIndex)
+              .map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            <option value="__ungrouped__">Ungrouped</option>
+          </select>
+        )}
 
         {/* RIGHT — capture controls: target day + actions, grouped + labelled so
             the capture date isn't mistaken for the view date. */}
@@ -315,7 +342,7 @@ export function TimelinePage() {
               {projects.length === 0 ? (
                 <div className="text-xs text-[var(--color-ink-muted)] p-3">No projects.</div>
               ) : (
-                groupedProjects.map((sec) => {
+                visibleSections.map((sec) => {
                   const open = !collapsedGroups.has(sec.key);
                   return (
                     <div key={sec.key}>
