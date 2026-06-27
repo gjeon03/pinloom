@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { useNavigate } from 'react-router-dom';
 import useSWR, { mutate } from 'swr';
 import {
   ArrowDown,
@@ -261,6 +262,7 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     }
   });
   const notifications = useNotifications();
+  const navigate = useNavigate();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
 
@@ -1070,7 +1072,19 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     });
     try {
       const result = await api.syncWiki(session.id);
-      notifications.resolve(notifId, result.output);
+      if (result.staged > 0) {
+        const skippedNote =
+          result.skipped && result.skipped > 0
+            ? ` (${result.skipped}개는 이미 검토 대기 중)`
+            : '';
+        notifications.resolve(
+          notifId,
+          `${result.staged}개 변경이 검토 대기 — Proposals에서 확인${skippedNote}`,
+        );
+        navigate('/wiki/proposals');
+      } else {
+        notifications.resolve(notifId, '새로 담을 지식이 없어요');
+      }
     } catch (err) {
       notifications.fail(
         notifId,

@@ -20,6 +20,7 @@ import type {
 import { getDb } from '../db/connection.js';
 import { getWikiRoot } from './wiki-reader.js';
 import { runOnWikiChain } from './wiki-sync.js';
+import { rebuildWikiIndexInner } from './wiki-index-builder.js';
 import {
   archivePage,
   assertSafeRelPath,
@@ -209,6 +210,46 @@ export async function getProposalDiff(
   };
 }
 
+// Advance a session's synced cursor to `newId` IFF that is not chronologically
+// behind the session's current cursor. Used by the sandboxed-sync accept path:
+// accepting a staged page change is what "consumes" the session's messages, so
+// the cursor only moves on accept (not when the sandbox runs). Safe against:
+//   - a deleted session row (no-op),
+//   - either message id no longer existing (skip — can't compare safely),
+//   - a backwards move (NEVER move the cursor back).
+function advanceSyncedCursor(
+  sessionId: string,
+  newId: string,
+  now: string,
+): void {
+  const db = getDb();
+  const session = db
+    .prepare('SELECT last_synced_message_id FROM sessions WHERE id = ?')
+    .get(sessionId) as { last_synced_message_id: string | null } | undefined;
+  if (!session) return; // session gone — nothing to advance
+
+  const newRow = db
+    .prepare('SELECT created_at FROM messages WHERE id = ?')
+    .get(newId) as { created_at: string } | undefined;
+  if (!newRow) return; // target message no longer exists — skip safely
+
+  const currentId = session.last_synced_message_id;
+  if (currentId) {
+    const curRow = db
+      .prepare('SELECT created_at FROM messages WHERE id = ?')
+      .get(currentId) as { created_at: string } | undefined;
+    // If the current cursor message is gone we can't compare — advancing could
+    // move backwards, so skip to stay safe.
+    if (!curRow) return;
+    // Never move the cursor backwards (or sideways onto an older message).
+    if (newRow.created_at < curRow.created_at) return;
+  }
+
+  db.prepare(
+    'UPDATE sessions SET last_synced_message_id = ?, updated_at = ? WHERE id = ?',
+  ).run(newId, now, sessionId);
+}
+
 /** Apply a pending proposal via the curation primitives, on the wiki chain. */
 export function acceptProposal(
   id: string,
@@ -259,6 +300,30 @@ export function acceptProposal(
     } else {
       throw new ProposalError(`unknown proposal kind: ${row.kind}`, 400);
     }
+
+    // Sandboxed-sync accept hook: a proposal staged by runSandboxedSync carries
+    // the originating session + the message id it distilled through. Now that
+    // the page is written, advance that session's synced cursor and rebuild the
+    // deterministic index so the new/removed page is reflected. Wrapped so a
+    // cursor/index failure can never fail the page write itself. We're already
+    // inside runOnWikiChain — call rebuildWikiIndexInner (NOT the chain-wrapping
+    // public rebuildWikiIndex) to avoid a self-deadlock.
+    try {
+      const sessionId = payload.sessionId;
+      const syncedThroughMessageId = payload.syncedThroughMessageId;
+      if (
+        typeof sessionId === 'string' &&
+        sessionId &&
+        typeof syncedThroughMessageId === 'string' &&
+        syncedThroughMessageId
+      ) {
+        advanceSyncedCursor(sessionId, syncedThroughMessageId, now);
+        await rebuildWikiIndexInner(root);
+      }
+    } catch {
+      // Never fail the apply over a cursor/index bookkeeping error.
+    }
+
     getDb()
       .prepare(
         "UPDATE wiki_proposals SET status = 'applied', updated_at = ? WHERE id = ?",
