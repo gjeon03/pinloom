@@ -11,9 +11,10 @@
 //    the user's PATH — those can't be bundled.
 const { app, BrowserWindow, shell, dialog } = require('electron');
 const path = require('node:path');
+const os = require('node:os');
 const fs = require('node:fs');
 const http = require('node:http');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 
 // A pinloom that's already serving (dev frontend / launchd prod). When this
 // answers we connect instead of spawning our own backend.
@@ -81,6 +82,35 @@ function staticDir() {
   );
 }
 
+// A GUI app launched from Finder inherits only a minimal PATH (/usr/bin:/bin:
+// …), so a user-installed `claude`/`codex` (npm-global, Homebrew, asdf) is
+// invisible to the spawned backend — it would report the CLIs as "not
+// installed" and fail to launch agent terminals. Resolve the user's real
+// login-shell PATH once and merge in the usual install locations.
+function enrichedPath() {
+  const fallback = [
+    process.env.PATH || '',
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    path.join(os.homedir(), '.local/bin'),
+    path.join(os.homedir(), '.asdf/shims'),
+  ]
+    .filter(Boolean)
+    .join(':');
+  try {
+    const sh = process.env.SHELL || '/bin/zsh';
+    const out = execFileSync(sh, ['-lic', 'printf %s "$PATH"'], {
+      encoding: 'utf8',
+      timeout: 4000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (out) return `${out}:${fallback}`;
+  } catch {
+    // login shell unavailable — fall back to the well-known locations
+  }
+  return fallback;
+}
+
 function spawnBackend() {
   const entry = backendEntry();
   if (!fs.existsSync(entry)) {
@@ -100,6 +130,7 @@ function spawnBackend() {
   const child = spawn(process.execPath, [entry], {
     env: {
       ...process.env,
+      PATH: enrichedPath(),
       ELECTRON_RUN_AS_NODE: '1',
       NODE_ENV: 'production',
       PORT: String(SIDECAR_PORT),

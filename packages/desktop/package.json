@@ -2,6 +2,7 @@
   "name": "@pinloom/desktop",
   "version": "0.0.1",
   "private": true,
+  "author": "pinloom",
   "description": "Electron desktop app — connects to a running pinloom, or spawns a bundled backend sidecar for standalone use.",
   "main": "main.cjs",
   "scripts": {
