@@ -1,19 +1,37 @@
-// pinloom desktop shell. A thin Electron wrapper: it does NOT run the backend
-// (launchd already keeps backend:4748 + frontend:4747 alive) — it just opens a
-// native window onto http://localhost:4747 so pinloom lives in its own app +
-// dock icon instead of a browser tab. Backend lifecycle stays exactly as-is.
-const { app, BrowserWindow, shell } = require('electron');
+// pinloom desktop shell — connect-or-spawn.
+//
+// Two ways to run:
+//  • CONNECT: a pinloom is already up locally (the developer's launchd keeps
+//    backend:4748 + frontend:4747 alive). The window just loads that, exactly
+//    like Phase 1 — no second backend, no second DB.
+//  • SPAWN: nothing is running (a colleague who only has the .app). We start the
+//    backend ourselves as a child process via Electron-as-node, told to serve
+//    BOTH the API and the built frontend on one port (PINLOOM_SERVE_STATIC),
+//    with its data in the app's userData dir. claude/codex CLIs still come from
+//    the user's PATH — those can't be bundled.
+const { app, BrowserWindow, shell, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
+const { spawn } = require('node:child_process');
 
-const TARGET_URL = process.env.PINLOOM_DESKTOP_URL || 'http://localhost:4747';
+// A pinloom that's already serving (dev frontend / launchd prod). When this
+// answers we connect instead of spawning our own backend.
+const CONNECT_URL = process.env.PINLOOM_DESKTOP_CONNECT_URL || 'http://localhost:4747';
+// Port our spawned sidecar backend listens on (API + static frontend, one
+// origin). Deliberately NOT 4748 so a spawned instance never collides with a
+// developer's launchd backend on the standard port.
+const SIDECAR_PORT = Number(process.env.PINLOOM_DESKTOP_SIDECAR_PORT) || 4788;
+// Test/dev hook: force the spawn path even when something answers CONNECT_URL.
+const FORCE_SPAWN = process.env.PINLOOM_DESKTOP_FORCE_SPAWN === '1';
 
-// Single instance — focus the existing window instead of opening a second.
+let backendChild = null;
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 
+// ── window state ──────────────────────────────────────────────────────────
 const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
 function loadState() {
   try {
@@ -30,7 +48,7 @@ function saveState(win) {
   }
 }
 
-// Resolve only when the frontend answers (launchd may still be booting it).
+// ── liveness probe ──────────────────────────────────────────────────────────
 function isUp(url) {
   return new Promise((resolve) => {
     const req = http.get(url, (res) => {
@@ -46,6 +64,78 @@ function isUp(url) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── sidecar backend (SPAWN path) ────────────────────────────────────────────
+// Resolve the bundled backend entry + static dir. In the packaged app these sit
+// under Resources/; in dev they're provided via env so `electron .` can spawn
+// against a locally-built backend without packaging.
+function backendEntry() {
+  return (
+    process.env.PINLOOM_BACKEND_ENTRY ||
+    path.join(process.resourcesPath, 'app-backend', 'dist', 'server.js')
+  );
+}
+function staticDir() {
+  return (
+    process.env.PINLOOM_STATIC_DIR ||
+    path.join(process.resourcesPath, 'app-frontend')
+  );
+}
+
+function spawnBackend() {
+  const entry = backendEntry();
+  if (!fs.existsSync(entry)) {
+    dialog.showErrorBox(
+      'pinloom',
+      `Bundled backend not found at:\n${entry}\n\nThe app may be built incorrectly.`,
+    );
+    app.quit();
+    return null;
+  }
+  const dbPath =
+    process.env.PINLOOM_DB_PATH || path.join(app.getPath('userData'), 'pinloom.sqlite');
+
+  // ELECTRON_RUN_AS_NODE: run our own Electron binary as plain Node (no system
+  // Node needed). The backend's MCP child re-spawns process.execPath the same
+  // way (runner.ts adds the flag), so the whole tree stays self-contained.
+  const child = spawn(process.execPath, [entry], {
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      NODE_ENV: 'production',
+      PORT: String(SIDECAR_PORT),
+      PINLOOM_SERVE_STATIC: '1',
+      PINLOOM_STATIC_DIR: staticDir(),
+      PINLOOM_DB_PATH: dbPath,
+      // The orchestrator/bot MCP children talk HTTP back to the backend; point
+      // them at the sidecar port instead of the default 4748.
+      PINLOOM_MCP_BACKEND_URL: `http://localhost:${SIDECAR_PORT}`,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout.on('data', (d) => process.stdout.write(`[backend] ${d}`));
+  child.stderr.on('data', (d) => process.stderr.write(`[backend] ${d}`));
+  child.on('exit', (code, signal) => {
+    backendChild = null;
+    // A crash before quit is fatal for a spawned instance — surface it rather
+    // than leaving an empty window pointed at a dead port.
+    if (!app.isQuitting && code !== 0 && signal !== 'SIGTERM') {
+      dialog.showErrorBox('pinloom', `Backend exited unexpectedly (code ${code}).`);
+      app.quit();
+    }
+  });
+  return child;
+}
+
+// Decide CONNECT vs SPAWN and return the URL the window should load.
+async function resolveTarget() {
+  if (!FORCE_SPAWN && (await isUp(`${CONNECT_URL}/`))) {
+    return CONNECT_URL;
+  }
+  backendChild = spawnBackend();
+  return `http://localhost:${SIDECAR_PORT}`;
+}
+
+// ── window ───────────────────────────────────────────────────────────────────
 async function createWindow() {
   const st = loadState();
   const win = new BrowserWindow({
@@ -59,19 +149,16 @@ async function createWindow() {
     backgroundColor: '#1a1b26',
     autoHideMenuBar: true,
     webPreferences: {
-      // Loading a remote (localhost) origin — keep node out of the renderer.
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
   win.on('close', () => saveState(win));
 
-  // Links that open a new window (target=_blank) → system browser, not in-app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
-  // Navigations that leave localhost → system browser; keep the app on pinloom.
   win.webContents.on('will-navigate', (e, url) => {
     if (!url.startsWith('http://localhost') && !url.startsWith('http://127.0.0.1')) {
       e.preventDefault();
@@ -80,13 +167,16 @@ async function createWindow() {
   });
 
   await win.loadFile(path.join(__dirname, 'loading.html'));
-  // Poll up to ~60s for the frontend (handles a cold launchd boot).
+
+  const target = await resolveTarget();
+  // Poll up to ~60s for the target to answer (cold launchd boot, or our just-
+  // spawned sidecar warming up native modules + migrations).
   for (let i = 0; i < 60; i++) {
     if (win.isDestroyed()) return win;
-    if (await isUp(TARGET_URL)) break;
+    if (await isUp(`${target}/api/ping`)) break;
     await sleep(1000);
   }
-  if (!win.isDestroyed()) await win.loadURL(TARGET_URL);
+  if (!win.isDestroyed()) await win.loadURL(target);
   return win;
 }
 
@@ -101,5 +191,12 @@ app.on('second-instance', () => {
 });
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+// Tear the sidecar down with the app. Mark isQuitting first so the child's
+// exit handler treats the SIGTERM as expected, not a crash.
+app.on('before-quit', () => {
+  app.isQuitting = true;
+  if (backendChild) backendChild.kill('SIGTERM');
 });
 app.on('window-all-closed', () => app.quit());

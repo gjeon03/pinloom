@@ -2,13 +2,49 @@
   "name": "@pinloom/desktop",
   "version": "0.0.1",
   "private": true,
-  "description": "Electron shell — a standalone window onto the locally-running pinloom (escapes the browser tab).",
+  "description": "Electron desktop app — connects to a running pinloom, or spawns a bundled backend sidecar for standalone use.",
   "main": "main.cjs",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "stage": "node scripts/stage.mjs",
+    "dist": "electron-builder --mac dmg",
+    "pack": "pnpm stage && pnpm dist"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.6",
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.pinloom.desktop",
+    "productName": "pinloom",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist-app",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "loading.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "staging/app-backend",
+        "to": "app-backend"
+      },
+      {
+        "from": "staging/app-frontend",
+        "to": "app-frontend"
+      }
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns"
+    },
+    "dmg": {
+      "title": "pinloom"
+    }
   }
 }
