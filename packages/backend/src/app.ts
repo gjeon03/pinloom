@@ -49,6 +49,7 @@ import { initEmbeddings } from './services/embeddings/index.js';
 import { startMessageIndexer, stopMessageIndexer } from './services/message-indexer.js';
 import { startTimelineCapture, stopTimelineCapture } from './services/timeline/capture.js';
 import { startWikiAuto, stopWikiAuto } from './services/wiki-auto.js';
+import { registerStaticFrontend, shouldServeStatic } from './static-frontend.js';
 
 // Guard the WebSocket routes against cross-site hijacking. The terminal
 // socket is effectively local RCE, so a malicious page the user happens to
@@ -337,6 +338,13 @@ export async function createApp() {
       socket.on('close', () => handle.detach());
     });
   });
+
+  // Opt-in: serve the built frontend from this same server so the desktop
+  // app's bundled sidecar runs a single origin (no separate Vite server).
+  // Registered last so /api + /ws routes match first and own their 404s.
+  if (shouldServeStatic()) {
+    await registerStaticFrontend(app);
+  }
 
   return app;
 }
