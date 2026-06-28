@@ -32,10 +32,11 @@ Env overrides: `PINLOOM_DESKTOP_CONNECT_URL`, `PINLOOM_DESKTOP_SIDECAR_PORT`,
 ## Build a `.dmg`
 
 ```bash
-pnpm --filter @pinloom/desktop pack    # stage + electron-builder → dist-app/*.dmg
+pnpm --filter @pinloom/desktop dmg    # stage + electron-builder → dist-app/*.dmg
 ```
 
-`pack` runs `stage.mjs` then `electron-builder`. Staging:
+(Named `dmg`, not `pack`, because `pnpm pack` is a reserved built-in that would
+shadow the script.) `dmg` runs `stage.mjs` then `electron-builder`. Staging:
 
 1. builds shared → mcp-server → backend, and the frontend **into `staging/`**
    (not the workspace `dist`, so a live `vite preview` is never disturbed);
