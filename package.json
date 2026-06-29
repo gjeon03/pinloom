@@ -16,6 +16,7 @@
     "dev:backend": "pnpm --filter @pinloom/backend dev",
     "dev:frontend": "pnpm --filter @pinloom/frontend dev",
     "dev:terminal": "PINLOOM_CLAUDE_TRANSPORT=terminal PINLOOM_DB_PATH=data/pinloom.dev.sqlite pnpm dev",
+    "desktop": "pnpm --filter @pinloom/desktop start",
     "prestart": "pnpm build",
     "start": "concurrently --kill-others --names backend,frontend \"pnpm --filter @pinloom/backend start\" \"pnpm --filter @pinloom/frontend preview\"",
     "start:served": "concurrently --kill-others --names backend,frontend \"pnpm --filter @pinloom/backend start\" \"pnpm --filter @pinloom/frontend preview\"",
@@ -37,6 +38,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3",
+      "electron",
       "esbuild",
       "node-pty"
     ]
