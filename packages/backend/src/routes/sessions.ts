@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import type { Message, MessageRole, Session } from '@pinloom/shared';
+import { DEFAULT_CLAUDE_MODEL } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import type { ImageInput, ImageMediaType } from '../services/runner.js';
 import {
@@ -221,15 +222,21 @@ export async function sessionRoutes(app: FastifyInstance) {
       )
       .get(req.params.projectId) as { max: number };
     const nextOrder = maxRow.max + 1;
+    // Default new claude sessions to the latest Opus explicitly (matches the
+    // user's interactive terminal) rather than null — the PATH-resolved claude
+    // binary's built-in default lags (resolved to 4.7). Codex keeps its own
+    // CLI default (null). The user can still change the model per session.
+    const defaultModel = agent === 'claude' ? DEFAULT_CLAUDE_MODEL : null;
     db.prepare(
       `INSERT INTO sessions
-         (id, project_id, plan_id, agent, claude_session_id, agent_session_id, title, order_index, transport, created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+         (id, project_id, plan_id, agent, model, claude_session_id, agent_session_id, title, order_index, transport, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       req.params.projectId,
       req.body.planId ?? null,
       agent,
+      defaultModel,
       req.body.title ?? null,
       nextOrder,
       claudeTransport(),

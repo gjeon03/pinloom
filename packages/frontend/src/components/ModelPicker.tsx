@@ -11,14 +11,19 @@ export interface ModelOption {
 
 export const CLAUDE_MODELS: ModelOption[] = [
   {
-    id: null,
-    label: 'CLI default',
-    description: 'Use whatever your local Claude Code CLI is configured for',
+    id: 'claude-opus-4-8',
+    label: 'Opus 4.8',
+    description: 'Latest Opus — best for complex work (pinloom default)',
   },
   {
     id: 'claude-opus-4-8[1m]',
     label: 'Opus 4.8 (1M)',
-    description: 'Most capable — 1M context, best for complex work',
+    description: 'Most capable — 1M context, billed as extra usage',
+  },
+  {
+    id: null,
+    label: 'CLI default',
+    description: 'Use whatever your local Claude Code CLI is configured for',
   },
   {
     id: 'claude-opus-4-7[1m]',
