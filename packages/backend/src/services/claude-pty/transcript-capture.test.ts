@@ -1,14 +1,31 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { getDb } from '../../db/connection.js';
 import { getStopHookServer, shutdownStopHookServer } from './shared-server.js';
+import { sessionFilePath } from './transcript.js';
+import { persistMessage } from '../runner.js';
 import { startCapture, stopCapture } from './transcript-capture.js';
+
+// Catch-up tests write transcripts to the real `sessionFilePath` location (under
+// ~/.claude/projects/<slug>/), since that's the path startCapture derives. The
+// slug comes from the test's unique /tmp cwd so it never collides with real
+// projects; clean the dirs up afterwards.
+const transcriptDirsToClean: string[] = [];
 
 afterAll(async () => {
   await shutdownStopHookServer();
+  for (const d of transcriptDirsToClean) rmSync(d, { recursive: true, force: true });
 });
+
+function cwdOf(sid: string): string {
+  return (
+    getDb()
+      .prepare('SELECT p.cwd AS cwd FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?')
+      .get(sid) as { cwd: string }
+  ).cwd;
+}
 
 let projSeq = 0;
 function insertSession(id: string): void {
@@ -240,6 +257,67 @@ describe('transcript capture', () => {
     writeTranscript(tfile, [uA, aA, uB, aB]);
     await until(() => rows(sid).some((x) => x.content === 'B!'));
     expect(rows(sid).map((x) => x.content)).toEqual(['A?', 'A!', 'B?', 'B!']);
+
+    stopCapture(sid);
+  });
+
+  it('catch-up fold on re-attach recovers a reply orphaned by a restart (no next Stop)', async () => {
+    // Root cause of "the last turn never shows in history": the rescan tail that
+    // chases a late-flushing reply is an in-memory timer. A backend restart inside
+    // that window kills it, leaving the reply orphaned (cursor frozen on the user
+    // line). The old code waited for a FUTURE Stop to re-scan past it — which never
+    // came if the next turn was interrupted or the backend kept restarting. On
+    // re-attach, startCapture must fold the transcript from the cursor itself.
+    const sid = 'sess-cap-orphan';
+    insertSession(sid);
+    const resumeId = 'claude-orphan';
+    // The real path startCapture's catch-up derives from (cwd + resume id).
+    const tpath = sessionFilePath(cwdOf(sid), resumeId);
+    mkdirSync(path.dirname(tpath), { recursive: true });
+    transcriptDirsToClean.push(path.dirname(tpath));
+
+    const userLine = {
+      type: 'user',
+      uuid: 'ou1',
+      parentUuid: null,
+      message: { role: 'user', content: 'why is the sky blue?' },
+    };
+    const reply = {
+      type: 'assistant',
+      uuid: 'oa1',
+      parentUuid: 'ou1',
+      message: {
+        role: 'assistant',
+        model: 'claude-opus-4-8',
+        content: [{ type: 'text', text: 'Rayleigh scattering.' }],
+      },
+    };
+    // Both lines are in the transcript; the reply HAS flushed.
+    writeTranscript(tpath, [userLine, reply]);
+
+    // Reconstruct the exact orphaned end-state a restart-during-rescan leaves
+    // behind, WITHOUT starting a rescan timer (an in-process timer would survive
+    // stopCapture and mask the bug): the user line was captured and the cursor
+    // advanced to it, but the reply is still uncaptured.
+    persistMessage({ sessionId: sid, planItemId: null, role: 'user', content: 'why is the sky blue?', transcriptUuid: 'ou1' });
+    getDb()
+      .prepare('UPDATE sessions SET last_captured_transcript_uuid=?, agent_session_id=? WHERE id=?')
+      .run('ou1', resumeId, sid);
+    expect(rows(sid).some((x) => x.role === 'assistant')).toBe(false);
+
+    // Re-attach with the resume token (as spawnAgentTerminal does). The catch-up
+    // fold must recover the orphaned reply WITHOUT any further Stop.
+    await startCapture(sid, resumeId);
+    await until(() => rows(sid).some((x) => x.role === 'assistant'));
+    const r = rows(sid);
+    expect(r.map((x) => x.content)).toEqual(['why is the sky blue?', 'Rayleigh scattering.']);
+    expect(r.find((x) => x.role === 'assistant')?.transcript_uuid).toBe('oa1');
+
+    // Cursor advanced past the reply so a later Stop won't re-capture it.
+    const cur = getDb()
+      .prepare('SELECT last_captured_transcript_uuid AS c FROM sessions WHERE id=?')
+      .get(sid) as { c: string | null };
+    expect(cur.c).toBe('oa1');
 
     stopCapture(sid);
   });

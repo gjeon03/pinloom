@@ -17,7 +17,8 @@ import {
   SYNTHETIC_MODEL,
   type JsonlContentBlock,
 } from '../claude-jsonl/index.js';
-import { readLines } from './transcript.js';
+import { existsSync } from 'node:fs';
+import { readLines, sessionFilePath } from './transcript.js';
 import { getStopHookServer } from './shared-server.js';
 import type { StopHookPayload } from './stop-hook-server.js';
 import { persistMessage, emitRunStatus, notifySessionIdle } from '../runner.js';
@@ -74,6 +75,66 @@ export async function startCapture(
   state.unregister = server.onStop(pinloomSessionId, (payload) => {
     void onStop(pinloomSessionId, payload);
   });
+
+  // Catch-up fold on (re)attach. The rescan tail that chases a late-flushing
+  // assistant reply (claude flushes it a beat AFTER firing the Stop hook) is an
+  // in-memory timer chain; a backend restart inside that ~11s window drops it,
+  // orphaning the reply — the cursor stays frozen on the user line and the reply
+  // is lost until some FUTURE turn's Stop happens to re-scan past it (and if the
+  // next turn is interrupted or the backend keeps restarting, never). Folding the
+  // transcript here — on every attach, without waiting for a Stop — self-heals
+  // that gap, and works even if the Stop-hook forwarder itself is failing (we read
+  // the transcript directly). Only on resume: a brand-new session has no prior
+  // transcript to fold.
+  if (resumeSessionId) catchUpFromTranscript(pinloomSessionId, state, resumeSessionId);
+}
+
+/**
+ * Fold any transcript lines that flushed since the persisted cursor but were
+ * never captured (a rescan tail lost to a restart). Synchronous so no Stop can
+ * interleave mid-fold; idempotent via `seen` + the (session_id, transcript_uuid)
+ * unique index, so re-running on every attach is safe.
+ */
+function catchUpFromTranscript(
+  pinloomSessionId: string,
+  state: CaptureState,
+  resumeSessionId: string,
+): void {
+  if (state.running) return;
+  const row = getDb()
+    .prepare('SELECT p.cwd AS cwd FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?')
+    .get(pinloomSessionId) as { cwd: string | null } | undefined;
+  if (!row?.cwd) return;
+  const transcriptPath = sessionFilePath(row.cwd, resumeSessionId);
+  if (!existsSync(transcriptPath)) return;
+
+  state.running = true;
+  let persistedAny = false;
+  try {
+    // Seed `seen` from the cursor so we only fold lines that flushed since it —
+    // the same seeding the first post-resume Stop would otherwise do.
+    if (!state.seeded) {
+      state.seeded = true;
+      if (state.cursor) {
+        for (const l of readLines(transcriptPath)) {
+          if (l.uuid) state.seen.add(l.uuid);
+          if (l.uuid === state.cursor) break;
+        }
+      }
+    }
+    persistedAny = persistNewLines(pinloomSessionId, state, transcriptPath).persistedAny;
+  } catch (err) {
+    console.warn('[claude-pty] catch-up fold failed for %s:', pinloomSessionId, err);
+  } finally {
+    state.running = false;
+  }
+
+  // Folded an orphaned reply and the tail is now a reply → the turn is complete.
+  // Fire the same signal a Stop would: clears a tab dot left stuck "running" by
+  // the lost rescan and wakes any team_wait.
+  if (persistedAny && transcriptTailIsAssistant(transcriptPath)) {
+    signalTurnComplete(pinloomSessionId);
+  }
 }
 
 export function stopCapture(pinloomSessionId: string): void {
