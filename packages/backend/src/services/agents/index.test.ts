@@ -9,16 +9,16 @@ describe('claudeTransport', () => {
     delete process.env.PINLOOM_CLAUDE_TRANSPORT;
   });
 
-  it('defaults to sdk and maps pty/terminal, ignoring unknown values', () => {
-    expect(claudeTransport()).toBe('sdk');
+  it('defaults to terminal and maps sdk/pty, ignoring unknown values', () => {
+    expect(claudeTransport()).toBe('terminal');
     process.env.PINLOOM_CLAUDE_TRANSPORT = 'pty';
     expect(claudeTransport()).toBe('pty');
     expect(claudeTransportIsPty()).toBe(true);
-    process.env.PINLOOM_CLAUDE_TRANSPORT = 'terminal';
-    expect(claudeTransport()).toBe('terminal');
+    process.env.PINLOOM_CLAUDE_TRANSPORT = 'sdk';
+    expect(claudeTransport()).toBe('sdk');
     expect(claudeTransportIsPty()).toBe(false);
     process.env.PINLOOM_CLAUDE_TRANSPORT = 'nonsense';
-    expect(claudeTransport()).toBe('sdk');
+    expect(claudeTransport()).toBe('terminal');
   });
 });
 
@@ -27,7 +27,9 @@ describe('getAgentAdapter', () => {
     delete process.env.PINLOOM_CLAUDE_TRANSPORT;
   });
 
-  it('routes claude to the SDK adapter by default (no regression)', () => {
+  it('routes claude to the non-pty (SDK) adapter when transport is not pty', () => {
+    // Default is 'terminal' (not pty), so getAgentAdapter returns the SDK
+    // adapter — terminal rendering is handled outside the adapter layer.
     expect(claudeTransportIsPty()).toBe(false);
     expect(getAgentAdapter('claude')).toBe(claudeAdapter);
   });
