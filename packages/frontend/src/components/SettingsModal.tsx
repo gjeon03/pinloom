@@ -18,6 +18,7 @@ import useSWR from 'swr';
 import { api, type AutostartStatus } from '../api/client.js';
 import { cacheKeys } from '../api/cacheKeys.js';
 import { usePwaInstall } from '../hooks/usePwaInstall.js';
+import { isDesktopApp } from '../utils/desktop.js';
 
 type CliStatus = HealthResponse['agents']['claude'];
 
@@ -445,9 +446,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
           <EmbeddingsSection />
 
-          <InstallAppSection />
+          {/* PWA install + launchd login-autostart only make sense in a
+              browser. Inside the desktop app the backend is app-owned and
+              autostart is the Tray's "Open at Login" — so hide both there. */}
+          {!isDesktopApp() && <InstallAppSection />}
 
-          <AutostartSection />
+          {!isDesktopApp() && <AutostartSection />}
 
           <EnvVarsSection />
 
