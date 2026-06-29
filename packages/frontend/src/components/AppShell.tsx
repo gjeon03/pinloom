@@ -415,8 +415,7 @@ export function AppShell({ children }: Props) {
         </div>
       ) : (
         <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
-        <div className="titlebar-drag titlebar-trafficlights px-3 py-3 flex items-center justify-between gap-1">
-          <div className="text-sm font-semibold tracking-wide truncate">pinloom</div>
+        <div className="titlebar-drag px-3 py-3 flex items-center justify-end gap-1">
           <div className="flex items-center gap-0.5">
             <Tooltip label="New group" side="bottom">
               <button
