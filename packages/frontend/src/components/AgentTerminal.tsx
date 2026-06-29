@@ -248,9 +248,21 @@ export function AgentTerminal({
     const ro = new ResizeObserver(debouncedResize);
     ro.observe(container);
 
+    // xterm derives cols/rows from the measured character-cell size, which is
+    // wrong until the terminal font has actually loaded AND the pane has settled.
+    // In the desktop app that's often not yet true at mount (a browser usually
+    // has the font cached), so the first fit computes too few rows and the TUI's
+    // input line ends up mid-pane. The ResizeObserver can't catch this — the
+    // CONTAINER size never changes, only the cell size does — so refit explicitly
+    // once fonts settle and once more a beat later. (A manual page refresh "fixes"
+    // it for the same reason: by then everything is measured.)
+    void document.fonts?.ready?.then(() => sendResize());
+    const lateFitTimer = setTimeout(sendResize, 300);
+
     return () => {
       cancelAnimationFrame(rafId);
       if (resizeTimer) clearTimeout(resizeTimer);
+      clearTimeout(lateFitTimer);
       ro.disconnect();
       themeObserver.disconnect();
       dataSub.dispose();
