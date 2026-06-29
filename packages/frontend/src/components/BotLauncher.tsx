@@ -4,6 +4,7 @@ import { CalendarClock, Wrench } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { Tooltip } from './Tooltip.js';
+import { useFeatures } from '../stores/uiConfig.js';
 
 // Seed the target session's composer draft (read by ChatView on mount) so the
 // user lands with the scope already stated. Prepends, never clobbers.
@@ -19,6 +20,7 @@ function seedDraft(sessionId: string, hint: string) {
 
 export function BotLauncher() {
   const navigate = useNavigate();
+  const features = useFeatures();
   const [busy, setBusy] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -93,6 +95,7 @@ export function BotLauncher() {
 
   return (
     <>
+      {features.scheduleBot && (
       <Tooltip label="Schedule bot">
         <button
           type="button"
@@ -104,7 +107,9 @@ export function BotLauncher() {
           <CalendarClock size={16} />
         </button>
       </Tooltip>
+      )}
 
+      {features.skillBot && (
       <div ref={wrapRef} className="relative">
         <Tooltip label="Skill bot">
           <button
@@ -156,6 +161,7 @@ export function BotLauncher() {
           </div>
         )}
       </div>
+      )}
     </>
   );
 }

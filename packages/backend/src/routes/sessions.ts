@@ -22,6 +22,7 @@ import {
 } from '../services/message-queue.js';
 import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec.js';
 import { claudeTransport } from '../services/agents/index.js';
+import { getUiConfig } from '../services/ui-config.js';
 import { killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
 import { killCodexTerminal, removeCodexHome } from '../services/codex-pty/agent-terminal.js';
 import { sweepDispatchesForDeletedWorker } from '../services/dispatches.js';
@@ -226,7 +227,15 @@ export async function sessionRoutes(app: FastifyInstance) {
     // user's interactive terminal) rather than null — the PATH-resolved claude
     // binary's built-in default lags (resolved to 4.7). Codex keeps its own
     // CLI default (null). The user can still change the model per session.
-    const defaultModel = agent === 'claude' ? DEFAULT_CLAUDE_MODEL : null;
+    // A fixed model in the UI config wins (picker hidden → use the configured
+    // model). Otherwise the pinned default. Codex keeps its CLI default (null).
+    const fixedModel = getUiConfig().pickers.model;
+    const defaultModel =
+      agent === 'claude'
+        ? fixedModel.mode === 'fixed'
+          ? fixedModel.fixed
+          : DEFAULT_CLAUDE_MODEL
+        : null;
     db.prepare(
       `INSERT INTO sessions
          (id, project_id, plan_id, agent, model, claude_session_id, agent_session_id, title, order_index, transport, created_at, updated_at)

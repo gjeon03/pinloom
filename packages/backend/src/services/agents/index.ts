@@ -3,6 +3,7 @@ import { claudeAdapter } from './claude-adapter.js';
 import { codexAdapter } from './codex-adapter.js';
 import { claudePtyAdapter } from '../claude-pty/index.js';
 import { getSetting } from '../app-settings.js';
+import { getUiConfig } from '../ui-config.js';
 import type { AgentAdapter } from './types.js';
 
 export type ClaudeTransport = 'sdk' | 'pty' | 'terminal';
@@ -27,6 +28,10 @@ export const DEFAULT_TRANSPORT_KEY = 'default_claude_transport';
  * PK lookup) so a change applies without a restart.
  */
 export function claudeTransport(): ClaudeTransport {
+  // A fixed transport in the UI config wins (the picker is hidden, new sessions
+  // must use the configured value).
+  const fixed = getUiConfig().pickers.transport;
+  if (fixed.mode === 'fixed') return fixed.fixed;
   const s = getSetting(DEFAULT_TRANSPORT_KEY);
   if (s === 'sdk' || s === 'pty' || s === 'terminal') return s;
   const v = process.env.PINLOOM_CLAUDE_TRANSPORT;

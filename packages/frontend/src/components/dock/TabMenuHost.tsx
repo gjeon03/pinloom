@@ -24,6 +24,7 @@ import {
 import type { Session, Team } from '@pinloom/shared';
 import { api } from '../../api/client.js';
 import { cacheKeys } from '../../api/cacheKeys.js';
+import { usePickers } from '../../stores/uiConfig.js';
 import { buildTeamRoles } from '../tabs/teamRoles.js';
 import {
   AddWorkerFromTabModal,
@@ -72,6 +73,8 @@ export function TabMenuHost({
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  // Hide the SDK↔terminal convert option when transport is fixed in settings.
+  const transportShown = usePickers().transport.mode === 'shown';
   const [moveModal, setMoveModal] = useState<{ sessionId: string } | null>(
     null,
   );
@@ -182,6 +185,7 @@ export function TabMenuHost({
                 <span className="flex-1">Split down</span>
               </button>
               {session &&
+                transportShown &&
                 (() => {
                   const isTerminal = session.transport === 'terminal';
                   const target = isTerminal ? 'sdk' : 'terminal';
