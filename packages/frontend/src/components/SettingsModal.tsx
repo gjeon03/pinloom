@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { GithubLink } from './GithubLink.js';
 import { FeatureSettings } from './FeatureSettings.js';
+import { useT } from '../i18n/t.js';
 import type {
   HealthResponse,
   PromptTemplate,
@@ -398,14 +399,10 @@ function UserProfileSection() {
 
 type SettingsCategory = 'features' | 'agents' | 'system' | 'data';
 
-const CATEGORIES: { id: SettingsCategory; label: string }[] = [
-  { id: 'features', label: 'Features & Language' },
-  { id: 'agents', label: 'Agents & Search' },
-  { id: 'system', label: 'System' },
-  { id: 'data', label: 'Data & Backup' },
-];
+const CATEGORY_IDS: SettingsCategory[] = ['features', 'agents', 'system', 'data'];
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [category, setCategory] = useState<SettingsCategory>('features');
@@ -426,10 +423,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         className="w-full max-w-3xl h-[85vh] flex flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] cursor-default overflow-hidden"
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--color-border)]">
-          <h2 className="text-base font-semibold">Settings</h2>
+          <h2 className="text-base font-semibold">{t('settings.title')}</h2>
           <button
             onClick={onClose}
-            aria-label="Close settings"
+            aria-label={t('settings.close')}
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
             <X size={16} />
@@ -439,17 +436,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         <div className="flex flex-1 min-h-0">
           {/* Category nav */}
           <nav className="w-44 shrink-0 border-r border-[var(--color-border)] p-2 space-y-0.5 overflow-y-auto">
-            {CATEGORIES.map((c) => (
+            {CATEGORY_IDS.map((id) => (
               <button
-                key={c.id}
-                onClick={() => setCategory(c.id)}
+                key={id}
+                onClick={() => setCategory(id)}
                 className={`w-full rounded px-2 py-1.5 text-left text-xs ${
-                  category === c.id
+                  category === id
                     ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
                     : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
                 }`}
               >
-                {c.label}
+                {t(`settings.cat.${id}`)}
               </button>
             ))}
           </nav>
@@ -462,11 +459,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               <>
                 <section>
                   <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-                    Agent CLIs
+                    {t('settings.agentClis')}
                   </h3>
                   {error && <p className="text-red-400 text-sm">{error}</p>}
                   {!error && !health && (
-                    <p className="text-[var(--color-ink-muted)] text-sm">Checking…</p>
+                    <p className="text-[var(--color-ink-muted)] text-sm">{t('settings.checking')}</p>
                   )}
                   {health && (
                     <div className="divide-y divide-[var(--color-border)]">
