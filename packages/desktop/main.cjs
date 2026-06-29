@@ -444,6 +444,13 @@ if (gotTheLock) {
       clearTimeout(force);
       app.exit(0);
     });
-    child.kill('SIGTERM');
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // child already reaped between the null-check and here — don't hang the
+      // quit waiting for an 'exit' that already fired.
+      clearTimeout(force);
+      app.exit(0);
+    }
   });
 }
