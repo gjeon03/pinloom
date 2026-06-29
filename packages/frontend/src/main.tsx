@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App.js';
 import { NotificationProvider } from './stores/notifications.js';
 import { applyTheme, getStoredPreference, watchSystem } from './theme.js';
+import { isDesktopApp } from './utils/desktop.js';
 // Side-effect import: attach the PWA `beforeinstallprompt` listener at startup
 // so the deferred install prompt is captured before the user opens Settings.
 import './stores/pwaInstall.js';
@@ -12,6 +13,10 @@ import './stores/pwaInstall.js';
 import './stores/pwaUpdate.js';
 import 'dockview-react/dist/styles/dockview.css';
 import './styles/index.css';
+
+// In the desktop app the native title bar is hidden (titleBarStyle hiddenInset),
+// so tag the root to enable the top-header drag region + traffic-light padding.
+if (isDesktopApp()) document.documentElement.classList.add('pinloom-desktop');
 
 // Apply persisted (or system) theme before React mounts to avoid a flash.
 applyTheme(getStoredPreference());

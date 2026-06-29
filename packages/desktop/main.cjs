@@ -354,6 +354,11 @@ async function createWindow({ show = true } = {}) {
     title: 'pinloom',
     backgroundColor: '#1a1b26',
     autoHideMenuBar: true,
+    // Hide the native title bar and let the app's own header fill the top, with
+    // the macOS traffic lights inset over the content (the "real app" look).
+    // The frontend pads its top-left header to clear the lights and marks the
+    // header as a drag region (see index.css .titlebar-*).
+    titleBarStyle: 'hiddenInset',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
