@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { SWRConfig, mutate } from 'swr';
 import { FileText, Search } from 'lucide-react';
 import { AppShell } from './components/AppShell.js';
+import { FeatureRoute } from './components/FeatureRoute.js';
+import { useFeatures } from './stores/uiConfig.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
 import { GlobalSearchModal } from './components/GlobalSearchModal.js';
 import { PromptTemplatesPanel } from './components/PromptTemplatesPanel.js';
@@ -40,11 +42,16 @@ export function App() {
   const [notepadOpen, setNotepadOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const features = useFeatures();
+  // Ref so the stable keydown handler always sees the latest flags.
+  const featuresRef = useRef(features);
+  featuresRef.current = features;
 
-  // Global ⌘K / Ctrl+K opens history search from anywhere.
+  // Global ⌘K / Ctrl+K opens history search from anywhere (when enabled).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        if (!featuresRef.current.globalSearch) return;
         e.preventDefault();
         setSearchOpen((v) => !v);
       }
@@ -77,6 +84,7 @@ export function App() {
               content edge and never overlaps the docked notepad. */}
           <div className="relative flex-1 min-w-0">
           <div className="titlebar-no-drag absolute top-3 right-3 z-40 flex items-center gap-1.5">
+            {features.globalSearch && (
             <Tooltip label="Search history (⌘K)">
               <button
                 type="button"
@@ -87,6 +95,8 @@ export function App() {
                 <Search size={16} />
               </button>
             </Tooltip>
+            )}
+            {features.templates && (
             <Tooltip label="Prompt templates">
               <button
                 type="button"
@@ -97,11 +107,14 @@ export function App() {
                 <FileText size={16} />
               </button>
             </Tooltip>
-            <BotLauncher />
+            )}
+            {(features.scheduleBot || features.skillBot) && <BotLauncher />}
+            {features.notepad && (
             <NotepadToggle
               open={notepadOpen}
               onToggle={() => setNotepadOpen((v) => !v)}
             />
+            )}
             <NotificationCenter />
           </div>
           <Routes>
@@ -124,57 +137,57 @@ export function App() {
             <Route
               path="/teams"
               element={
-                <AppShell>
-                  {() => <TeamsPage />}
-                </AppShell>
+                <FeatureRoute flag="teams">
+                  <AppShell>{() => <TeamsPage />}</AppShell>
+                </FeatureRoute>
               }
             />
             <Route
               path="/teams/:teamId"
               element={
-                <AppShell>
-                  {() => <TeamCanvasPage />}
-                </AppShell>
+                <FeatureRoute flag="teams">
+                  <AppShell>{() => <TeamCanvasPage />}</AppShell>
+                </FeatureRoute>
               }
             />
             <Route
               path="/wiki/proposals"
               element={
-                <AppShell>
-                  {() => <WikiProposalsPage />}
-                </AppShell>
+                <FeatureRoute flag="wiki">
+                  <AppShell>{() => <WikiProposalsPage />}</AppShell>
+                </FeatureRoute>
               }
             />
             <Route
               path="/wiki/*"
               element={
-                <AppShell>
-                  {() => <WikiDetailPage />}
-                </AppShell>
+                <FeatureRoute flag="wiki">
+                  <AppShell>{() => <WikiDetailPage />}</AppShell>
+                </FeatureRoute>
               }
             />
             <Route
               path="/wiki"
               element={
-                <AppShell>
-                  {() => <WikiPage />}
-                </AppShell>
+                <FeatureRoute flag="wiki">
+                  <AppShell>{() => <WikiPage />}</AppShell>
+                </FeatureRoute>
               }
             />
             <Route
               path="/timeline"
               element={
-                <AppShell>
-                  {() => <TimelinePage />}
-                </AppShell>
+                <FeatureRoute flag="timeline">
+                  <AppShell>{() => <TimelinePage />}</AppShell>
+                </FeatureRoute>
               }
             />
             <Route
               path="/recap"
               element={
-                <AppShell>
-                  {() => <RecapPage />}
-                </AppShell>
+                <FeatureRoute flag="recap">
+                  <AppShell>{() => <RecapPage />}</AppShell>
+                </FeatureRoute>
               }
             />
             <Route
@@ -191,13 +204,17 @@ export function App() {
             />
           </Routes>
           </div>
-          {templatesOpen && (
+          {templatesOpen && features.templates && (
             <PromptTemplatesPanel onClose={() => setTemplatesOpen(false)} />
           )}
-          {notepadOpen && <NotepadPanel onClose={() => setNotepadOpen(false)} />}
+          {notepadOpen && features.notepad && (
+            <NotepadPanel onClose={() => setNotepadOpen(false)} />
+          )}
         </div>
       </div>
-      {searchOpen && <GlobalSearchModal onClose={() => setSearchOpen(false)} />}
+      {searchOpen && features.globalSearch && (
+        <GlobalSearchModal onClose={() => setSearchOpen(false)} />
+      )}
     </SWRConfig>
   );
 }

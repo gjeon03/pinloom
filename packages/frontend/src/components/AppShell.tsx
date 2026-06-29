@@ -20,6 +20,7 @@ import {
 import type { Project, ProjectGroup } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
+import { useFeatures } from '../stores/uiConfig.js';
 import { DirectoryPicker } from './DirectoryPicker.js';
 import { Tooltip } from './Tooltip.js';
 import { useTheme } from '../hooks/useTheme.js';
@@ -124,6 +125,7 @@ export function AppShell({ children }: Props) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
   const [pickerTarget, setPickerTarget] = useState<{ groupId: string | null } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const features = useFeatures();
   // Let any component (e.g. the composer's template popup) open Settings.
   useEffect(() => {
     function open() {
@@ -628,6 +630,7 @@ export function AppShell({ children }: Props) {
         </div>
 
         <div className="border-t border-[var(--color-border)] p-2 space-y-1">
+          {features.teams && (
           <button
             onClick={() => navigate('/teams')}
             className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
@@ -639,6 +642,8 @@ export function AppShell({ children }: Props) {
             <Users size={12} />
             Teams
           </button>
+          )}
+          {features.wiki && (
           <button
             onClick={() => navigate('/wiki')}
             className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
@@ -650,6 +655,8 @@ export function AppShell({ children }: Props) {
             <BookOpen size={12} />
             Wiki
           </button>
+          )}
+          {features.timeline && (
           <button
             onClick={() => navigate('/timeline')}
             className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
@@ -661,6 +668,8 @@ export function AppShell({ children }: Props) {
             <CalendarDays size={12} />
             Timeline
           </button>
+          )}
+          {features.recap && (
           <button
             onClick={() => navigate('/recap')}
             className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
@@ -672,6 +681,7 @@ export function AppShell({ children }: Props) {
             <Sparkles size={12} />
             Recap
           </button>
+          )}
           <div className="flex items-center gap-1">
             <button
               onClick={() => setShowSettings(true)}

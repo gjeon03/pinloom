@@ -26,6 +26,7 @@ import {
   type SidePanelPosition,
 } from '../hooks/useSidePanelPosition.js';
 import { useNotifications } from '../stores/notifications.js';
+import { useFeatures } from '../stores/uiConfig.js';
 import { ActionIconButton, CopyMarkdownButton, PinToggleButton } from './MessageActions.js';
 import { PinnedPanel } from './PinnedPanel.js';
 import { Markdown } from './Markdown.js';
@@ -109,9 +110,20 @@ export function TerminalSidePanel({
   projectCwd,
   onHandoff,
   onSendPin,
-  tabs = ALL_TABS,
+  tabs: tabsProp = ALL_TABS,
   position = 'left',
 }: Props) {
+  // Hide tabs whose feature is disabled (history / pins / session Wiki tab).
+  const features = useFeatures();
+  const tabs = tabsProp.filter((t) =>
+    t === 'history'
+      ? features.history
+      : t === 'pins'
+        ? features.pins
+        : t === 'wiki'
+          ? features.sessionWikiTab
+          : true,
+  );
   const hasHistory = tabs.includes('history');
   const vertical = isVerticalRail(position);
   const [messages, setMessages] = useState<Message[]>([]);

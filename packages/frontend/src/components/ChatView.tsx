@@ -38,6 +38,7 @@ import { AgentBadge } from './AgentBadge.js';
 import { MentionPopup, type MentionWorker } from './MentionPopup.js';
 import { TemplatePopup } from './TemplatePopup.js';
 import { useNotifications } from '../stores/notifications.js';
+import { usePickers } from '../stores/uiConfig.js';
 import { Markdown } from './Markdown.js';
 import {
   CopyMarkdownButton,
@@ -253,6 +254,12 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   const [effort, setEffort] = useState<Session['reasoningEffort']>(
     session.reasoningEffort,
   );
+  // When the model/effort picker is fixed (settings), hide it — the backend
+  // applies the fixed default. `anyPickerShown` collapses the whole row if both
+  // are fixed.
+  const pickers = usePickers();
+  const anyPickerShown =
+    pickers.model.mode === 'shown' || pickers.effort.mode === 'shown';
   const [showModelRow, setShowModelRow] = useState<boolean>(() => {
     try {
       // Default is expanded — first-time users discover the picker, then can collapse.
@@ -1622,11 +1629,12 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
             </span>
           </button>
         </div>
-        {!isShellMode && (
+        {!isShellMode && anyPickerShown && (
           <div className="border-t border-[var(--color-border)]/60 -mx-3 -mb-3 px-3">
             {showModelRow && (
               <div className="py-2 flex items-center justify-between gap-2 text-[11px] text-[var(--color-ink-muted)]">
                 <div className="flex items-center gap-3 flex-wrap">
+                  {pickers.model.mode === 'shown' && (
                   <span className="flex items-center gap-2">
                     <span>Model</span>
                     <ModelPicker
@@ -1637,6 +1645,8 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
                       disabled={aiRunning}
                     />
                   </span>
+                  )}
+                  {pickers.effort.mode === 'shown' && (
                   <span className="flex items-center gap-2">
                     <span>Effort</span>
                     <EffortPicker
@@ -1647,6 +1657,7 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
                       disabled={aiRunning}
                     />
                   </span>
+                  )}
                 </div>
               </div>
             )}
