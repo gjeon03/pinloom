@@ -192,16 +192,34 @@ function teardownSession(sessionId: string): void {
   }
 }
 
+// How long after a `started` we wait for any claude output before deciding the
+// Enter was stray (claude echoes a real submit within ms, so silence here means
+// no turn actually began). Generous so a slow first paint never false-clears.
+const STRAY_ENTER_MS = 4000;
+
 // Mark a turn as started on the false→true edge of turnInFlight, emitting a
 // `started` run_activity so the session lights up as "running" (tab dot + the
 // notification bell's In progress list) — terminal turns otherwise only ever
 // emit `finished`, so they never showed as running. Paired with the capture's
-// signalTurnComplete (`finished`); a stray Enter that produces no turn self-
-// heals on the next real turn's finish.
-function beginTurn(session: { turnInFlight: boolean }, sessionId: string): void {
+// signalTurnComplete (`finished`).
+//
+// Self-heal a STRAY Enter (e.g. an empty submit / TUI navigation that starts no
+// turn): such an Enter lights the dot but produces no Stop hook, so without this
+// the dot stays stuck until some future real turn finishes. claude echoes a real
+// submit immediately, so if NO output arrives within STRAY_ENTER_MS we clear the
+// running state. A genuine long turn echoes right away → its dot stays on (this
+// only fires when claude never reacted at all).
+function beginTurn(session: AgentTerminalSession, sessionId: string): void {
   if (session.turnInFlight) return;
   session.turnInFlight = true;
   emitRunStatus(sessionId, 'started');
+  const dataAtStart = session.lastDataAt;
+  setTimeout(() => {
+    if (session.turnInFlight && session.lastDataAt === dataAtStart) {
+      session.turnInFlight = false;
+      emitRunStatus(sessionId, 'finished');
+    }
+  }, STRAY_ENTER_MS).unref?.();
 }
 
 export async function attachAgentTerminal(
