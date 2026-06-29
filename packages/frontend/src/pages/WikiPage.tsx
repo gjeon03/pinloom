@@ -31,6 +31,7 @@ import {
   analyzeNotificationId,
   useNotifications,
 } from '../stores/notifications.js';
+import { useT } from '../i18n/t.js';
 
 type ScopeFilter = string | null; // null = all
 type TopicFilter = string | null;
@@ -72,6 +73,7 @@ function groupByTopic(pages: WikiPage[]): { topic: string; pages: WikiPage[] }[]
 }
 
 export function WikiPage() {
+  const t = useT();
   const { data: pendingProposals = [] } = useSWR(
     cacheKeys.wikiProposals('pending'),
     () => api.listWikiProposals('pending'),
@@ -94,20 +96,20 @@ export function WikiPage() {
       const { created, skipped, truncated, duplicateCandidates } = await api.runGardener();
       await mutate(cacheKeys.wikiProposals('pending'));
       if (!mountedRef.current) return;
-      const trunc = truncated ? ' (wiki was large — some pages not reviewed)' : '';
+      const trunc = truncated ? t('page.wiki.garden.truncated') : '';
       const dup =
         duplicateCandidates && duplicateCandidates > 0
-          ? ` · ${duplicateCandidates} near-duplicate pair${duplicateCandidates === 1 ? '' : 's'} flagged`
+          ? t('page.wiki.garden.duplicates', { n: duplicateCandidates })
           : '';
       setGardenMsg(
         created === 0
-          ? `Gardener found nothing to propose.${dup}${trunc}`
-          : `Staged ${created} proposal${created === 1 ? '' : 's'}${skipped ? ` (${skipped} skipped)` : ''} — review them under Proposals.${dup}${trunc}`,
+          ? `${t('page.wiki.garden.nothing')}${dup}${trunc}`
+          : `${t('page.wiki.garden.staged', { n: created })}${skipped ? t('page.wiki.garden.skipped', { n: skipped }) : ''}${t('page.wiki.garden.review')}${dup}${trunc}`,
       );
     } catch (e) {
       if (!mountedRef.current) return;
       setGardenMsg(
-        `Gardener failed: ${e instanceof Error ? e.message : String(e)}`,
+        t('page.wiki.garden.failed', { error: e instanceof Error ? e.message : String(e) }),
       );
     } finally {
       if (mountedRef.current) setGardening(false);
@@ -152,14 +154,14 @@ export function WikiPage() {
     try {
       const cfg = await api.getBackupConfig();
       if (!cfg.connected || !cfg.repo) {
-        setGardenMsg('Connect a GitHub repo in Settings → “Wiki sync (GitHub)” first.');
+        setGardenMsg(t('page.wiki.backup.notConnected'));
         return;
       }
       setBackingUp(true);
       const r = await api.runBackupSync();
-      setGardenMsg(r.pushed ? 'Backed up the wiki to GitHub.' : r.message);
+      setGardenMsg(r.pushed ? t('page.wiki.backup.done') : r.message);
     } catch (e) {
-      setGardenMsg(`Backup failed: ${e instanceof Error ? e.message : String(e)}`);
+      setGardenMsg(t('page.wiki.backup.failed', { error: e instanceof Error ? e.message : String(e) }));
     } finally {
       setBackingUp(false);
     }
@@ -193,7 +195,7 @@ export function WikiPage() {
     notifications.start({
       id: notifId,
       kind: 'wiki-analyze',
-      title: `Analyzing ${project.name}`,
+      title: t('page.wiki.analyzing', { name: project.name }),
       meta: { projectId: project.id, projectName: project.name },
     });
     void (async () => {
@@ -302,7 +304,7 @@ export function WikiPage() {
         <div className="pl-6 pr-[244px] py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-lg font-semibold">Wiki</h1>
+              <h1 className="text-lg font-semibold">{t('page.wiki.title')}</h1>
               <p className="mt-0.5 text-[11px] text-[var(--color-ink-muted)] font-mono">
                 {overview?.wikiRoot ?? '~/.pinloom/wiki'}
               </p>
@@ -313,17 +315,17 @@ export function WikiPage() {
               )}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <Tooltip label="Sync from a session" side="bottom">
+              <Tooltip label={t('page.wiki.tooltip.sync')} side="bottom">
                 <button
                   onClick={() => setShowSyncPicker(true)}
                   className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
                 >
                   <RefreshCw size={12} />
-                  Sync
+                  {t('page.wiki.sync')}
                 </button>
               </Tooltip>
               <Tooltip
-                label="Analyze a project's codebase for conventions"
+                label={t('page.wiki.tooltip.analyze')}
                 side="bottom"
               >
                 <button
@@ -331,16 +333,16 @@ export function WikiPage() {
                   className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
                 >
                   <Sparkles size={12} />
-                  Analyze
+                  {t('page.wiki.analyze')}
                 </button>
               </Tooltip>
-              <Tooltip label="Review gardener proposals" side="bottom">
+              <Tooltip label={t('page.wiki.tooltip.proposals')} side="bottom">
                 <Link
                   to="/wiki/proposals"
                   className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
                 >
                   <Inbox size={12} />
-                  Proposals
+                  {t('page.wiki.proposals')}
                   {pendingProposals.length > 0 && (
                     <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-[10px] font-semibold text-black">
                       {pendingProposals.length}
@@ -348,13 +350,13 @@ export function WikiPage() {
                   )}
                 </Link>
               </Tooltip>
-              <Tooltip label="Related-notes graph (by meaning)" side="bottom">
+              <Tooltip label={t('page.wiki.tooltip.graph')} side="bottom">
                 <button
                   onClick={() => setShowGraph(true)}
                   className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)]"
                 >
                   <Share2 size={12} />
-                  Graph
+                  {t('page.wiki.graph')}
                 </button>
               </Tooltip>
               <input
@@ -371,10 +373,10 @@ export function WikiPage() {
               />
               {/* Utility / less-frequent actions, tucked behind one button. */}
               <div className="relative" ref={moreRef}>
-                <Tooltip label="More actions" side="bottom">
+                <Tooltip label={t('page.wiki.moreActions')} side="bottom">
                   <button
                     onClick={() => setMoreOpen((v) => !v)}
-                    aria-label="More actions"
+                    aria-label={t('page.wiki.moreActions')}
                     className="flex items-center rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1.5 text-xs hover:border-[var(--color-accent)]"
                   >
                     <MoreHorizontal size={14} />
@@ -385,7 +387,7 @@ export function WikiPage() {
                     {[
                       {
                         icon: <Sprout size={13} className={gardening ? 'animate-pulse' : ''} />,
-                        label: gardening ? 'Gardening…' : 'Garden (propose cleanups)',
+                        label: gardening ? t('page.wiki.menu.gardening') : t('page.wiki.menu.garden'),
                         onClick: () => {
                           setMoreOpen(false);
                           void runGarden();
@@ -394,13 +396,13 @@ export function WikiPage() {
                       },
                       {
                         icon: <Cloud size={13} className={backingUp ? 'animate-pulse' : ''} />,
-                        label: backingUp ? 'Backing up…' : 'Backup to GitHub',
+                        label: backingUp ? t('page.wiki.menu.backingUp') : t('page.wiki.menu.backup'),
                         onClick: () => void backupToGithub(),
                         disabled: backingUp,
                       },
                       {
                         icon: <FolderOpen size={13} />,
-                        label: 'Open wiki folder',
+                        label: t('page.wiki.menu.openFolder'),
                         onClick: () => {
                           setMoreOpen(false);
                           void handleOpenFolder();
@@ -408,7 +410,7 @@ export function WikiPage() {
                       },
                       {
                         icon: <Download size={13} />,
-                        label: 'Export as zip',
+                        label: t('page.wiki.menu.export'),
                         onClick: () => {
                           setMoreOpen(false);
                           void handleExport();
@@ -416,7 +418,7 @@ export function WikiPage() {
                       },
                       {
                         icon: <Upload size={13} />,
-                        label: 'Import from zip',
+                        label: t('page.wiki.menu.import'),
                         onClick: () => {
                           setMoreOpen(false);
                           importInputRef.current?.click();
@@ -424,7 +426,7 @@ export function WikiPage() {
                       },
                       {
                         icon: <RefreshCw size={13} />,
-                        label: 'Reload',
+                        label: t('page.wiki.menu.reload'),
                         onClick: () => {
                           setMoreOpen(false);
                           void refresh();
@@ -452,7 +454,7 @@ export function WikiPage() {
             <button
               type="button"
               onClick={() => setFiltersCollapsed((v) => !v)}
-              title={filtersCollapsed ? 'Expand filters' : 'Collapse filters'}
+              title={filtersCollapsed ? t('page.wiki.expandFilters') : t('page.wiki.collapseFilters')}
               className="mt-0.5 shrink-0 rounded p-1 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)]"
             >
               {filtersCollapsed ? (
@@ -470,12 +472,12 @@ export function WikiPage() {
                 }`}
               >
                 <FilterPill
-                  label="All"
+                  label={t('page.wiki.filter.all')}
                   active={scope === null}
                   onClick={() => setScope(null)}
                 />
                 <FilterPill
-                  label="global"
+                  label={t('page.wiki.filter.global')}
                   active={scope === 'global'}
                   onClick={() => setScope(scope === 'global' ? null : 'global')}
                   tone="muted"
@@ -503,10 +505,10 @@ export function WikiPage() {
                   }`}
                 >
                   <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mr-1">
-                    Topics
+                    {t('page.wiki.topics')}
                   </span>
                   <FilterPill
-                    label="any"
+                    label={t('page.wiki.filter.any')}
                     active={topic === null}
                     onClick={() => setTopic(null)}
                     tone="muted"
@@ -529,7 +531,7 @@ export function WikiPage() {
 
         {lastSyncSummary && (
           <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-2 text-[11px] text-[var(--color-ink-muted)]">
-            <span className="font-medium text-[var(--color-ink)]">Last sync:</span>{' '}
+            <span className="font-medium text-[var(--color-ink)]">{t('page.wiki.lastSync')}</span>{' '}
             {lastSyncSummary.length > 240
               ? `${lastSyncSummary.slice(0, 240)}…`
               : lastSyncSummary}
@@ -537,7 +539,7 @@ export function WikiPage() {
         )}
         {lastAnalyzeSummary && (
           <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-2 text-[11px] text-[var(--color-ink-muted)]">
-            <span className="font-medium text-[var(--color-ink)]">Last analysis:</span>{' '}
+            <span className="font-medium text-[var(--color-ink)]">{t('page.wiki.lastAnalysis')}</span>{' '}
             {lastAnalyzeSummary.length > 240
               ? `${lastAnalyzeSummary.slice(0, 240)}…`
               : lastAnalyzeSummary}
@@ -552,12 +554,12 @@ export function WikiPage() {
 
       <div className="flex-1 overflow-auto">
         {loading ? (
-          <div className="p-8 text-sm text-[var(--color-ink-muted)]">Loading wiki…</div>
+          <div className="p-8 text-sm text-[var(--color-ink-muted)]">{t('page.wiki.loading')}</div>
         ) : filtered.length === 0 ? (
           <div className="p-8 text-sm text-[var(--color-ink-muted)]">
             {pages.length === 0
-              ? 'No pages yet. Run a wiki sync from any session to populate.'
-              : 'No pages match the current filters.'}
+              ? t('page.wiki.emptyNoPages')
+              : t('page.wiki.emptyNoMatch')}
           </div>
         ) : (
           <div className="px-6 py-4 space-y-6">
@@ -655,6 +657,7 @@ function ImportModeModal({
   onCancel,
   onConfirm,
 }: ImportModeModalProps) {
+  const t = useT();
   return (
     <div
       className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
@@ -664,13 +667,13 @@ function ImportModeModal({
         className="w-[420px] max-w-[90vw] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-2 text-sm font-semibold">Import wiki</div>
+        <div className="mb-2 text-sm font-semibold">{t('page.wiki.import.title')}</div>
         <div className="mb-3 text-[11px] text-[var(--color-ink-muted)] font-mono truncate">
           {fileName}
         </div>
         <p className="mb-4 text-xs text-[var(--color-ink-muted)]">
-          The current wiki is automatically backed up to{' '}
-          <span className="font-mono">~/.pinloom/wiki-backups/</span> before any change.
+          {t('page.wiki.import.backupNotice.before')}{' '}
+          <span className="font-mono">~/.pinloom/wiki-backups/</span> {t('page.wiki.import.backupNotice.after')}
         </p>
         <div className="flex flex-col gap-2">
           <button
@@ -678,9 +681,9 @@ function ImportModeModal({
             onClick={() => onConfirm('skip')}
             className="rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-3 py-2 text-left text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
           >
-            <div className="font-medium">Skip duplicates</div>
+            <div className="font-medium">{t('page.wiki.import.skip')}</div>
             <div className="text-[10px] text-[var(--color-ink-muted)]">
-              Existing files are kept; only new files are added.
+              {t('page.wiki.import.skipDesc')}
             </div>
           </button>
           <button
@@ -688,9 +691,9 @@ function ImportModeModal({
             onClick={() => onConfirm('overwrite')}
             className="rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-3 py-2 text-left text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
           >
-            <div className="font-medium">Overwrite duplicates</div>
+            <div className="font-medium">{t('page.wiki.import.overwrite')}</div>
             <div className="text-[10px] text-[var(--color-ink-muted)]">
-              Existing files with the same path are replaced. Files not in the zip stay untouched.
+              {t('page.wiki.import.overwriteDesc')}
             </div>
           </button>
         </div>
@@ -700,7 +703,7 @@ function ImportModeModal({
             onClick={onCancel}
             className="text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-50"
           >
-            {busy ? 'Importing…' : 'Cancel'}
+            {busy ? t('page.wiki.import.importing') : t('page.wiki.import.cancel')}
           </button>
         </div>
       </div>

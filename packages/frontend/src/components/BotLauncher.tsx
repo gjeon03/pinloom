@@ -5,6 +5,7 @@ import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { Tooltip } from './Tooltip.js';
 import { useFeatures } from '../stores/uiConfig.js';
+import { useT } from '../i18n/t.js';
 
 // Seed the target session's composer draft (read by ChatView on mount) so the
 // user lands with the scope already stated. Prepends, never clobbers.
@@ -19,6 +20,7 @@ function seedDraft(sessionId: string, hint: string) {
 }
 
 export function BotLauncher() {
+  const t = useT();
   const navigate = useNavigate();
   const features = useFeatures();
   const [busy, setBusy] = useState(false);
@@ -96,12 +98,12 @@ export function BotLauncher() {
   return (
     <>
       {features.scheduleBot && (
-      <Tooltip label="Schedule bot">
+      <Tooltip label={t('cmp.bot.schedule')}>
         <button
           type="button"
           onClick={() => void openSchedule()}
           disabled={busy}
-          aria-label="Schedule bot"
+          aria-label={t('cmp.bot.schedule')}
           className={btnClass}
         >
           <CalendarClock size={16} />
@@ -111,12 +113,12 @@ export function BotLauncher() {
 
       {features.skillBot && (
       <div ref={wrapRef} className="relative">
-        <Tooltip label="Skill bot">
+        <Tooltip label={t('cmp.bot.skill')}>
           <button
             type="button"
             onClick={() => void toggleSkill()}
             disabled={busy}
-            aria-label="Skill bot"
+            aria-label={t('cmp.bot.skill')}
             className={btnClass}
           >
             <Wrench size={16} />
@@ -125,24 +127,24 @@ export function BotLauncher() {
         {skillOpen && (
           <div className="absolute right-0 mt-1 w-56 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-lg z-50">
             <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-              Skill scope
+              {t('cmp.bot.skillScope')}
             </div>
             <button
               type="button"
               onClick={() => void openSkill(null)}
               className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-[var(--color-surface-2)]"
             >
-              Global (all projects)
+              {t('cmp.bot.globalAllProjects')}
             </button>
             <div className="my-1 border-t border-[var(--color-border)]" />
             <div className="max-h-56 overflow-y-auto">
               {projects === null ? (
                 <div className="px-2 py-1.5 text-xs text-[var(--color-ink-muted)]">
-                  Loading…
+                  {t('cmp.bot.loading')}
                 </div>
               ) : projects.length === 0 ? (
                 <div className="px-2 py-1.5 text-xs text-[var(--color-ink-muted)]">
-                  No projects
+                  {t('cmp.bot.noProjects')}
                 </div>
               ) : (
                 projects.map((p) => (

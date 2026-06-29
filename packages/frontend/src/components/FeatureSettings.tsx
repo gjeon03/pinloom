@@ -6,43 +6,16 @@ import {
   setPicker,
   setUiLocale,
 } from '../stores/uiConfig.js';
+import { useT } from '../i18n/t.js';
 import { CLAUDE_MODELS } from './ModelPicker.js';
 
-// Feature toggles grouped for the settings UI. Names stay English (proper
-// nouns); descriptions/tooltips are translated in the i18n phase.
-const FEATURE_GROUPS: { group: string; items: { key: FeatureKey; label: string }[] }[] = [
-  {
-    group: 'Workspace',
-    items: [
-      { key: 'teams', label: 'Teams' },
-      { key: 'wiki', label: 'Wiki' },
-      { key: 'timeline', label: 'Timeline' },
-      { key: 'recap', label: 'Recap' },
-    ],
-  },
-  {
-    group: 'Session side rail',
-    items: [
-      { key: 'history', label: 'History' },
-      { key: 'pins', label: 'Pins' },
-      { key: 'sessionWikiTab', label: 'Session Wiki tab' },
-    ],
-  },
-  {
-    group: 'Tools',
-    items: [
-      { key: 'globalSearch', label: 'Global search (⌘K)' },
-      { key: 'templates', label: 'Prompt templates' },
-      { key: 'notepad', label: 'Notepad' },
-    ],
-  },
-  {
-    group: 'Bots',
-    items: [
-      { key: 'scheduleBot', label: 'Schedule bot' },
-      { key: 'skillBot', label: 'Skill bot' },
-    ],
-  },
+// Feature toggles grouped for the settings UI. Labels resolve via t('feature.*')
+// — names stay English (proper nouns); group headers + descriptions translate.
+const FEATURE_GROUPS: { group: string; items: FeatureKey[] }[] = [
+  { group: 'workspace', items: ['teams', 'wiki', 'timeline', 'recap'] },
+  { group: 'sideRail', items: ['history', 'pins', 'sessionWikiTab'] },
+  { group: 'tools', items: ['globalSearch', 'templates', 'notepad'] },
+  { group: 'bots', items: ['scheduleBot', 'skillBot'] },
 ];
 
 const EFFORT_VALUES: (ReasoningEffort | 'default')[] = [
@@ -90,6 +63,7 @@ const selectClass =
   'rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs';
 
 export function FeatureSettings() {
+  const t = useT();
   const config = useUiConfig();
   const { features, pickers, preset } = config;
 
@@ -98,10 +72,10 @@ export function FeatureSettings() {
       {/* Preset */}
       <section>
         <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-          Preset
+          {t('settings.preset')}
         </h3>
         <p className="text-xs text-[var(--color-ink-muted)] mb-2">
-          Start point for which features are visible. Toggling anything below switches to Custom.
+          {t('settings.preset.desc')}
         </p>
         <div className="flex gap-2">
           {(['simple', 'full', 'custom'] as const).map((p) => (
@@ -116,7 +90,7 @@ export function FeatureSettings() {
                   : 'border-[var(--color-border)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
               } ${p === 'custom' && preset !== 'custom' ? 'opacity-50 cursor-default' : ''}`}
             >
-              {p === 'simple' ? 'Simple' : p === 'full' ? 'Full' : 'Custom'}
+              {t(`settings.preset.${p}`)}
             </button>
           ))}
         </div>
@@ -125,20 +99,22 @@ export function FeatureSettings() {
       {/* Features */}
       <section>
         <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-          Features
+          {t('settings.features')}
         </h3>
         <p className="text-xs text-[var(--color-ink-muted)] mb-3">
-          Turning a feature off hides it everywhere. Your data is kept — turning it back on restores access.
+          {t('settings.features.desc')}
         </p>
         <div className="space-y-4">
           {FEATURE_GROUPS.map(({ group, items }) => (
             <div key={group}>
-              <div className="text-[11px] text-[var(--color-ink-muted)] mb-1">{group}</div>
+              <div className="text-[11px] text-[var(--color-ink-muted)] mb-1">
+                {t(`settings.group.${group}`)}
+              </div>
               <div className="divide-y divide-[var(--color-border)]">
-                {items.map(({ key, label }) => (
+                {items.map((key) => (
                   <Toggle
                     key={key}
-                    label={label}
+                    label={t(`feature.${key}`)}
                     checked={features[key]}
                     onChange={(v) => void setFeature(key, v)}
                   />
@@ -152,15 +128,15 @@ export function FeatureSettings() {
       {/* Defaults (pickers) */}
       <section>
         <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-          Defaults
+          {t('settings.defaults')}
         </h3>
         <p className="text-xs text-[var(--color-ink-muted)] mb-3">
-          Show the per-session picker, or fix a value and hide the picker.
+          {t('settings.defaults.desc')}
         </p>
         <div className="space-y-3 text-sm">
           {/* Model */}
           <div className="flex items-center justify-between gap-3">
-            <span>Model</span>
+            <span>{t('settings.model')}</span>
             <select
               className={selectClass}
               value={pickers.model.mode === 'shown' ? '__shown__' : pickers.model.fixed}
@@ -172,17 +148,17 @@ export function FeatureSettings() {
                 });
               }}
             >
-              <option value="__shown__">Show picker</option>
+              <option value="__shown__">{t('settings.showPicker')}</option>
               {CLAUDE_MODELS.filter((m) => m.id).map((m) => (
                 <option key={m.id} value={m.id as string}>
-                  Fixed: {m.label}
+                  {t('settings.fixed', { value: m.label })}
                 </option>
               ))}
             </select>
           </div>
           {/* Effort */}
           <div className="flex items-center justify-between gap-3">
-            <span>Effort</span>
+            <span>{t('settings.effort')}</span>
             <select
               className={selectClass}
               value={pickers.effort.mode === 'shown' ? '__shown__' : pickers.effort.fixed}
@@ -196,17 +172,17 @@ export function FeatureSettings() {
                 });
               }}
             >
-              <option value="__shown__">Show picker</option>
+              <option value="__shown__">{t('settings.showPicker')}</option>
               {EFFORT_VALUES.map((e) => (
                 <option key={e} value={e}>
-                  Fixed: {e}
+                  {t('settings.fixed', { value: e })}
                 </option>
               ))}
             </select>
           </div>
           {/* Transport */}
           <div className="flex items-center justify-between gap-3">
-            <span>New-session mode</span>
+            <span>{t('settings.transport')}</span>
             <select
               className={selectClass}
               value={pickers.transport.mode === 'shown' ? '__shown__' : pickers.transport.fixed}
@@ -218,9 +194,13 @@ export function FeatureSettings() {
                 });
               }}
             >
-              <option value="__shown__">Show picker</option>
-              <option value="terminal">Fixed: Terminal</option>
-              <option value="sdk">Fixed: SDK (chat)</option>
+              <option value="__shown__">{t('settings.showPicker')}</option>
+              <option value="terminal">
+                {t('settings.fixed', { value: t('settings.transport.terminal') })}
+              </option>
+              <option value="sdk">
+                {t('settings.fixed', { value: t('settings.transport.sdk') })}
+              </option>
             </select>
           </div>
         </div>
@@ -229,7 +209,7 @@ export function FeatureSettings() {
       {/* Language */}
       <section>
         <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-          Language
+          {t('settings.language')}
         </h3>
         <div className="flex gap-2">
           {(['en', 'ko'] as const).map((l) => (

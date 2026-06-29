@@ -6,6 +6,7 @@ import { ArrowLeft, Archive, FileEdit, Check, X, AlertTriangle } from 'lucide-re
 import type { WikiProposal } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { cacheKeys } from '../api/cacheKeys.js';
+import { useT } from '../i18n/t.js';
 
 // Wiki gardener review inbox (knowledge-system v2 Phase 2). Lists pending
 // proposals, shows a before/after diff, and lets the user accept (applies via
@@ -20,16 +21,17 @@ function KindIcon({ kind }: { kind: WikiProposal['kind'] }) {
 // proposal would produce (after). Added lines are green (+), removed red (−),
 // context grey — so it's obvious WHAT changed, not just two full blobs.
 function DiffView({ before, after }: { before: string | null; after: string | null }) {
+  const t = useT();
   const parts = useMemo(() => diffLines(before ?? '', after ?? ''), [before, after]);
   const adds = parts.filter((p) => p.added).reduce((n, p) => n + (p.count ?? 0), 0);
   const dels = parts.filter((p) => p.removed).reduce((n, p) => n + (p.count ?? 0), 0);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 px-1 py-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-        Diff
+        {t('page.proposals.diff')}
         {adds > 0 && <span className="text-emerald-400">+{adds}</span>}
         {dels > 0 && <span className="text-[#f7768e]">−{dels}</span>}
-        {after === null && <span className="text-[#f7768e]">page removed → archive</span>}
+        {after === null && <span className="text-[#f7768e]">{t('page.proposals.pageRemoved')}</span>}
       </div>
       <div className="flex-1 overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] font-mono text-[11px] leading-relaxed">
         {parts.map((part, i) => {
@@ -63,6 +65,7 @@ function ProposalDetail({
   id: string;
   onResolved: () => void;
 }) {
+  const t = useT();
   const { data: diff, isLoading } = useSWR(cacheKeys.wikiProposalDiff(id), () =>
     api.getWikiProposalDiff(id),
   );
@@ -70,7 +73,7 @@ function ProposalDetail({
   const [error, setError] = useState<string | null>(null);
 
   if (isLoading || !diff) {
-    return <div className="p-4 text-sm text-[var(--color-ink-muted)]">Loading…</div>;
+    return <div className="p-4 text-sm text-[var(--color-ink-muted)]">{t('page.proposals.loading')}</div>;
   }
   const { proposal, before, after, stale } = diff;
   const blocked = stale || diff.error !== null || proposal.status !== 'pending';
@@ -106,8 +109,7 @@ function ProposalDetail({
 
       {stale && (
         <div className="flex items-center gap-1.5 rounded border border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-[11px] text-yellow-300">
-          <AlertTriangle size={12} /> The page changed since this proposal — it
-          can't be applied. Regenerate it.
+          <AlertTriangle size={12} /> {t('page.proposals.stale')}
         </div>
       )}
       {diff.error && (
@@ -125,14 +127,14 @@ function ProposalDetail({
           disabled={busy || blocked}
           className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-black disabled:opacity-40"
         >
-          <Check size={13} /> Accept
+          <Check size={13} /> {t('page.proposals.accept')}
         </button>
         <button
           onClick={() => act('reject')}
           disabled={busy || proposal.status !== 'pending'}
           className="flex items-center gap-1.5 rounded border border-[var(--color-border)] px-3 py-1.5 text-xs hover:border-[#f7768e] hover:text-[#f7768e] disabled:opacity-40"
         >
-          <X size={13} /> Reject
+          <X size={13} /> {t('page.proposals.reject')}
         </button>
       </div>
     </div>
@@ -140,6 +142,7 @@ function ProposalDetail({
 }
 
 export function WikiProposalsPage() {
+  const t = useT();
   const {
     data: proposals = [],
     error,
@@ -163,25 +166,24 @@ export function WikiProposalsPage() {
           to="/wiki"
           className="inline-flex items-center gap-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
         >
-          <ArrowLeft size={12} /> Wiki
+          <ArrowLeft size={12} /> {t('page.wiki.title')}
         </Link>
-        <h1 className="mt-0.5 text-lg font-semibold">Gardener proposals</h1>
+        <h1 className="mt-0.5 text-lg font-semibold">{t('page.proposals.heading')}</h1>
         <p className="text-[11px] text-[var(--color-ink-muted)]">
-          Review and apply the gardener's suggested wiki cleanups. Accepting
-          applies the change; rejecting discards it. Nothing is auto-applied.
+          {t('page.proposals.intro')}
         </p>
       </div>
 
       {error ? (
         <div className="p-6 text-sm text-[#f7768e]">
-          Failed to load proposals:{' '}
+          {t('page.proposals.loadFailed')}{' '}
           {error instanceof Error ? error.message : String(error)}
         </div>
       ) : isLoading ? (
-        <div className="p-6 text-sm text-[var(--color-ink-muted)]">Loading…</div>
+        <div className="p-6 text-sm text-[var(--color-ink-muted)]">{t('page.proposals.loading')}</div>
       ) : proposals.length === 0 ? (
         <div className="p-6 text-sm text-[var(--color-ink-muted)]">
-          No pending proposals.
+          {t('page.proposals.empty')}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">

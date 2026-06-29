@@ -29,6 +29,7 @@ import { AgentBadge } from '../components/AgentBadge.js';
 import { DirectoryPicker } from '../components/DirectoryPicker.js';
 import { GroupedSessionList } from '../components/GroupedSessionList.js';
 import { useGroupedSessions } from '../hooks/useGroupedSessions.js';
+import { useT, type TFn } from '../i18n/t.js';
 
 function basenameOfPath(path: string): string {
   const trimmed = path.replace(/\/+$/, '');
@@ -55,29 +56,31 @@ interface SessionLabel {
 function formatSessionLabel(
   sessionId: string | null | undefined,
   lookup: SessionLookup,
+  t: TFn,
 ): SessionLabel {
   // A team can end up with a null/missing session id (e.g. its orchestrator
   // session was deleted) — guard so one bad row doesn't crash the whole page.
   if (!sessionId) {
-    return { title: '(no session)', subtitle: '—', agent: null };
+    return { title: t('page.teams.noSession'), subtitle: '—', agent: null };
   }
   const session = lookup.sessionsById[sessionId];
   if (!session) {
     return {
-      title: '(deleted session)',
+      title: t('page.teams.deletedSession'),
       subtitle: sessionId.slice(0, 8),
       agent: null,
     };
   }
   const project = lookup.projectsById[session.projectId];
   return {
-    title: session.title ?? `Chat ${session.id.slice(0, 6)}`,
-    subtitle: project?.name ?? '(unknown project)',
+    title: session.title ?? t('page.teams.chatFallback', { id: session.id.slice(0, 6) }),
+    subtitle: project?.name ?? t('page.teams.unknownProject'),
     agent: session.agent,
   };
 }
 
 export function TeamsPage() {
+  const t = useT();
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectGroups, setProjectGroups] = useState<ProjectGroup[]>([]);
@@ -138,12 +141,10 @@ export function TeamsPage() {
       <div className="max-w-4xl mx-auto px-6 py-8">
         <div className="flex items-center gap-2 mb-2">
           <Users size={18} className="text-[var(--color-ink-muted)]" />
-          <h1 className="text-lg font-semibold">Teams</h1>
+          <h1 className="text-lg font-semibold">{t('page.teams.title')}</h1>
         </div>
         <p className="text-xs text-[var(--color-ink-muted)] mb-6 max-w-prose">
-          Group an orchestrator session with worker sessions so the orchestrator
-          can dispatch tasks across them by alias. Workers stay usable as
-          standalone sessions — team membership is additive.
+          {t('page.teams.intro')}
         </p>
 
         <CreateTeamPanel
@@ -158,7 +159,7 @@ export function TeamsPage() {
             <button
               type="button"
               onClick={() => setError(null)}
-              aria-label="Dismiss"
+              aria-label={t('page.teams.dismiss')}
               className="ml-2"
             >
               <X size={12} />
@@ -167,10 +168,10 @@ export function TeamsPage() {
         )}
 
         {teams === null ? (
-          <p className="text-sm text-[var(--color-ink-muted)]">Loading…</p>
+          <p className="text-sm text-[var(--color-ink-muted)]">{t('page.teams.loading')}</p>
         ) : teams.length === 0 ? (
           <p className="text-sm text-[var(--color-ink-muted)]">
-            No teams yet. Create one above.
+            {t('page.teams.empty')}
           </p>
         ) : (
           <ul className="space-y-3">
@@ -201,6 +202,7 @@ function CreateTeamPanel({
   onCreated,
   onError,
 }: CreateTeamPanelProps) {
+  const t = useT();
   const [name, setName] = useState('');
   const [pickingOrchestrator, setPickingOrchestrator] = useState(false);
   const [orchestratorId, setOrchestratorId] = useState<string | null>(null);
@@ -246,13 +248,13 @@ function CreateTeamPanel({
   }
 
   const orchLabel = orchestratorId
-    ? formatSessionLabel(orchestratorId, enrichedLookup)
+    ? formatSessionLabel(orchestratorId, enrichedLookup, t)
     : null;
 
   return (
     <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 mb-6">
       <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1.5">
-        Create new team
+        {t('page.teams.createNew')}
       </label>
       <div className="flex gap-2 items-center">
         <input
@@ -262,7 +264,7 @@ function CreateTeamPanel({
           onKeyDown={(e) => {
             if (e.key === 'Enter') create();
           }}
-          placeholder="Team name (e.g. payments-feature)"
+          placeholder={t('page.teams.namePlaceholder')}
           className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)]"
         />
         <button
@@ -278,7 +280,7 @@ function CreateTeamPanel({
               <span className="truncate">{orchLabel.title}</span>
             </>
           ) : (
-            <span>Pick orchestrator…</span>
+            <span>{t('page.teams.pickOrchestrator')}</span>
           )}
         </button>
         <button
@@ -288,24 +290,24 @@ function CreateTeamPanel({
           className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
         >
           <Plus size={12} />
-          Create
+          {t('page.teams.create')}
         </button>
       </div>
       <div className="mt-2">
         {showInstructions ? (
           <div>
             <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-              Orchestrator briefing <span className="normal-case">(optional)</span>
+              {t('page.teams.orchBriefing')} <span className="normal-case">{t('page.teams.optional')}</span>
             </label>
             <textarea
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
               rows={3}
-              placeholder="e.g. You're the PM. Synthesize across workers, escalate blockers, never auto-merge."
+              placeholder={t('page.teams.orchBriefingPlaceholder')}
               className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm resize-y"
             />
             <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
-              Injected into the orchestrator's system prompt every turn.
+              {t('page.teams.orchBriefingHint')}
             </p>
           </div>
         ) : (
@@ -314,14 +316,14 @@ function CreateTeamPanel({
             onClick={() => setShowInstructions(true)}
             className="text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
           >
-            + Add orchestrator briefing (optional)
+            {t('page.teams.addOrchBriefing')}
           </button>
         )}
       </div>
 
       {pickingOrchestrator && (
         <SessionPickerModal
-          title="Pick orchestrator session"
+          title={t('page.teams.pickOrchestratorSession')}
           lookup={enrichedLookup}
           /* The new team has no current orchestrator yet — only show free sessions. */
           allowSessionId={null}
@@ -346,6 +348,7 @@ interface TeamCardProps {
 }
 
 function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
+  const t = useT();
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(team.name);
   const [showAddMember, setShowAddMember] = useState(false);
@@ -398,7 +401,7 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
   }
 
   async function deleteThisTeam() {
-    if (!confirm('Delete this team? Member sessions are preserved.')) return;
+    if (!confirm(t('page.teams.deleteConfirm'))) return;
     try {
       await api.deleteTeam(team.id);
       onChanged();
@@ -430,7 +433,7 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
               <button
                 type="button"
                 onClick={saveName}
-                aria-label="Save"
+                aria-label={t('page.teams.save')}
                 className="text-[var(--color-accent)]"
               >
                 <Check size={14} />
@@ -452,18 +455,18 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
         </div>
         <Link
           to={`/teams/${team.id}`}
-          aria-label="Open canvas"
-          title="Open canvas"
+          aria-label={t('page.teams.openCanvas')}
+          title={t('page.teams.openCanvas')}
           className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1"
         >
           <Network size={12} />
-          Canvas
+          {t('page.teams.canvas')}
         </Link>
         <button
           type="button"
           onClick={deleteThisTeam}
-          aria-label="Delete team"
-          title="Delete team"
+          aria-label={t('page.teams.deleteTeam')}
+          title={t('page.teams.deleteTeam')}
           className="text-[var(--color-ink-muted)] hover:text-red-400"
         >
           <Trash2 size={14} />
@@ -471,7 +474,7 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
       </div>
 
       <div className="space-y-2">
-        <Section label="Orchestrator">
+        <Section label={t('page.teams.orchestrator')}>
           <div className="flex items-center gap-2">
             <SessionRow
               sessionId={team.orchestratorSessionId}
@@ -483,19 +486,19 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
               onClick={() => setShowOrchestratorPicker(true)}
               className="rounded border border-[var(--color-border)] px-2 py-1.5 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]"
             >
-              Change
+              {t('page.teams.change')}
             </button>
           </div>
         </Section>
 
-        <Section label="Briefing">
+        <Section label={t('page.teams.briefing')}>
           {editingBriefing ? (
             <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2 space-y-2">
               <textarea
                 value={briefingDraft}
                 onChange={(e) => setBriefingDraft(e.target.value)}
                 rows={3}
-                placeholder="Optional. Identity, priorities, do/don'ts for the orchestrator."
+                placeholder={t('page.teams.briefingPlaceholder')}
                 className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs resize-y"
               />
               <div className="flex justify-end gap-2">
@@ -507,7 +510,7 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
                   }}
                   className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
                 >
-                  Cancel
+                  {t('page.teams.cancel')}
                 </button>
                 <button
                   type="button"
@@ -515,7 +518,7 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
                   disabled={savingBriefing}
                   className="rounded bg-[var(--color-accent)] text-black px-2 py-1 text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Save
+                  {t('page.teams.save')}
                 </button>
               </div>
             </div>
@@ -523,7 +526,7 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
             <button
               type="button"
               onClick={() => setEditingBriefing(true)}
-              title="Edit briefing"
+              title={t('page.teams.editBriefing')}
               className="w-full text-left rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs hover:border-[var(--color-accent)]"
             >
               <span className="text-[var(--color-ink-muted)] line-clamp-2 whitespace-pre-line">
@@ -537,15 +540,15 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
               className="rounded border border-dashed border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] w-full text-left flex items-center gap-1.5"
             >
               <Plus size={12} />
-              Add briefing
+              {t('page.teams.addBriefing')}
             </button>
           )}
         </Section>
 
-        <Section label={`Workers (${team.members.length})`}>
+        <Section label={t('page.teams.workers', { n: team.members.length })}>
           {team.members.length === 0 && (
             <p className="text-xs text-[var(--color-ink-muted)] mb-2">
-              No workers yet.
+              {t('page.teams.noWorkers')}
             </p>
           )}
           <ul className="space-y-1.5">
@@ -566,14 +569,14 @@ function TeamCard({ team, lookup, onChanged, onError }: TeamCardProps) {
             className="mt-2 rounded border border-dashed border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] w-full text-left flex items-center gap-1.5"
           >
             <Plus size={12} />
-            Add worker
+            {t('page.teams.addWorker')}
           </button>
         </Section>
       </div>
 
       {showOrchestratorPicker && (
         <SessionPickerModal
-          title="Change orchestrator"
+          title={t('page.teams.changeOrchestrator')}
           lookup={lookup}
           allowSessionId={team.orchestratorSessionId}
           onClose={() => setShowOrchestratorPicker(false)}
@@ -628,6 +631,7 @@ function OpenSessionButton({
   sessionId: string | null;
   lookup: SessionLookup;
 }) {
+  const t = useT();
   const navigate = useNavigate();
   const session = sessionId ? lookup.sessionsById[sessionId] : null;
   if (!session) return null;
@@ -635,8 +639,8 @@ function OpenSessionButton({
     <button
       type="button"
       onClick={() => gotoSessionTab(navigate, session.projectId, session.id)}
-      aria-label="Open session tab"
-      title="Open session tab"
+      aria-label={t('page.teams.openSessionTab')}
+      title={t('page.teams.openSessionTab')}
       className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] shrink-0"
     >
       <ExternalLink size={11} />
@@ -651,7 +655,8 @@ interface SessionRowProps {
 }
 
 function SessionRow({ sessionId, lookup, alias }: SessionRowProps) {
-  const meta = formatSessionLabel(sessionId, lookup);
+  const t = useT();
+  const meta = formatSessionLabel(sessionId, lookup, t);
   return (
     <div className="flex-1 flex items-center justify-between gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs">
       <div className="flex items-center gap-2 min-w-0">
@@ -684,6 +689,7 @@ function MemberRow({
   onChanged,
   onError,
 }: MemberRowProps) {
+  const t = useT();
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState(member.alias);
   // Instructions / tags edit happens in a small inline panel below the row
@@ -692,7 +698,7 @@ function MemberRow({
   const [instructionsDraft, setInstructionsDraft] = useState(member.instructions ?? '');
   const [tagsDraft, setTagsDraft] = useState(member.tags.join(', '));
   const [savingExtras, setSavingExtras] = useState(false);
-  const meta = formatSessionLabel(member.sessionId, lookup);
+  const meta = formatSessionLabel(member.sessionId, lookup, t);
 
   useEffect(() => {
     setAliasDraft(member.alias);
@@ -761,7 +767,7 @@ function MemberRow({
             <button
               type="button"
               onClick={() => setEditingAlias(true)}
-              title="Edit alias"
+              title={t('page.teams.editAlias')}
               className="font-mono text-[var(--color-accent)] hover:underline shrink-0"
             >
               @{member.alias}
@@ -789,8 +795,8 @@ function MemberRow({
           <button
             type="button"
             onClick={() => setEditingExtras((v) => !v)}
-            aria-label="Edit instructions and tags"
-            title="Edit instructions and tags"
+            aria-label={t('page.teams.editInstructionsTags')}
+            title={t('page.teams.editInstructionsTags')}
             className={`text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] ${
               editingExtras ? 'text-[var(--color-accent)]' : ''
             }`}
@@ -808,8 +814,8 @@ function MemberRow({
                 onError(err instanceof Error ? err.message : String(err));
               }
             }}
-            aria-label="Remove worker"
-            title="Remove worker"
+            aria-label={t('page.teams.removeWorker')}
+            title={t('page.teams.removeWorker')}
             className="text-[var(--color-ink-muted)] hover:text-red-400"
           >
             <X size={12} />
@@ -825,25 +831,25 @@ function MemberRow({
         <div className="border-t border-[var(--color-border)]/50 px-3 py-2 space-y-2">
           <div>
             <label className="block text-[9px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-0.5">
-              Instructions
+              {t('page.teams.instructions')}
             </label>
             <textarea
               value={instructionsDraft}
               onChange={(e) => setInstructionsDraft(e.target.value)}
               rows={3}
-              placeholder="Optional system-prompt-style blurb."
+              placeholder={t('page.teams.instructionsPlaceholder')}
               className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs resize-y"
             />
           </div>
           <div>
             <label className="block text-[9px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-0.5">
-              Tags
+              {t('page.teams.tags')}
             </label>
             <input
               type="text"
               value={tagsDraft}
               onChange={(e) => setTagsDraft(e.target.value)}
-              placeholder="comma, separated"
+              placeholder={t('page.teams.tagsPlaceholder')}
               spellCheck={false}
               className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs font-mono"
             />
@@ -858,7 +864,7 @@ function MemberRow({
               }}
               className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
             >
-              Cancel
+              {t('page.teams.cancel')}
             </button>
             <button
               type="button"
@@ -866,7 +872,7 @@ function MemberRow({
               disabled={savingExtras}
               className="rounded bg-[var(--color-accent)] text-black px-2 py-1 text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Save
+              {t('page.teams.save')}
             </button>
           </div>
         </div>
@@ -916,6 +922,7 @@ function SessionPickerModal({
   onSessionCreated,
   onProjectCreated,
 }: SessionPickerModalProps) {
+  const t = useT();
   const [creating, setCreating] = useState(false);
 
   const candidates = useMemo(() => {
@@ -953,16 +960,16 @@ function SessionPickerModal({
             className="mb-3 w-full rounded border border-dashed border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1.5"
           >
             <Plus size={12} />
-            Create new session
+            {t('page.teams.createNewSession')}
           </button>
           {candidates.length === 0 ? (
             <p className="text-xs text-[var(--color-ink-muted)]">
-              No available sessions to pick from. Create a new one above.
+              {t('page.teams.noAvailableSessions')}
             </p>
           ) : (
             <ul className="space-y-1 max-h-80 overflow-y-auto">
               {candidates.map((s) => {
-                const meta = formatSessionLabel(s.id, lookup);
+                const meta = formatSessionLabel(s.id, lookup, t);
                 return (
                   <li key={s.id}>
                     <button
@@ -1002,6 +1009,7 @@ function AddMemberModal({
   onDone,
   onError,
 }: AddMemberModalProps) {
+  const t = useT();
   const [selected, setSelected] = useState<string | null>(null);
   const [alias, setAlias] = useState('');
   const [creating, setCreating] = useState(false);
@@ -1057,28 +1065,28 @@ function AddMemberModal({
   }
 
   return (
-    <ModalShell title="Add worker" onClose={onClose}>
+    <ModalShell title={t('page.teams.addWorker')} onClose={onClose}>
       <div className="space-y-3">
         <div>
           <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-            Alias
+            {t('page.teams.alias')}
           </label>
           <input
             type="text"
             value={alias}
             onChange={(e) => setAlias(e.target.value)}
-            placeholder="e.g. backend"
+            placeholder={t('page.teams.aliasPlaceholder')}
             spellCheck={false}
             className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
           />
           <p className="mt-1 text-[10px] text-[var(--color-ink-muted)]">
-            Lowercase letters/digits/dash/underscore. Used by orchestrator as
-            <span className="font-mono"> @alias</span>.
+            {t('page.teams.aliasHint.before')}
+            <span className="font-mono"> @alias</span>{t('page.teams.aliasHint.after')}
           </p>
         </div>
         <div>
           <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-            Session
+            {t('page.teams.session')}
           </label>
           {creating ? (
             <NewSessionForm
@@ -1103,14 +1111,14 @@ function AddMemberModal({
                 className="mb-2 w-full rounded border border-dashed border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1.5"
               >
                 <Plus size={12} />
-                Create new session
+                {t('page.teams.createNewSession')}
               </button>
               <GroupedSessionList
                 sections={sections}
                 revealSessionId={revealId}
-                emptyHint="No free sessions. Create one above."
+                emptyHint={t('page.teams.noFreeSessions')}
                 renderSession={(s) => {
-                  const title = s.title ?? `Chat ${s.id.slice(0, 6)}`;
+                  const title = s.title ?? t('page.teams.chatFallback', { id: s.id.slice(0, 6) });
                   const active = selected === s.id;
                   const flash = revealId === s.id;
                   return (
@@ -1139,7 +1147,7 @@ function AddMemberModal({
             onClick={onClose}
             className="rounded border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
           >
-            Cancel
+            {t('page.teams.cancel')}
           </button>
           <button
             type="button"
@@ -1147,7 +1155,7 @@ function AddMemberModal({
             disabled={!selected || !alias.trim()}
             className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Add
+            {t('page.teams.add')}
           </button>
         </div>
       </div>
@@ -1179,6 +1187,7 @@ function NewSessionForm({
   onCreated,
   onProjectCreated,
 }: NewSessionFormProps) {
+  const t = useT();
   // Local copy so a project created inline is immediately visible in the
   // dropdown without round-tripping through the parent.
   const [localProjects, setLocalProjects] = useState<Project[]>(projects);
@@ -1274,14 +1283,14 @@ function NewSessionForm({
     <div className="space-y-2">
       <div>
         <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-          Group <span className="text-[10px]">(optional)</span>
+          {t('page.teams.group')} <span className="text-[10px]">{t('page.teams.optional')}</span>
         </label>
         <select
           value={newProjectGroupId ?? ''}
           onChange={(e) => setNewProjectGroupId(e.target.value || null)}
           className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
         >
-          <option value="">Ungrouped</option>
+          <option value="">{t('page.teams.ungrouped')}</option>
           {sortedGroups.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name}
@@ -1299,8 +1308,7 @@ function NewSessionForm({
       <>
         <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2.5 text-xs">
           <p className="text-[var(--color-ink-muted)]">
-            No projects yet. Pick a directory to start one — pinloom uses it as
-            the session's working directory.
+            {t('page.teams.noProjectsHint')}
           </p>
           {newProjectControls}
           {err && <p className="text-red-400">{err}</p>}
@@ -1310,7 +1318,7 @@ function NewSessionForm({
               onClick={onCancel}
               className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
             >
-              Back
+              {t('page.teams.back')}
             </button>
             <button
               type="button"
@@ -1318,7 +1326,7 @@ function NewSessionForm({
               className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium flex items-center gap-1"
             >
               <Plus size={11} />
-              Pick directory…
+              {t('page.teams.pickDirectory')}
             </button>
           </div>
         </div>
@@ -1337,7 +1345,7 @@ function NewSessionForm({
     <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2.5">
       <div>
         <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-          Project
+          {t('page.teams.project')}
         </label>
         <div className="flex gap-1.5">
           <select
@@ -1355,19 +1363,19 @@ function NewSessionForm({
             <button
               type="button"
               onClick={() => setCreatingProject(true)}
-              title="Create new project"
-              aria-label="Create new project"
+              title={t('page.teams.createNewProject')}
+              aria-label={t('page.teams.createNewProject')}
               className="rounded border border-[var(--color-border)] px-2 py-1.5 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center gap-1"
             >
               <Plus size={11} />
-              New
+              {t('page.teams.new')}
             </button>
           )}
         </div>
         {creatingProject && (
           <div className="mt-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 space-y-2 text-xs">
             <p className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-              New project
+              {t('page.teams.newProject')}
             </p>
             {newProjectControls}
             <div className="flex justify-end gap-1.5">
@@ -1379,7 +1387,7 @@ function NewSessionForm({
                 }}
                 className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
               >
-                Cancel
+                {t('page.teams.cancel')}
               </button>
               <button
                 type="button"
@@ -1387,7 +1395,7 @@ function NewSessionForm({
                 className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium flex items-center gap-1"
               >
                 <Plus size={11} />
-                Pick directory…
+                {t('page.teams.pickDirectory')}
               </button>
             </div>
           </div>
@@ -1395,7 +1403,7 @@ function NewSessionForm({
       </div>
       <div>
         <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-          Agent
+          {t('page.teams.agent')}
         </label>
         <div className="flex gap-1.5">
           {(['claude', 'codex'] as const).map((kind) => (
@@ -1417,13 +1425,13 @@ function NewSessionForm({
       </div>
       <div>
         <label className="block text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] mb-1">
-          Title <span className="text-[10px]">(optional)</span>
+          {t('page.teams.titleLabel')} <span className="text-[10px]">{t('page.teams.optional')}</span>
         </label>
         <input
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Untitled session"
+          placeholder={t('page.teams.untitledSession')}
           className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs"
         />
       </div>
@@ -1436,7 +1444,7 @@ function NewSessionForm({
           onClick={onCancel}
           className="rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
         >
-          Back
+          {t('page.teams.back')}
         </button>
         <button
           type="button"
@@ -1444,7 +1452,7 @@ function NewSessionForm({
           disabled={submitting || !projectId}
           className="rounded bg-[var(--color-accent)] text-black px-2.5 py-1 text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {submitting ? 'Creating…' : 'Create session'}
+          {submitting ? t('page.teams.creatingSession') : t('page.teams.createSession')}
         </button>
       </div>
     </div>
@@ -1467,6 +1475,7 @@ function ModalShell({
   children: React.ReactNode;
   onClose: () => void;
 }) {
+  const t = useT();
   // Escape closes the dialog. Same handler for every modal so behavior is
   // consistent across orchestrator picker / add-member / future surfaces.
   useEffect(() => {
@@ -1494,7 +1503,7 @@ function ModalShell({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('page.teams.close')}
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
           >
             <X size={14} />

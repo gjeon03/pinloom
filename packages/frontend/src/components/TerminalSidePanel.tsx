@@ -30,6 +30,7 @@ import { useFeatures } from '../stores/uiConfig.js';
 import { ActionIconButton, CopyMarkdownButton, PinToggleButton } from './MessageActions.js';
 import { PinnedPanel } from './PinnedPanel.js';
 import { Markdown } from './Markdown.js';
+import { useT } from '../i18n/t.js';
 
 // Right rail for a session, shared by terminal AND structured (SDK) sessions:
 //   - History: the captured turns, with a quick pin toggle. TERMINAL ONLY —
@@ -113,6 +114,7 @@ export function TerminalSidePanel({
   tabs: tabsProp = ALL_TABS,
   position = 'left',
 }: Props) {
+  const t = useT();
   // Hide tabs whose feature is disabled (history / pins / session Wiki tab).
   const features = useFeatures();
   const tabs = tabsProp.filter((t) =>
@@ -314,6 +316,14 @@ export function TerminalSidePanel({
     }
   }, [limit]);
 
+  // If a feature toggle removed the active tab, fall back to the first one left.
+  useEffect(() => {
+    if (tabs.length > 0 && !tabs.includes(tab)) setTab(tabs[0]);
+  }, [tabs, tab]);
+
+  // All rail tabs disabled (history/pins/sessionWikiTab all off) → no rail.
+  if (tabs.length === 0) return null;
+
   function onScroll() {
     const el = scrollRef.current;
     if (!el) return;
@@ -337,8 +347,8 @@ export function TerminalSidePanel({
           ? 'border-b'
           : 'border-t';
   const collapsedTitle = hasHistory
-    ? 'Show history, pins & wiki'
-    : 'Show pins & wiki';
+    ? t('cmp.termPanel.showHistoryPinsWiki')
+    : t('cmp.termPanel.showPinsWiki');
 
   if (collapsed) {
     // Expand chevron points inward (toward the content), per docked edge.
@@ -422,8 +432,8 @@ export function TerminalSidePanel({
         setSidePanelPosition(p);
         setPickerOpen(false);
       }}
-      title={`Dock ${label.toLowerCase()}`}
-      aria-label={`Dock ${label.toLowerCase()}`}
+      title={t('cmp.termPanel.dockTo', { side: label })}
+      aria-label={t('cmp.termPanel.dockTo', { side: label })}
       className={`flex h-9 w-9 items-center justify-center rounded border ${
         position === p
           ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-black'
@@ -459,7 +469,7 @@ export function TerminalSidePanel({
           }
           setDragging(true);
         }}
-        title="Drag to resize"
+        title={t('cmp.termPanel.dragResize')}
         className={`group absolute z-20 ${handleClass} ${
           dragging ? 'bg-[var(--color-accent)]' : ''
         }`}
@@ -472,10 +482,15 @@ export function TerminalSidePanel({
       </div>
       <header className="flex items-center justify-between border-b border-[var(--color-border)] pr-1">
         <div className="flex items-center">
-          {tabs.includes('history') && tabBtn('history', 'History')}
+          {tabs.includes('history') && tabBtn('history', t('cmp.termPanel.tab.history'))}
           {tabs.includes('pins') &&
-            tabBtn('pins', pinCount > 0 ? `Pins ${pinCount}` : 'Pins')}
-          {tabs.includes('wiki') && tabBtn('wiki', 'Wiki')}
+            tabBtn(
+              'pins',
+              pinCount > 0
+                ? t('cmp.termPanel.tab.pinsCount', { n: pinCount })
+                : t('cmp.termPanel.tab.pins'),
+            )}
+          {tabs.includes('wiki') && tabBtn('wiki', t('cmp.termPanel.tab.wiki'))}
         </div>
         <div className="flex items-center gap-0.5">
           {/* Position picker — dock the rail to any edge. */}
@@ -483,8 +498,8 @@ export function TerminalSidePanel({
             <button
               type="button"
               onClick={() => setPickerOpen((v) => !v)}
-              title="Panel position"
-              aria-label="Panel position"
+              title={t('cmp.termPanel.panelPosition')}
+              aria-label={t('cmp.termPanel.panelPosition')}
               className="flex h-8 items-center px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
             >
               <LayoutGrid className="h-4 w-4" />
@@ -507,15 +522,15 @@ export function TerminalSidePanel({
                     }}
                   >
                     <span />
-                    {posBtn('top', PanelTop, 'Top')}
+                    {posBtn('top', PanelTop, t('cmp.termPanel.top'))}
                     <span />
-                    {posBtn('left', PanelLeft, 'Left')}
+                    {posBtn('left', PanelLeft, t('cmp.termPanel.left'))}
                     <span className="flex items-center justify-center text-[9px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-                      Dock
+                      {t('cmp.termPanel.dock')}
                     </span>
-                    {posBtn('right', PanelRight, 'Right')}
+                    {posBtn('right', PanelRight, t('cmp.termPanel.right'))}
                     <span />
-                    {posBtn('bottom', PanelBottom, 'Bottom')}
+                    {posBtn('bottom', PanelBottom, t('cmp.termPanel.bottom'))}
                     <span />
                   </div>
                 </div>
@@ -525,7 +540,7 @@ export function TerminalSidePanel({
           <button
             type="button"
             onClick={() => persistCollapsed(true)}
-            title="Collapse"
+            title={t('cmp.termPanel.collapse')}
             className="flex h-8 items-center px-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
           >
             <CollapseIcon className="h-4 w-4" />
@@ -543,7 +558,7 @@ export function TerminalSidePanel({
           <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto px-2 py-2">
             {rows.length === 0 ? (
               <p className="px-2 py-6 text-center text-xs text-[var(--color-ink-muted)]">
-                Captured turns appear here as you chat.
+                {t('cmp.termPanel.capturedTurns')}
               </p>
             ) : (
               <ul className="flex flex-col gap-1.5">
@@ -558,7 +573,7 @@ export function TerminalSidePanel({
                       }}
                       className="text-[10px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
                     >
-                      Show older ({rows.length - limit})
+                      {t('cmp.termPanel.showOlder', { n: rows.length - limit })}
                     </button>
                   </li>
                 )}
@@ -588,7 +603,7 @@ export function TerminalSidePanel({
                     >
                       <div className="mb-0.5 flex items-center justify-between">
                         <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-                          {isAssistant ? 'Assistant' : 'You'}
+                          {isAssistant ? t('cmp.termPanel.assistant') : t('cmp.termPanel.you')}
                         </span>
                         <div className="flex items-center gap-0.5">
                           <span className="opacity-0 transition-opacity group-hover:opacity-100">
@@ -597,7 +612,7 @@ export function TerminalSidePanel({
                           {long && (
                             <ActionIconButton
                               onClick={() => toggleExpand(m.id)}
-                              title={isOpen ? 'Collapse' : 'Expand'}
+                              title={isOpen ? t('cmp.termPanel.collapse') : t('cmp.termPanel.expand')}
                               size="sm"
                             >
                               {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
@@ -606,7 +621,7 @@ export function TerminalSidePanel({
                           <span className="opacity-0 transition-opacity group-hover:opacity-100">
                             <ActionIconButton
                               onClick={() => setFocusedMessageId(m.id)}
-                              title="View in detail"
+                              title={t('cmp.termPanel.viewDetail')}
                               size="sm"
                             >
                               <Maximize2 size={12} />
@@ -630,7 +645,7 @@ export function TerminalSidePanel({
             )}
           </div>
           <footer className="border-t border-[var(--color-border)]/50 px-3 py-1.5 text-[9px] text-[var(--color-ink-muted)]">
-            Pins apply on the session's next launch (the live TUI keeps its launch-time prompt).
+            {t('cmp.termPanel.pinsFooter')}
           </footer>
           {/* Full-panel detail reader for a captured turn — overlays the list
               (which stays mounted to keep its scroll position) so a long turn
@@ -647,13 +662,13 @@ export function TerminalSidePanel({
               <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-1.5">
                 <ActionIconButton
                   onClick={() => setFocusedMessageId(null)}
-                  title="Back to history (Esc)"
+                  title={t('cmp.termPanel.backToHistory')}
                   size="sm"
                 >
                   <ArrowLeft size={14} />
                 </ActionIconButton>
                 <span className="flex-1 truncate text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-                  {focusedMessage.role === 'assistant' ? 'Assistant' : 'You'}
+                  {focusedMessage.role === 'assistant' ? t('cmp.termPanel.assistant') : t('cmp.termPanel.you')}
                   <span className="ml-1.5 normal-case opacity-70">
                     {new Date(focusedMessage.createdAt).toLocaleString()}
                   </span>
@@ -696,6 +711,7 @@ export function TerminalSidePanel({
 // project's relevant pages with links into the full wiki. Wiki CONTEXT is already
 // injected into the launch prompt by the backend, so this is purely the UI.
 function WikiTab({ sessionId, projectCwd }: { sessionId: string; projectCwd: string }) {
+  const t = useT();
   const navigate = useNavigate();
   const notifications = useNotifications();
   const [syncing, setSyncing] = useState(false);
@@ -726,7 +742,7 @@ function WikiTab({ sessionId, projectCwd }: { sessionId: string; projectCwd: str
     setSyncing(true);
     const id = notifications.start({
       kind: 'wiki-sync',
-      title: 'Wiki sync',
+      title: t('cmp.termPanel.wikiSync'),
       meta: { sessionId },
     });
     try {
@@ -755,32 +771,31 @@ function WikiTab({ sessionId, projectCwd }: { sessionId: string; projectCwd: str
         className="flex items-center justify-center gap-2 rounded border border-[var(--color-accent)]/50 bg-[var(--color-surface-2)] px-3 py-2 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)] disabled:opacity-60"
       >
         <BookPlus className={`h-4 w-4 ${syncing ? 'animate-pulse' : ''}`} />
-        {syncing ? 'Syncing…' : 'Sync this session to wiki'}
+        {syncing ? t('cmp.termPanel.syncing') : t('cmp.termPanel.syncSession')}
       </button>
       <p className="text-[10px] leading-relaxed text-[var(--color-ink-muted)]">
-        Distills durable knowledge from this conversation into the project wiki
-        (~/.pinloom/wiki), which is injected into every future session's prompt.
+        {t('cmp.termPanel.syncDesc')}
       </p>
 
       <div className="flex items-center justify-between border-t border-[var(--color-border)]/50 pt-2">
         <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-          Pages for {slug}
+          {t('cmp.termPanel.pagesFor', { slug })}
         </span>
         <button
           type="button"
           onClick={() => navigate('/wiki')}
           className="flex items-center gap-1 text-[10px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
         >
-          <BookOpen className="h-3 w-3" /> Open wiki
+          <BookOpen className="h-3 w-3" /> {t('cmp.termPanel.openWiki')}
         </button>
       </div>
 
       {error && <p className="text-xs text-red-400">{error}</p>}
       {pages === null ? (
-        <p className="px-1 text-xs text-[var(--color-ink-muted)]">Loading…</p>
+        <p className="px-1 text-xs text-[var(--color-ink-muted)]">{t('cmp.termPanel.loading')}</p>
       ) : relevant.length === 0 ? (
         <p className="px-1 text-xs text-[var(--color-ink-muted)]">
-          No wiki pages for this project yet. Sync above to create some.
+          {t('cmp.termPanel.noWikiPages')}
         </p>
       ) : (
         <ul className="flex flex-col gap-1">

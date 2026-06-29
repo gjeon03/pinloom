@@ -5,6 +5,7 @@ import { FileText, Search } from 'lucide-react';
 import { AppShell } from './components/AppShell.js';
 import { FeatureRoute } from './components/FeatureRoute.js';
 import { useFeatures } from './stores/uiConfig.js';
+import { useT } from './i18n/t.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
 import { GlobalSearchModal } from './components/GlobalSearchModal.js';
 import { PromptTemplatesPanel } from './components/PromptTemplatesPanel.js';
@@ -43,6 +44,7 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const features = useFeatures();
+  const t = useT();
   // Ref so the stable keydown handler always sees the latest flags.
   const featuresRef = useRef(features);
   featuresRef.current = features;
@@ -85,11 +87,11 @@ export function App() {
           <div className="relative flex-1 min-w-0">
           <div className="titlebar-no-drag absolute top-3 right-3 z-40 flex items-center gap-1.5">
             {features.globalSearch && (
-            <Tooltip label="Search history (⌘K)">
+            <Tooltip label={t('app.search')}>
               <button
                 type="button"
                 onClick={() => setSearchOpen(true)}
-                aria-label="Search history"
+                aria-label={t('app.search')}
                 className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
               >
                 <Search size={16} />
@@ -97,11 +99,11 @@ export function App() {
             </Tooltip>
             )}
             {features.templates && (
-            <Tooltip label="Prompt templates">
+            <Tooltip label={t('app.templates')}>
               <button
                 type="button"
                 onClick={() => setTemplatesOpen(true)}
-                aria-label="Prompt templates"
+                aria-label={t('app.templates')}
                 className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
               >
                 <FileText size={16} />
@@ -196,7 +198,7 @@ export function App() {
                 <AppShell>
                   {() => (
                     <div className="p-8 text-sm text-[var(--color-ink-muted)]">
-                      Select a project from the sidebar or click <strong>+</strong> to create one.
+                      {t('app.home')}
                     </div>
                   )}
                 </AppShell>

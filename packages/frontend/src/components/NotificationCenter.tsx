@@ -10,16 +10,17 @@ import { gotoSessionTab } from '../utils/gotoSession.js';
 import { useRunningSessions, type RunningSession } from '../stores/sessionRunning.js';
 import { NotificationDetail } from './NotificationDetail.js';
 import { Tooltip } from './Tooltip.js';
+import { useT, type TFn } from '../i18n/t.js';
 
-function formatRelative(ts: number): string {
+function formatRelative(ts: number, t: TFn): string {
   const seconds = Math.max(1, Math.floor((Date.now() - ts) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 60) return t('cmp.notif.ago.s', { n: seconds });
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return t('cmp.notif.ago.m', { n: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t('cmp.notif.ago.h', { n: hours });
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return t('cmp.notif.ago.d', { n: days });
 }
 
 function kindIcon(kind: NotificationKind) {
@@ -53,6 +54,7 @@ export function NotificationCenter() {
     markAllRead,
     clearFinished,
   } = useNotifications();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<RecentFilter>('all');
@@ -174,11 +176,11 @@ export function NotificationCenter() {
   return (
     <>
       <div ref={wrapperRef} className="relative">
-        <Tooltip label="Notifications">
+        <Tooltip label={t('cmp.notif.title')}>
           <button
             type="button"
             onClick={toggleOpen}
-            aria-label="Notifications"
+            aria-label={t('cmp.notif.title')}
             className="relative inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]"
           >
             <Bell
@@ -201,7 +203,7 @@ export function NotificationCenter() {
             <div className="sticky top-0 z-10 bg-[var(--color-surface-2)]/95 backdrop-blur-sm border-b border-[var(--color-border)]">
               <header className="px-3 py-2 flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-                  Notifications
+                  {t('cmp.notif.title')}
                 </span>
                 {recent.length > 0 && (
                   <button
@@ -209,7 +211,7 @@ export function NotificationCenter() {
                     onClick={clearFinished}
                     className="text-[10px] text-[var(--color-ink-muted)] hover:text-red-400"
                   >
-                    Clear finished
+                    {t('cmp.notif.clearFinished')}
                   </button>
                 )}
               </header>
@@ -226,12 +228,14 @@ export function NotificationCenter() {
                     }`}
                   >
                     {f === 'all'
-                      ? 'All'
+                      ? t('cmp.notif.filter.all')
                       : f === 'in-progress'
-                        ? `In progress${totalRunning > 0 ? ` (${totalRunning})` : ''}`
+                        ? totalRunning > 0
+                          ? t('cmp.notif.filter.inProgressCount', { n: totalRunning })
+                          : t('cmp.notif.filter.inProgress')
                         : f === 'unread'
-                          ? 'Unread'
-                          : 'Read'}
+                          ? t('cmp.notif.filter.unread')
+                          : t('cmp.notif.filter.read')}
                   </button>
                 ))}
               </div>
@@ -239,12 +243,12 @@ export function NotificationCenter() {
 
             {items.length === 0 && runningSessions.length === 0 && (
               <p className="px-3 py-6 text-center text-xs text-[var(--color-ink-muted)]">
-                No notifications yet.
+                {t('cmp.notif.empty')}
               </p>
             )}
 
             {showInProgress && inProgressCount > 0 && (
-              <Section title={`In progress (${inProgressCount})`}>
+              <Section title={t('cmp.notif.filter.inProgressCount', { n: inProgressCount })}>
                 {runningSessions.map((s) => (
                   <RunningSessionRow
                     key={s.sessionId}
@@ -265,7 +269,7 @@ export function NotificationCenter() {
 
             {filter === 'in-progress' && inProgressCount === 0 && (
               <p className="px-3 py-6 text-center text-xs text-[var(--color-ink-muted)]">
-                Nothing is running right now.
+                {t('cmp.notif.nothingRunning')}
               </p>
             )}
 
@@ -273,13 +277,16 @@ export function NotificationCenter() {
               <Section
                 title={
                   filter === 'all'
-                    ? `Recent (${recent.length})`
-                    : `Recent (${filteredRecent.length} / ${recent.length})`
+                    ? t('cmp.notif.recent', { n: recent.length })
+                    : t('cmp.notif.recentFiltered', {
+                        n: filteredRecent.length,
+                        total: recent.length,
+                      })
                 }
               >
                 {filteredRecent.length === 0 ? (
                   <li className="px-3 py-4 text-center text-[10px] text-[var(--color-ink-muted)]">
-                    No notifications match this filter.
+                    {t('cmp.notif.noMatch')}
                   </li>
                 ) : (
                   <>
@@ -323,7 +330,8 @@ function RunningSessionRow({
   session: RunningSession;
   onClick: () => void;
 }) {
-  const label = session.title ?? `Chat ${session.sessionId.slice(0, 6)}`;
+  const t = useT();
+  const label = session.title ?? t('cmp.notif.chatLabel', { id: session.sessionId.slice(0, 6) });
   const agentName = session.agent === 'codex' ? 'Codex' : 'Claude';
   return (
     <li>
@@ -341,7 +349,7 @@ function RunningSessionRow({
             <span className="truncate font-medium">{label}</span>
           </div>
           <div className="text-[10px] text-[var(--color-ink-muted)]/70">
-            {agentName} · running {formatRelative(session.startedAt)}
+            {agentName} · {t('cmp.notif.running')} {formatRelative(session.startedAt, t)}
           </div>
         </div>
       </button>
@@ -369,6 +377,7 @@ function NotificationRow({
   onClick: () => void;
   onDismiss: () => void;
 }) {
+  const t = useT();
   const ts = item.finishedAt ?? item.startedAt;
   // Visited-state styling is reserved for agent-turn notifications: those
   // are the ones whose read flag tracks "did the user actually look at
@@ -420,9 +429,9 @@ function NotificationRow({
                     ? 'bg-[var(--color-accent)] text-black'
                     : 'border border-[var(--color-border)] text-[var(--color-ink-muted)]'
                 }`}
-                aria-label={unread ? 'unvisited' : 'visited'}
+                aria-label={unread ? t('cmp.notif.unvisited') : t('cmp.notif.visited')}
               >
-                {unread ? 'Unvisited' : 'Visited'}
+                {unread ? t('cmp.notif.unvisited') : t('cmp.notif.visited')}
               </span>
             )}
           </div>
@@ -432,7 +441,7 @@ function NotificationRow({
             </div>
           )}
           <div className="text-[10px] text-[var(--color-ink-muted)]/70">
-            {item.status === 'running' ? 'started' : ''} {formatRelative(ts)}
+            {item.status === 'running' ? t('cmp.notif.started') : ''} {formatRelative(ts, t)}
           </div>
         </div>
       </button>
@@ -442,7 +451,7 @@ function NotificationRow({
           e.stopPropagation();
           onDismiss();
         }}
-        title="Dismiss"
+        title={t('cmp.notif.dismiss')}
         className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 text-[var(--color-ink-muted)] hover:text-red-400 p-0.5"
       >
         <X size={11} />

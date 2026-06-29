@@ -4,6 +4,7 @@ import { ArrowLeft, Eye, ExternalLink, Pencil, Save, X } from 'lucide-react';
 import { api, type WikiPage } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
 import { Tooltip } from '../components/Tooltip.js';
+import { useT } from '../i18n/t.js';
 
 interface EditDraft {
   body: string;
@@ -45,6 +46,7 @@ function draftFromPage(page: WikiPage): EditDraft {
 }
 
 export function WikiDetailPage() {
+  const t = useT();
   const params = useParams<{ '*': string }>();
   const filename = params['*'] ?? '';
   const [page, setPage] = useState<WikiPage | null>(null);
@@ -149,7 +151,7 @@ export function WikiDetailPage() {
           className="flex items-center gap-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
         >
           <ArrowLeft size={14} />
-          Wiki
+          {t('page.wiki.title')}
         </Link>
         <div className="text-[11px] font-mono text-[var(--color-ink-muted)] truncate flex-1 text-center">
           {filename}
@@ -157,7 +159,7 @@ export function WikiDetailPage() {
         <div className="flex items-center gap-2">
           {editing ? (
             <>
-              <Tooltip label="Toggle live preview" side="bottom">
+              <Tooltip label={t('page.wikiDetail.togglePreview')} side="bottom">
                 <button
                   onClick={() => setShowPreview((v) => !v)}
                   className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs ${
@@ -167,7 +169,7 @@ export function WikiDetailPage() {
                   }`}
                 >
                   <Eye size={12} />
-                  Preview
+                  {t('page.wikiDetail.preview')}
                 </button>
               </Tooltip>
               <button
@@ -176,7 +178,7 @@ export function WikiDetailPage() {
                 className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
               >
                 <X size={12} />
-                Cancel
+                {t('page.wikiDetail.cancel')}
               </button>
               <button
                 onClick={saveEdit}
@@ -184,29 +186,29 @@ export function WikiDetailPage() {
                 className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] text-black px-2.5 py-1.5 text-xs font-medium disabled:opacity-50"
               >
                 <Save size={12} />
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? t('page.wikiDetail.saving') : t('page.wikiDetail.save')}
               </button>
             </>
           ) : (
             <>
-              <Tooltip label="Edit this page in place" side="bottom">
+              <Tooltip label={t('page.wikiDetail.editTooltip')} side="bottom">
                 <button
                   onClick={startEdit}
                   disabled={!page}
                   className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
                 >
                   <Pencil size={12} />
-                  Edit
+                  {t('page.wikiDetail.edit')}
                 </button>
               </Tooltip>
-              <Tooltip label="Open in default editor (macOS)" side="bottom">
+              <Tooltip label={t('page.wikiDetail.openTooltip')} side="bottom">
                 <button
                   onClick={handleOpenInEditor}
                   disabled={!page}
                   className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1.5 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
                 >
                   <ExternalLink size={12} />
-                  Open
+                  {t('page.wikiDetail.open')}
                 </button>
               </Tooltip>
             </>
@@ -221,10 +223,10 @@ export function WikiDetailPage() {
       )}
 
       {loading ? (
-        <div className="p-8 text-sm text-[var(--color-ink-muted)]">Loading…</div>
+        <div className="p-8 text-sm text-[var(--color-ink-muted)]">{t('page.wikiDetail.loading')}</div>
       ) : !page ? (
         <div className="p-8 text-sm text-[var(--color-ink-muted)]">
-          Page not found.
+          {t('page.wikiDetail.notFound')}
         </div>
       ) : editing && draft ? (
         <EditView
@@ -240,6 +242,7 @@ export function WikiDetailPage() {
 }
 
 function ReadView({ page }: { page: WikiPage }) {
+  const t = useT();
   return (
     <div className="flex-1 overflow-hidden flex">
       <div className="flex-1 min-w-0 overflow-auto px-8 py-6">
@@ -247,10 +250,10 @@ function ReadView({ page }: { page: WikiPage }) {
       </div>
       <aside className="w-64 shrink-0 border-l border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-auto px-4 py-4">
         <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-2">
-          Frontmatter
+          {t('page.wikiDetail.frontmatter')}
         </h3>
-        <MetaList label="applies_to" values={page.meta.appliesTo} fallback="(global)" />
-        <MetaList label="topic" values={page.meta.topic} fallback="(none)" />
+        <MetaList label="applies_to" values={page.meta.appliesTo} fallback={t('page.wikiDetail.fallbackGlobal')} />
+        <MetaList label="topic" values={page.meta.topic} fallback={t('page.wikiDetail.fallbackNone')} />
         <MetaRelated values={page.meta.related} />
         {page.meta.summary && (
           <div className="mt-3">
@@ -274,6 +277,7 @@ function EditView({
   onChange: (next: EditDraft) => void;
   showPreview: boolean;
 }) {
+  const t = useT();
   // Memoize the preview source so an unrelated frontmatter keystroke
   // doesn't re-run the markdown parser on every render. Comments are
   // stripped for the same reason ReadView does it — the renderer shows
@@ -312,7 +316,7 @@ function EditView({
       <div className="flex-1 min-w-0 flex overflow-hidden">
         <div className={`${showPreview ? 'flex-1 border-r border-[var(--color-border)]' : 'flex-1'} min-w-0 flex flex-col`}>
           <div className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold px-6 pt-4 pb-1">
-            Body (markdown)
+            {t('page.wikiDetail.bodyMarkdown')}
           </div>
           <textarea
             ref={editorRef}
@@ -335,24 +339,24 @@ function EditView({
       </div>
       <aside className="w-64 shrink-0 border-l border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-auto px-4 py-4 space-y-3 text-sm">
         <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold">
-          Frontmatter
+          {t('page.wikiDetail.frontmatter')}
         </h3>
         <MetaInput
           label="applies_to"
           value={draft.appliesTo}
-          hint="comma-separated project slugs"
+          hint={t('page.wikiDetail.hint.appliesTo')}
           onChange={(v) => onChange({ ...draft, appliesTo: v })}
         />
         <MetaInput
           label="topic"
           value={draft.topic}
-          hint="comma-separated topic tags"
+          hint={t('page.wikiDetail.hint.topic')}
           onChange={(v) => onChange({ ...draft, topic: v })}
         />
         <MetaInput
           label="related"
           value={draft.related}
-          hint="comma-separated page filenames"
+          hint={t('page.wikiDetail.hint.related')}
           onChange={(v) => onChange({ ...draft, related: v })}
         />
         <div>
@@ -367,7 +371,7 @@ function EditView({
           />
         </div>
         <div className="text-[10px] text-[var(--color-ink-muted)] pt-2">
-          ⌘S to save · Esc to cancel
+          {t('page.wikiDetail.shortcuts')}
         </div>
       </aside>
     </div>
@@ -434,13 +438,14 @@ function MetaList({
 }
 
 function MetaRelated({ values }: { values: string[] }) {
+  const t = useT();
   if (values.length === 0) {
     return (
       <div className="mb-3">
         <div className="text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)] font-semibold mb-1">
           related
         </div>
-        <div className="text-xs text-[var(--color-ink-muted)] italic">(none)</div>
+        <div className="text-xs text-[var(--color-ink-muted)] italic">{t('page.wikiDetail.fallbackNone')}</div>
       </div>
     );
   }
