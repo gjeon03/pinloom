@@ -5,6 +5,7 @@ import { WS_RUNS_CHANNEL } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
+import { getUiConfig } from './ui-config.js';
 import { buildUserProfileContext } from './user-profile.js';
 import { getAgentAdapter } from './agents/index.js';
 import type {
@@ -193,6 +194,8 @@ Rules:
   the interruption marker.`;
 
 function buildWikiContext(projectId: string): string {
+  // Wiki disabled → don't inject the wiki section into the system prompt.
+  if (!getUiConfig().features.wiki) return '';
   const slug = getProjectWikiSlugByProjectId(projectId);
   return `
 

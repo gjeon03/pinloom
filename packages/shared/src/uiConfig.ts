@@ -8,11 +8,12 @@ import { DEFAULT_CLAUDE_MODEL } from './constants.js';
 // underlying data (teams, wiki pages, notepads, …) is never deleted, so
 // re-enabling restores access.
 
-/** Toggleable features. A disabled feature is hidden everywhere in the UI; its
- *  data is kept (re-enabling restores it). NOTE: backend background jobs (wiki
- *  gardener/auto-analyze, timeline capture, recap) and wiki prompt-injection are
- *  NOT yet gated on these flags — that lives in a separate follow-up. Core
- *  chat/sessions are always on. */
+/** Toggleable features. A disabled feature is hidden everywhere in the UI AND
+ *  stops doing work: wiki off skips the auto-analyze sweep + the wiki
+ *  prompt-injection; timeline off skips the capture sweep. Existing data is kept
+ *  (re-enabling restores it) — only behavior is gated, never deleted. (The
+ *  semantic-search indexer is governed separately by the embeddings setting, not
+ *  these flags, since it also powers Recap.) Core chat/sessions are always on. */
 export interface FeatureFlags {
   teams: boolean;
   wiki: boolean;

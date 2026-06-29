@@ -16,6 +16,7 @@
 
 import type { Database } from 'better-sqlite3';
 import { getDb } from '../db/connection.js';
+import { getUiConfig } from './ui-config.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
 import { isAnalyzing, runConventionsAnalysis } from './wiki-analyzer.js';
 
@@ -89,6 +90,7 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 async function tick(): Promise<void> {
   if (running) return; // single-flight
+  if (!getUiConfig().features.wiki) return; // wiki disabled → no auto-analyze
   running = true;
   try {
     const db = getDb();
