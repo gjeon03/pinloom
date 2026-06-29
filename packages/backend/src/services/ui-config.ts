@@ -21,3 +21,9 @@ export function setUiConfig(next: unknown): UiConfig {
   setSetting(UI_CONFIG_KEY, JSON.stringify(merged));
   return merged;
 }
+
+/** Whether a config has ever been explicitly saved (vs. running on defaults).
+ *  Drives the first-run preset chooser: a fresh install has never set it. */
+export function isUiConfigured(): boolean {
+  return getSetting(UI_CONFIG_KEY) !== null;
+}

@@ -50,6 +50,15 @@ export const STRINGS: Record<string, { en: string; ko: string }> = {
   "app.templates": { "en": "Prompt templates", "ko": "프롬프트 템플릿" },
   "app.home": { "en": "Select a project from the sidebar or click + to create one.", "ko": "왼쪽에서 프로젝트를 선택하거나 + 를 눌러 새로 만드세요." },
 
+  // ── First-run preset chooser ──
+  "firstRun.title": { "en": "Welcome to pinloom", "ko": "pinloom에 오신 걸 환영합니다" },
+  "firstRun.desc": { "en": "How much do you want to see? You can change this anytime in Settings.", "ko": "얼마나 보이게 할까요? 설정에서 언제든 바꿀 수 있습니다." },
+  "firstRun.simple": { "en": "Simple", "ko": "Simple" },
+  "firstRun.simpleDesc": { "en": "Just chat + history. Hide teams, wiki, timeline, bots…", "ko": "채팅 + 히스토리만. 팀·위키·타임라인·봇 등은 숨김." },
+  "firstRun.full": { "en": "Full", "ko": "Full" },
+  "firstRun.fullDesc": { "en": "Everything on. Turn off what you don't use later.", "ko": "전부 켜기. 안 쓰는 건 나중에 끄기." },
+  "firstRun.changeLater": { "en": "Settings → Features & Language", "ko": "설정 → 기능 및 언어" },
+
   // ── Components (cmp.*) ──
   "cmp.appShell.newGroup": { "en": "New group", "ko": "새 그룹" },
   "cmp.appShell.newGroupPrompt": { "en": "New group name", "ko": "새 그룹 이름" },

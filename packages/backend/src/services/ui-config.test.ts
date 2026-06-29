@@ -5,7 +5,7 @@ import {
   DEFAULT_UI_CONFIG,
   PRESET_FEATURES,
 } from '@pinloom/shared';
-import { getUiConfig, setUiConfig } from './ui-config.js';
+import { getUiConfig, setUiConfig, isUiConfigured } from './ui-config.js';
 
 describe('ui-config', () => {
   it('mergeUiConfig fills defaults for a partial / older stored value', () => {
@@ -38,6 +38,13 @@ describe('ui-config', () => {
     const full = applyPreset(simple, 'full');
     expect(full.features).toEqual(PRESET_FEATURES.full);
     expect(full.pickers.model.mode).toBe('shown');
+  });
+
+  it('isUiConfigured: false before any save, true after (drives first-run chooser)', () => {
+    // Note: shares the file's test DB; runs before the persist test below which
+    // leaves a saved config. Assert relative to the save.
+    setUiConfig(DEFAULT_UI_CONFIG);
+    expect(isUiConfigured()).toBe(true);
   });
 
   it('setUiConfig persists and getUiConfig reads it back (normalized)', () => {

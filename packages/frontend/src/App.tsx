@@ -4,6 +4,7 @@ import { SWRConfig, mutate } from 'swr';
 import { FileText, Search } from 'lucide-react';
 import { AppShell } from './components/AppShell.js';
 import { FeatureRoute } from './components/FeatureRoute.js';
+import { FirstRunChooser } from './components/FirstRunChooser.js';
 import { useFeatures } from './stores/uiConfig.js';
 import { useT } from './i18n/t.js';
 import { NotificationCenter } from './components/NotificationCenter.js';
@@ -217,6 +218,7 @@ export function App() {
       {searchOpen && features.globalSearch && (
         <GlobalSearchModal onClose={() => setSearchOpen(false)} />
       )}
+      <FirstRunChooser />
     </SWRConfig>
   );
 }
