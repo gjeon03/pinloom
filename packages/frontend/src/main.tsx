@@ -5,6 +5,7 @@ import { App } from './App.js';
 import { NotificationProvider } from './stores/notifications.js';
 import { applyTheme, getStoredPreference, watchSystem } from './theme.js';
 import { isDesktopApp } from './utils/desktop.js';
+import { hydrateUiConfig } from './stores/uiConfig.js';
 // Side-effect import: attach the PWA `beforeinstallprompt` listener at startup
 // so the deferred install prompt is captured before the user opens Settings.
 import './stores/pwaInstall.js';
@@ -20,6 +21,11 @@ if (isDesktopApp()) document.documentElement.classList.add('pinloom-desktop');
 
 // Apply persisted (or system) theme before React mounts to avoid a flash.
 applyTheme(getStoredPreference());
+
+// Revalidate the UI config (feature flags / pickers / locale) from the server.
+// The store already hydrated synchronously from its localStorage cache, so this
+// only corrects drift — fire-and-forget, no render gate.
+void hydrateUiConfig();
 
 // When the user follows the system theme, react to OS changes live.
 watchSystem(() => {
