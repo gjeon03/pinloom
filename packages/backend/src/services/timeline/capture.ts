@@ -14,6 +14,7 @@
 
 import type { Database } from 'better-sqlite3';
 import { getDb } from '../../db/connection.js';
+import { getUiConfig } from '../ui-config.js';
 import { isAiRunning } from '../runner.js';
 import { listQueueItems } from '../message-queue.js';
 import { getProjectWikiSlugByProjectId } from '../wiki-sync.js';
@@ -118,6 +119,7 @@ interface ProjectDayGroup {
  *  each group's entry. Splitting by day (not just the last-activity day) means
  *  cross-midnight work isn't dropped (§12 M1). Returns entries written. */
 export async function runCaptureSweep(db: Database, opts: SweepOptions = {}): Promise<number> {
+  if (!getUiConfig().features.timeline) return 0; // timeline disabled → no capture
   const now = opts.now ?? Date.now();
   const idleMs = opts.idleMs ?? IDLE_MS;
   const minRedistill = opts.minRedistillMs ?? MIN_REDISTILL_MS;

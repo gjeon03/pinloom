@@ -7,6 +7,8 @@ import { getProjectWikiSlugByProjectId } from '../wiki-sync.js';
 import { __resetTimelineCaptureForTest, localDateOf, runCaptureSweep } from './capture.js';
 import { readEntry } from './store.js';
 import type { RunDistill } from './distill.js';
+import { getUiConfig, setUiConfig } from '../ui-config.js';
+import { DEFAULT_UI_CONFIG } from '@pinloom/shared';
 
 const db = getDb();
 let home: string;
@@ -87,6 +89,19 @@ describe('runCaptureSweep', () => {
     seedSession('s1', 'p1');
     addMsg('m1', 's1', 'user', LONG, idleAt);
     expect(await sweep()).toBe(0);
+  });
+
+  it('does nothing when the Timeline feature is disabled (data preserved, just inert)', async () => {
+    seedProject('p1');
+    seedSession('s1', 'p1');
+    addMsg('m1', 's1', 'user', LONG, idleAt); // would normally capture 1
+    setUiConfig({ ...DEFAULT_UI_CONFIG, features: { ...DEFAULT_UI_CONFIG.features, timeline: false } });
+    try {
+      expect(getUiConfig().features.timeline).toBe(false);
+      expect(await sweep()).toBe(0); // gated off → no capture despite an idle session
+    } finally {
+      setUiConfig(DEFAULT_UI_CONFIG); // restore for the rest of the file
+    }
   });
 
   it('ignores empty/tool/mirror messages (no substantive content → nothing)', async () => {
