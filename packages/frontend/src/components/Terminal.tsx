@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { currentXtermTheme, watchXtermTheme } from './xtermTheme.js';
 
 // Interactive shell terminal wired to the backend /ws/terminal pty socket.
 // The backend keeps the pty alive across disconnects, so reconnecting (page
@@ -38,18 +39,14 @@ export function Terminal({
         '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "Hack Nerd Font", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
       fontSize: 12,
       cursorBlink: true,
-      // Fixed dark palette — terminals read better dark even in light mode;
-      // full pinloom theming can come later.
-      theme: {
-        background: '#1a1b26',
-        foreground: '#c0caf5',
-        cursor: '#c0caf5',
-        selectionBackground: '#33467c',
-      },
+      // Follow the app's light/dark theme (shared with the agent terminal) so a
+      // light app doesn't leave this panel on a dark slab.
+      theme: currentXtermTheme(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
+    const disposeTheme = watchXtermTheme(term);
     const safeFit = () => {
       try {
         fit.fit();
@@ -144,6 +141,7 @@ export function Terminal({
       cancelAnimationFrame(rafId);
       if (resizeTimer) clearTimeout(resizeTimer);
       ro.disconnect();
+      disposeTheme();
       dataSub.dispose();
       ws.close();
       term.dispose();
