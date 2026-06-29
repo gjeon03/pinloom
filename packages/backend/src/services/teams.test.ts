@@ -801,12 +801,13 @@ describe('createWorker', () => {
     seedSession('s-orch', 'p1'); // seedSession inserts no transport → NULL
     const team = createTeam({ name: 'crew', orchestratorSessionId: 's-orch' });
     const w = createWorker({ teamId: team.id, alias: 'be', instructions: 'be' });
-    // Test env sets no PINLOOM_CLAUDE_TRANSPORT, so claudeTransport() = 'sdk'.
-    expect(w.transport).toBe('sdk');
+    // Test env sets no PINLOOM_CLAUDE_TRANSPORT, so claudeTransport() = 'terminal'
+    // (the default for new claude sessions).
+    expect(w.transport).toBe('terminal');
     const sess = getDb()
       .prepare('SELECT transport FROM sessions WHERE id = ?')
       .get(w.sessionId) as { transport: string };
-    expect(sess.transport).toBe('sdk');
+    expect(sess.transport).toBe('terminal');
   });
 
   it('round-trips tags and a codex agent', () => {
