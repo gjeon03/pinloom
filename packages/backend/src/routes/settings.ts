@@ -40,7 +40,8 @@ import {
   startMessageIndexer,
   stopMessageIndexer,
 } from '../services/message-indexer.js';
-import { getDb } from '../db/connection.js';
+import { getDb, getDbPath } from '../db/connection.js';
+import { DEFAULT_BACKEND_PORT } from '@pinloom/shared';
 import { MESSAGE_VECTORS, vectorRowCount } from '../services/vector-store.js';
 import { TIMELINE_VECTORS } from '../services/timeline/indexer.js';
 import { WIKI_VECTORS, listWikiSlugs } from '../services/wiki-indexer.js';
@@ -79,6 +80,14 @@ function indexStatus() {
 }
 
 export async function settingsRoutes(app: FastifyInstance) {
+  // Which DB file + port this backend is serving — so the Settings UI can show
+  // it and the user is never confused about which data store the app/web reads
+  // (the app-vs-web divergence that caused real confusion).
+  app.get('/api/settings/runtime', async () => ({
+    dbPath: getDbPath(),
+    port: Number(process.env.PORT) || DEFAULT_BACKEND_PORT,
+  }));
+
   // Which embedding backend powers semantic search + the local Ollama state, so
   // the Settings UI can manage it without env/terminal.
   app.get('/api/settings/embeddings', async () => {

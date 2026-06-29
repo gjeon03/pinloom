@@ -27,6 +27,12 @@ if (process.env.PINLOOM_TEST_MODE === '1') {
   }
 }
 
+/** Absolute path of the SQLite file this process is using. Surfaced in Settings
+ *  so it's never ambiguous which DB the running app/web is reading. */
+export function getDbPath(): string {
+  return DB_PATH;
+}
+
 let db: Database.Database | null = null;
 
 // Whether the sqlite-vec extension loaded successfully on the live connection.

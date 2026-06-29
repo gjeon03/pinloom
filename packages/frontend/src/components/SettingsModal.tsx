@@ -476,6 +476,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
             {category === 'system' && (
               <>
+                <RuntimeInfoSection />
                 {/* PWA install + launchd login-autostart only make sense in a
                     browser. Inside the desktop app the backend is app-owned and
                     autostart is the Tray's "Open at Login" — so hide both there. */}
@@ -776,6 +777,43 @@ function OllamaGuideModal({ model, onClose }: { model: string; onClose: () => vo
 // login-autostart setting. Chromium fires `beforeinstallprompt` (button drives
 // the native dialog); iOS Safari has no programmatic prompt, so we fall back to
 // the manual "Add to Home Screen" instructions.
+// Shows which SQLite file + port this backend serves. Removes the app-vs-web
+// "which data am I looking at?" ambiguity that caused real confusion.
+function RuntimeInfoSection() {
+  const t = useT();
+  const [info, setInfo] = useState<{ dbPath: string; port: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/settings/runtime')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (alive) setInfo(d);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  if (!info) return null;
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+        {t('cmp.settings.runtime.title')}
+      </h3>
+      <dl className="space-y-1 text-sm">
+        <div className="flex gap-2">
+          <dt className="text-[var(--color-ink-muted)] shrink-0">{t('cmp.settings.runtime.db')}</dt>
+          <dd className="font-mono text-xs break-all">{info.dbPath}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="text-[var(--color-ink-muted)] shrink-0">{t('cmp.settings.runtime.port')}</dt>
+          <dd className="font-mono text-xs">localhost:{info.port}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
 function InstallAppSection() {
   const t = useT();
   const { canInstall, isInstalled, isIos, promptInstall } = usePwaInstall();
