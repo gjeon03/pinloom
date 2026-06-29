@@ -113,8 +113,9 @@ function fetchJson(url) {
 // launches fail silently. Shown once per launch.
 let onboardingShown = false;
 async function checkClaudeOnboarding(baseUrl) {
-  if (onboardingShown) return;
+  if (onboardingShown || app.isQuitting) return;
   const health = await fetchJson(`${baseUrl}/api/health`);
+  if (app.isQuitting) return; // quit while the health check was in flight
   if (!health || !health.agents) return; // couldn't check — don't nag
   const claudeOk = health.agents.claude?.installed;
   const codexOk = health.agents.codex?.installed;
@@ -444,11 +445,21 @@ function createTray() {
 // ── app lifecycle ─────────────────────────────────────────────────────────────
 if (gotTheLock) {
   app.whenReady().then(() => {
-    // Grant the renderer (our own localhost content) the permissions it needs:
-    // notifications for "agent finished" banners, clipboard for terminal paste.
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
-      cb(['notifications', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission));
+    // Grant the renderer (our own localhost content) only the permissions it
+    // needs — notifications for "agent finished" banners, clipboard for terminal
+    // paste — and ONLY for localhost origins, so a stray remote frame can't.
+    const ALLOWED_PERMS = ['notifications', 'clipboard-read', 'clipboard-sanitized-write'];
+    const isLocalOrigin = (u) =>
+      typeof u === 'string' &&
+      (u.startsWith('http://localhost') || u.startsWith('http://127.0.0.1'));
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, cb, details) => {
+      cb(isLocalOrigin(details?.requestingUrl) && ALLOWED_PERMS.includes(permission));
     });
+    // The synchronous Notification.permission getter goes through the CHECK
+    // handler — without this it can read 'default' and drop the first banner.
+    session.defaultSession.setPermissionCheckHandler((_wc, permission, requestingOrigin) =>
+      isLocalOrigin(requestingOrigin) && ALLOWED_PERMS.includes(permission),
+    );
     // Renderer → native bridge (see preload.cjs). Kept to a tiny allowlist.
     ipcMain.handle('pinloom:focus', () => {
       showWindow();
