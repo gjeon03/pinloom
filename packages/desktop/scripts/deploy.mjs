@@ -3,6 +3,10 @@
 // the background and reinstalling before it finished (installing a stale dmg).
 // execSync here makes each step block, so "deploy done" means the running app
 // is the freshly built one. macOS-only (hdiutil/open); a no-op elsewhere.
+//
+// Run with:  pnpm --filter @pinloom/desktop run deploy:app
+// (named `deploy:app`, not `deploy`, because `pnpm deploy` is a pnpm built-in
+// that would otherwise shadow the script.)
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
