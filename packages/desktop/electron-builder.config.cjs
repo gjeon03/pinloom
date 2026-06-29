@@ -13,7 +13,7 @@ module.exports = {
     output: 'dist-app',
     buildResources: 'build',
   },
-  files: ['main.cjs', 'loading.html', 'package.json'],
+  files: ['main.cjs', 'loading.html', 'package.json', 'tray-icon.png', 'tray-icon@2x.png'],
   extraResources: [
     { from: STAGED_BACKEND, to: 'app-backend' },
     { from: STAGED_FRONTEND, to: 'app-frontend' },

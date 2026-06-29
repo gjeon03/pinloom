@@ -1,15 +1,24 @@
-// pinloom desktop shell — connect-or-spawn.
+// pinloom desktop app — a resident, backend-owning macOS app.
 //
-// Two ways to run:
-//  • CONNECT: a pinloom is already up locally (the developer's launchd keeps
-//    backend:4748 + frontend:4747 alive). The window just loads that, exactly
-//    like Phase 1 — no second backend, no second DB.
-//  • SPAWN: nothing is running (a colleague who only has the .app). We start the
-//    backend ourselves as a child process via Electron-as-node, told to serve
-//    BOTH the API and the built frontend on one port (PINLOOM_SERVE_STATIC),
-//    with its data in the app's userData dir. claude/codex CLIs still come from
-//    the user's PATH — those can't be bundled.
-const { app, BrowserWindow, shell, dialog } = require('electron');
+// Lifecycle: the app lives in the menu bar (Tray) and stays running with its
+// backend even when the window is closed, so background work (indexing,
+// timeline, wiki gardener) keeps going. Closing the window HIDES it; the app
+// only really quits from the Tray "Quit" or Cmd-Q.
+//
+// Backend: if a pinloom is already serving locally (a developer's launchd on
+// :4747) the window just CONNECTS to it. Otherwise the app SPAWNS its own
+// backend via Electron-as-node (serving API + the built frontend on one port),
+// using a canonical on-disk database under ~/.pinloom/data. claude/codex CLIs
+// can't be bundled — the user installs + logs into Claude Code themselves.
+const {
+  app,
+  BrowserWindow,
+  Tray,
+  Menu,
+  shell,
+  dialog,
+  nativeImage,
+} = require('electron');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
@@ -25,8 +34,18 @@ const CONNECT_URL = process.env.PINLOOM_DESKTOP_CONNECT_URL || 'http://localhost
 const SIDECAR_PORT = Number(process.env.PINLOOM_DESKTOP_SIDECAR_PORT) || 4788;
 // Test/dev hook: force the spawn path even when something answers CONNECT_URL.
 const FORCE_SPAWN = process.env.PINLOOM_DESKTOP_FORCE_SPAWN === '1';
+// Resident backend restarts: if the spawned backend dies unexpectedly we
+// relaunch it rather than killing the whole app, up to this many times before
+// surfacing a dialog (and still staying resident so the user can quit via Tray).
+const MAX_BACKEND_RESTARTS = 5;
 
+let mainWindow = null;
+let tray = null;
 let backendChild = null;
+let backendRestarts = 0;
+// True only once a real quit is requested (Tray Quit / Cmd-Q / before-quit), so
+// window-close can distinguish "hide to tray" from "actually exiting".
+app.isQuitting = false;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -43,7 +62,7 @@ function loadState() {
 }
 function saveState(win) {
   try {
-    fs.writeFileSync(stateFile(), JSON.stringify(win.getBounds()));
+    if (win && !win.isDestroyed()) fs.writeFileSync(stateFile(), JSON.stringify(win.getBounds()));
   } catch {
     // best-effort
   }
@@ -77,8 +96,16 @@ function backendEntry() {
 }
 function staticDir() {
   return (
-    process.env.PINLOOM_STATIC_DIR ||
-    path.join(process.resourcesPath, 'app-frontend')
+    process.env.PINLOOM_STATIC_DIR || path.join(process.resourcesPath, 'app-frontend')
+  );
+}
+// Canonical database location. Consolidated under ~/.pinloom (alongside the
+// wiki at ~/.pinloom/wiki) so the app's data lives in one predictable,
+// user-controlled place rather than buried in Electron's userData. Overridable
+// via PINLOOM_DB_PATH (tests, or a custom data dir).
+function canonicalDbPath() {
+  return (
+    process.env.PINLOOM_DB_PATH || path.join(os.homedir(), '.pinloom', 'data', 'pinloom.sqlite')
   );
 }
 
@@ -136,8 +163,12 @@ function spawnBackend() {
     app.quit();
     return null;
   }
-  const dbPath =
-    process.env.PINLOOM_DB_PATH || path.join(app.getPath('userData'), 'pinloom.sqlite');
+  const dbPath = canonicalDbPath();
+  try {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  } catch {
+    // backend will surface a clearer error if the dir is truly unwritable
+  }
 
   // ELECTRON_RUN_AS_NODE: run our own Electron binary as plain Node (no system
   // Node needed). The backend's MCP child re-spawns process.execPath the same
@@ -162,17 +193,35 @@ function spawnBackend() {
   child.stderr.on('data', (d) => process.stderr.write(`[backend] ${d}`));
   child.on('exit', (code, signal) => {
     backendChild = null;
-    // Only a clean, unsignalled non-zero exit is a real crash. A signalled exit
-    // (code === null, e.g. our SIGTERM/SIGKILL on quit) is expected teardown,
-    // never a crash dialog.
-    if (!app.isQuitting && signal == null && code !== 0) {
-      dialog.showErrorBox('pinloom', `Backend exited unexpectedly (code ${code}).`);
-      app.quit();
+    if (app.isQuitting) return; // expected teardown
+    // A signalled exit we didn't request, or a non-zero code, means the backend
+    // died on its own. Stay resident and try to bring it back rather than
+    // killing the whole app; only give up (with a dialog) after several tries.
+    if (signal == null && code === 0) return; // clean voluntary exit (shouldn't happen)
+    if (backendRestarts < MAX_BACKEND_RESTARTS) {
+      backendRestarts += 1;
+      const delay = Math.min(1000 * backendRestarts, 5000);
+      console.error(
+        `[backend] exited (code ${code}, signal ${signal}) — restarting in ${delay}ms ` +
+          `(${backendRestarts}/${MAX_BACKEND_RESTARTS})`,
+      );
+      setTimeout(() => {
+        if (app.isQuitting) return;
+        backendChild = spawnBackend();
+        // Reload the window onto the fresh backend once it answers.
+        void waitAndLoad(`http://localhost:${SIDECAR_PORT}`);
+      }, delay);
+    } else {
+      dialog.showErrorBox(
+        'pinloom',
+        `The pinloom backend keeps exiting (last code ${code}). The app will stay ` +
+          `in the menu bar; quit and relaunch, or check the logs.`,
+      );
     }
   });
-  // If the user quit while we were still deciding/probing, before-quit already
-  // ran (with no child to kill); tear this just-spawned one down immediately so
-  // it can't be orphaned.
+  // If a quit was requested while we were still deciding/probing, before-quit
+  // already ran (with no child to kill); tear this just-spawned one down so it
+  // can't be orphaned.
   if (app.isQuitting) child.kill('SIGTERM');
   return child;
 }
@@ -184,20 +233,31 @@ async function resolveTarget() {
   if (!FORCE_SPAWN && (await isUp(`${CONNECT_URL}/api/ping`))) {
     return CONNECT_URL;
   }
-  backendChild = spawnBackend();
+  if (!backendChild) backendChild = spawnBackend();
   return `http://localhost:${SIDECAR_PORT}`;
 }
 
+// Poll a target until it answers, then load it into the window (if one exists).
+async function waitAndLoad(target) {
+  for (let i = 0; i < 60; i++) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (await isUp(`${target}/api/ping`)) break;
+    await sleep(1000);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) await mainWindow.loadURL(target);
+}
+
 // ── window ───────────────────────────────────────────────────────────────────
-async function createWindow() {
+async function createWindow({ show = true } = {}) {
   const st = loadState();
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: st.width,
     height: st.height,
     x: st.x,
     y: st.y,
     minWidth: 900,
     minHeight: 600,
+    show: false, // shown explicitly once content is ready (avoids a white flash)
     title: 'pinloom',
     backgroundColor: '#1a1b26',
     autoHideMenuBar: true,
@@ -206,7 +266,18 @@ async function createWindow() {
       contextIsolation: true,
     },
   });
-  win.on('close', () => saveState(win));
+  const win = mainWindow;
+  win.on('close', (e) => {
+    saveState(win);
+    // Closing the window HIDES it (resident app); only a real quit destroys it.
+    if (!app.isQuitting) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
@@ -220,30 +291,83 @@ async function createWindow() {
   });
 
   await win.loadFile(path.join(__dirname, 'loading.html'));
+  if (show && !win.isDestroyed()) win.show();
 
   const target = await resolveTarget();
-  // Poll up to ~60s for the target to answer (cold launchd boot, or our just-
-  // spawned sidecar warming up native modules + migrations).
-  for (let i = 0; i < 60; i++) {
-    if (win.isDestroyed()) return win;
-    if (await isUp(`${target}/api/ping`)) break;
-    await sleep(1000);
-  }
-  if (!win.isDestroyed()) await win.loadURL(target);
+  await waitAndLoad(target);
   return win;
 }
 
-app.whenReady().then(createWindow);
+// Show the window, creating it if it was fully closed/destroyed.
+function showWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    void createWindow({ show: true });
+  }
+}
+
+// ── tray (menu-bar resident) ─────────────────────────────────────────────────
+function trayImage() {
+  // A colored 22pt icon (with @2x sibling auto-picked up). Resolved relative to
+  // main.cjs so it works both in dev and inside the packaged app.asar.
+  const img = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.png'));
+  if (img.isEmpty()) return img; // Electron renders a default placeholder
+  return img.resize({ width: 18, height: 18 });
+}
+
+function buildTrayMenu() {
+  const openAtLogin = app.getLoginItemSettings().openAtLogin;
+  return Menu.buildFromTemplate([
+    { label: 'Open pinloom', click: showWindow },
+    { type: 'separator' },
+    {
+      label: 'Open at Login',
+      type: 'checkbox',
+      checked: openAtLogin,
+      click: (item) => {
+        app.setLoginItemSettings({ openAtLogin: item.checked, openAsHidden: true });
+        // Rebuild so the checkmark reflects the OS state we just set.
+        if (tray) tray.setContextMenu(buildTrayMenu());
+      },
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit pinloom',
+      accelerator: 'Command+Q',
+      click: () => app.quit(),
+    },
+  ]);
+}
+
+function createTray() {
+  tray = new Tray(trayImage());
+  tray.setToolTip('pinloom');
+  tray.setContextMenu(buildTrayMenu());
+  // Left-click opens the window (right-click shows the menu by default).
+  tray.on('click', showWindow);
+}
+
+// ── app lifecycle ─────────────────────────────────────────────────────────────
+app.whenReady().then(() => {
+  createTray();
+  // When macOS auto-launches us at login as a hidden login item, start the
+  // backend + tray but don't pop the window — stay quietly in the menu bar.
+  const launchedHidden = app.getLoginItemSettings().wasOpenedAsHidden === true;
+  void createWindow({ show: !launchedHidden });
+});
 
 app.on('second-instance', () => {
-  const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  }
+  showWindow();
 });
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+// Dock click (macOS) — reveal the (possibly hidden) window.
+app.on('activate', () => showWindow());
+
+// Resident: closing the last window does NOT quit. The app stays in the menu
+// bar with its backend running until the user explicitly quits.
+app.on('window-all-closed', () => {
+  // intentionally empty — see Tray "Quit"
 });
 
 // Tear the sidecar down with the app, but HOLD the quit until the child is
@@ -252,10 +376,11 @@ app.on('activate', () => {
 // whole tree and leaving :4788 + the DB locked for the next launch. SIGTERM
 // first (graceful, server.ts has a 3s budget), SIGKILL as a hard fallback.
 app.on('before-quit', (e) => {
-  if (app.isQuitting) return;
   app.isQuitting = true;
   const child = backendChild;
   if (!child) return; // connect mode (or nothing spawned) — just quit
+  if (child.__pinloomKilling) return; // teardown already in flight
+  child.__pinloomKilling = true;
   e.preventDefault();
   const force = setTimeout(() => {
     try {
@@ -263,12 +388,11 @@ app.on('before-quit', (e) => {
     } catch {
       // already gone
     }
-    app.quit();
+    app.exit(0);
   }, 3500);
   child.once('exit', () => {
     clearTimeout(force);
-    app.quit();
+    app.exit(0);
   });
   child.kill('SIGTERM');
 });
-app.on('window-all-closed', () => app.quit());
