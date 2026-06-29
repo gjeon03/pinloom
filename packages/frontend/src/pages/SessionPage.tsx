@@ -89,7 +89,7 @@ export function SessionPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[var(--color-surface)]">
-      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3">
+      <header className="titlebar-trafficlights border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3">
         <button
           type="button"
           onClick={goBack}
