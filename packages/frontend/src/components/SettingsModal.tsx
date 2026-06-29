@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { GithubLink } from './GithubLink.js';
+import { FeatureSettings } from './FeatureSettings.js';
 import type {
   HealthResponse,
   PromptTemplate,
@@ -395,9 +396,19 @@ function UserProfileSection() {
   );
 }
 
+type SettingsCategory = 'features' | 'agents' | 'system' | 'data';
+
+const CATEGORIES: { id: SettingsCategory; label: string }[] = [
+  { id: 'features', label: 'Features & Language' },
+  { id: 'agents', label: 'Agents & Search' },
+  { id: 'system', label: 'System' },
+  { id: 'data', label: 'Data & Backup' },
+];
+
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [category, setCategory] = useState<SettingsCategory>('features');
 
   useEffect(() => {
     api.health().then(setHealth).catch((e) => setError(String(e)));
@@ -412,9 +423,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Settings"
-        className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 cursor-default"
+        className="w-full max-w-3xl h-[85vh] flex flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] cursor-default overflow-hidden"
       >
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--color-border)]">
           <h2 className="text-base font-semibold">Settings</h2>
           <button
             onClick={onClose}
@@ -425,44 +436,70 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="space-y-6">
-          <section>
-            <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-              Agent CLIs
-            </h3>
-            {error && <p className="text-red-400 text-sm">{error}</p>}
-            {!error && !health && (
-              <p className="text-[var(--color-ink-muted)] text-sm">Checking…</p>
+        <div className="flex flex-1 min-h-0">
+          {/* Category nav */}
+          <nav className="w-44 shrink-0 border-r border-[var(--color-border)] p-2 space-y-0.5 overflow-y-auto">
+            {CATEGORIES.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => setCategory(c.id)}
+                className={`w-full rounded px-2 py-1.5 text-left text-xs ${
+                  category === c.id
+                    ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                    : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
+                }`}
+              >
+                {c.label}
+              </button>
+            ))}
+          </nav>
+
+          {/* Active category content */}
+          <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-6">
+            {category === 'features' && <FeatureSettings />}
+
+            {category === 'agents' && (
+              <>
+                <section>
+                  <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
+                    Agent CLIs
+                  </h3>
+                  {error && <p className="text-red-400 text-sm">{error}</p>}
+                  {!error && !health && (
+                    <p className="text-[var(--color-ink-muted)] text-sm">Checking…</p>
+                  )}
+                  {health && (
+                    <div className="divide-y divide-[var(--color-border)]">
+                      <CliRow label="Claude Code" status={health.agents.claude} />
+                      <CliRow label="Codex" status={health.agents.codex} />
+                    </div>
+                  )}
+                </section>
+                <EmbeddingsSection />
+              </>
             )}
-            {health && (
-              <div className="divide-y divide-[var(--color-border)]">
-                <CliRow label="Claude Code" status={health.agents.claude} />
-                <CliRow label="Codex" status={health.agents.codex} />
-              </div>
+
+            {category === 'system' && (
+              <>
+                {/* PWA install + launchd login-autostart only make sense in a
+                    browser. Inside the desktop app the backend is app-owned and
+                    autostart is the Tray's "Open at Login" — so hide both there. */}
+                {!isDesktopApp() && <InstallAppSection />}
+                {!isDesktopApp() && <AutostartSection />}
+                <EnvVarsSection />
+                <div className="pt-2 border-t border-[var(--color-border)]">
+                  <GithubLink />
+                </div>
+              </>
             )}
-          </section>
 
-          <DefaultTransportSection />
-
-          <EmbeddingsSection />
-
-          {/* PWA install + launchd login-autostart only make sense in a
-              browser. Inside the desktop app the backend is app-owned and
-              autostart is the Tray's "Open at Login" — so hide both there. */}
-          {!isDesktopApp() && <InstallAppSection />}
-
-          {!isDesktopApp() && <AutostartSection />}
-
-          <EnvVarsSection />
-
-          <UserProfileSection />
-
-          <BackupSection />
-
-          <DatabaseFileSection />
-
-          <div className="pt-2 border-t border-[var(--color-border)]">
-            <GithubLink />
+            {category === 'data' && (
+              <>
+                <UserProfileSection />
+                <BackupSection />
+                <DatabaseFileSection />
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -476,86 +513,8 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// Default transport for NEW sessions. SDK = structured ChatView; Terminal =
-// live claude/codex TUI. Per-session conversion (tab menu) is independent;
-// this only sets what a freshly-created session starts as. The session pins
-// its transport at creation, so changing this never alters existing sessions.
-function DefaultTransportSection() {
-  const [setting, setSetting] = useState<'sdk' | 'terminal' | null>(null);
-  const [effective, setEffective] = useState<string>('sdk');
-  const [loaded, setLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api
-      .getDefaultTransport()
-      .then((r) => {
-        setSetting(r.setting);
-        setEffective(r.effective);
-        setLoaded(true);
-      })
-      .catch((e) => {
-        setError(String(e));
-        setLoaded(true);
-      });
-  }, []);
-
-  // The dropdown's selected value: the explicit setting, or 'env' (follow
-  // PINLOOM_CLAUDE_TRANSPORT / default) when none is set.
-  const selected = setting ?? 'env';
-
-  async function change(next: string) {
-    setBusy(true);
-    setError(null);
-    try {
-      const body =
-        next === 'env' ? null : (next as 'sdk' | 'terminal');
-      const r = await api.setDefaultTransport(body);
-      setSetting(r.setting);
-      setEffective(r.effective);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section>
-      <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-        New-session mode
-      </h3>
-      {!loaded ? (
-        <p className="text-[var(--color-ink-muted)] text-sm">Loading…</p>
-      ) : (
-        <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <select
-              value={selected}
-              disabled={busy}
-              onChange={(e) => void change(e.target.value)}
-              className="px-2 py-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm disabled:opacity-60"
-            >
-              <option value="sdk">SDK — structured chat</option>
-              <option value="terminal">Terminal — live agent TUI</option>
-              <option value="env">Follow environment / default</option>
-            </select>
-            <span className="text-xs text-[var(--color-ink-muted)]">
-              now: <span className="font-mono">{effective}</span>
-            </span>
-          </div>
-          <p className="text-[11px] leading-relaxed text-[var(--color-ink-muted)]">
-            Applies to sessions you create from here on (claude + codex).
-            Existing sessions keep their mode; switch any one from its tab’s
-            ⋮ menu. “Follow environment” defers to PINLOOM_CLAUDE_TRANSPORT.
-          </p>
-          {error && <p className="text-red-400 text-xs">{error}</p>}
-        </div>
-      )}
-    </section>
-  );
-}
+// (New-session transport is now configured in FeatureSettings → Defaults, which
+// also controls whether the per-session picker is shown or the value is fixed.)
 
 // Install pinloom as a standalone PWA so it gets a dock/taskbar icon and its
 // own window (no browser chrome). The service worker only precaches the static
