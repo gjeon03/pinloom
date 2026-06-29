@@ -24,6 +24,7 @@ import { useFeatures } from '../stores/uiConfig.js';
 import { DirectoryPicker } from './DirectoryPicker.js';
 import { Tooltip } from './Tooltip.js';
 import { useTheme } from '../hooks/useTheme.js';
+import { useT } from '../i18n/t.js';
 
 const COLLAPSED_STORAGE_KEY = 'pinloom.groupCollapsed';
 
@@ -106,6 +107,7 @@ function toProjectReorderItems(
 }
 
 export function AppShell({ children }: Props) {
+  const t = useT();
   const navigate = useNavigate();
   const location = useLocation();
   const { projectId } = useParams<{ projectId: string }>();
@@ -206,7 +208,7 @@ export function AppShell({ children }: Props) {
 
   async function handleCreateGroup() {
     setError(null);
-    const name = prompt('New group name')?.trim();
+    const name = prompt(t('cmp.appShell.newGroupPrompt'))?.trim();
     if (!name) return;
     try {
       const created = await api.createProjectGroup(name);
@@ -232,9 +234,7 @@ export function AppShell({ children }: Props) {
     const proj = projects.find((p) => p.id === id);
     if (!proj) return;
     if (
-      !window.confirm(
-        `Delete project "${proj.name}"? Plans, sessions, and messages will be deleted too.`,
-      )
+      !window.confirm(t('cmp.appShell.deleteProjectConfirm', { name: proj.name }))
     ) {
       return;
     }
@@ -257,7 +257,7 @@ export function AppShell({ children }: Props) {
   async function handleDeleteGroup(id: string) {
     const g = groups.find((x) => x.id === id);
     if (!g) return;
-    if (!window.confirm(`Delete group "${g.name}"? Projects inside will move to Ungrouped.`)) {
+    if (!window.confirm(t('cmp.appShell.deleteGroupConfirm', { name: g.name }))) {
       return;
     }
     setError(null);
@@ -407,8 +407,8 @@ export function AppShell({ children }: Props) {
         <div className="titlebar-drag titlebar-collapsed-strip w-9 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col items-center py-3">
           <button
             type="button"
-            aria-label="Show sidebar"
-            title="Show sidebar"
+            aria-label={t('cmp.appShell.showSidebar')}
+            title={t('cmp.appShell.showSidebar')}
             onClick={() => setSidebarHidden(false)}
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
@@ -419,9 +419,9 @@ export function AppShell({ children }: Props) {
         <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
         <div className="titlebar-drag px-3 py-3 flex items-center justify-end gap-1">
           <div className="flex items-center gap-0.5">
-            <Tooltip label="New group" side="bottom">
+            <Tooltip label={t('cmp.appShell.newGroup')} side="bottom">
               <button
-                aria-label="New group"
+                aria-label={t('cmp.appShell.newGroup')}
                 onClick={handleCreateGroup}
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
               >
@@ -431,22 +431,22 @@ export function AppShell({ children }: Props) {
             <Tooltip
               label={
                 groups.length > 0
-                  ? 'New project (Ungrouped) — pick a directory'
-                  : 'New project — pick a directory'
+                  ? t('cmp.appShell.newProjectUngrouped')
+                  : t('cmp.appShell.newProject')
               }
               side="bottom"
             >
               <button
-                aria-label="New project"
+                aria-label={t('cmp.appShell.newProject')}
                 onClick={() => setPickerTarget({ groupId: null })}
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
               >
                 <Plus size={16} />
               </button>
             </Tooltip>
-            <Tooltip label="Hide sidebar" side="bottom">
+            <Tooltip label={t('cmp.appShell.hideSidebar')} side="bottom">
               <button
-                aria-label="Hide sidebar"
+                aria-label={t('cmp.appShell.hideSidebar')}
                 onClick={() => setSidebarHidden(true)}
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
               >
@@ -594,7 +594,7 @@ export function AppShell({ children }: Props) {
                   commitDrop();
                 }}
               >
-                Ungrouped
+                {t('cmp.appShell.ungrouped')}
               </div>
               {renderProjectsList(ungroupedProjects)}
               {ungroupedProjects.length === 0 && (
@@ -624,7 +624,7 @@ export function AppShell({ children }: Props) {
 
           {projects.length === 0 && groups.length === 0 && (
             <p className="px-3 text-xs text-[var(--color-ink-muted)]">
-              Click + to pick a directory for your first project.
+              {t('cmp.appShell.emptyHint')}
             </p>
           )}
         </div>
@@ -640,7 +640,7 @@ export function AppShell({ children }: Props) {
             }`}
           >
             <Users size={12} />
-            Teams
+            {t('cmp.appShell.nav.teams')}
           </button>
           )}
           {features.wiki && (
@@ -653,7 +653,7 @@ export function AppShell({ children }: Props) {
             }`}
           >
             <BookOpen size={12} />
-            Wiki
+            {t('cmp.appShell.nav.wiki')}
           </button>
           )}
           {features.timeline && (
@@ -666,7 +666,7 @@ export function AppShell({ children }: Props) {
             }`}
           >
             <CalendarDays size={12} />
-            Timeline
+            {t('cmp.appShell.nav.timeline')}
           </button>
           )}
           {features.recap && (
@@ -679,7 +679,7 @@ export function AppShell({ children }: Props) {
             }`}
           >
             <Sparkles size={12} />
-            Recap
+            {t('cmp.appShell.nav.recap')}
           </button>
           )}
           <div className="flex items-center gap-1">
@@ -688,7 +688,7 @@ export function AppShell({ children }: Props) {
               className="flex-1 rounded px-2 py-1.5 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] flex items-center gap-1.5"
             >
               <Settings size={12} />
-              Settings
+              {t('cmp.appShell.nav.settings')}
             </button>
             <ThemeToggle />
           </div>
@@ -756,6 +756,7 @@ function GroupHeader({
   onDrop,
   onDragEnd,
 }: GroupHeaderProps) {
+  const t = useT();
   const Icon = collapsed ? ChevronRight : ChevronDown;
   return (
     <div
@@ -774,7 +775,7 @@ function GroupHeader({
         type="button"
         onClick={onToggleCollapsed}
         className="hover:text-[var(--color-accent)]"
-        title={collapsed ? 'Expand' : 'Collapse'}
+        title={collapsed ? t('cmp.appShell.expand') : t('cmp.appShell.collapse')}
       >
         <Icon size={12} />
       </button>
@@ -803,7 +804,7 @@ function GroupHeader({
               else onMenuOpen();
             }}
             className="p-0.5 rounded hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
-            title="Group options"
+            title={t('cmp.appShell.groupOptions')}
           >
             <MoreHorizontal size={12} />
           </button>
@@ -870,6 +871,7 @@ interface GroupMenuProps {
 }
 
 function GroupMenu({ onNewProject, onRename, onDelete, onClose }: GroupMenuProps) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -891,7 +893,7 @@ function GroupMenu({ onNewProject, onRename, onDelete, onClose }: GroupMenuProps
           onNewProject();
         }}
       >
-        New project
+        {t('cmp.appShell.menu.newProject')}
       </button>
       <div className="my-1 border-t border-[var(--color-border)]" />
       <button
@@ -902,7 +904,7 @@ function GroupMenu({ onNewProject, onRename, onDelete, onClose }: GroupMenuProps
           onRename();
         }}
       >
-        Rename
+        {t('cmp.appShell.menu.rename')}
       </button>
       <button
         type="button"
@@ -912,7 +914,7 @@ function GroupMenu({ onNewProject, onRename, onDelete, onClose }: GroupMenuProps
           onDelete();
         }}
       >
-        Delete
+        {t('cmp.appShell.menu.delete')}
       </button>
     </div>
   );
@@ -924,6 +926,7 @@ interface ProjectMenuProps {
 }
 
 function ProjectMenu({ onDelete, onClose }: ProjectMenuProps) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -945,7 +948,7 @@ function ProjectMenu({ onDelete, onClose }: ProjectMenuProps) {
           onDelete();
         }}
       >
-        Delete
+        {t('cmp.appShell.menu.delete')}
       </button>
     </div>
   );
@@ -985,6 +988,7 @@ function ProjectsList({
   onMenuClose,
   onDelete,
 }: ProjectsListProps) {
+  const t = useT();
   return (
     <>
       {projects.map((p, i) => {
@@ -1072,7 +1076,7 @@ function ProjectsList({
                   className={`p-0.5 rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)] transition-opacity ${
                     menuOpen ? 'opacity-100' : 'opacity-0 group-hover/proj:opacity-100'
                   }`}
-                  title="Project options"
+                  title={t('cmp.appShell.projectOptions')}
                 >
                   <MoreHorizontal size={12} />
                 </button>
@@ -1112,6 +1116,7 @@ function ProjectsList({
 }
 
 function ThemeToggle() {
+  const t = useT();
   const { preference, effective, setPreference } = useTheme();
   // Fixed three-state cycle: system → light → dark → system. The
   // previous "system → opposite of effective" rule unintentionally
@@ -1122,10 +1127,10 @@ function ThemeToggle() {
     preference === 'system' ? 'light' : preference === 'light' ? 'dark' : 'system';
   const label =
     preference === 'system'
-      ? `Theme: System (${effective}) — click for Light`
+      ? t('cmp.appShell.theme.system', { effective })
       : preference === 'light'
-        ? 'Theme: Light — click for Dark'
-        : 'Theme: Dark — click for System';
+        ? t('cmp.appShell.theme.light')
+        : t('cmp.appShell.theme.dark');
   const Icon = preference === 'system' ? Monitor : preference === 'dark' ? Moon : Sun;
   return (
     <Tooltip label={label} side="top">

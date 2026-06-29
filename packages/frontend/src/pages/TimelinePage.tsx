@@ -3,6 +3,7 @@ import useSWR, { mutate as globalMutate } from 'swr';
 import { CalendarDays, ChevronDown, FolderOpen, Pencil, RefreshCw, Save, X, ChevronRight } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from '../components/Markdown.js';
+import { useT } from '../i18n/t.js';
 
 function localToday(): string {
   const d = new Date();
@@ -31,6 +32,7 @@ function save(key: string, val: string) {
 // entry. "By date" shows every project's entry for one day. Plus the
 // per-project auto-capture toggle and manual capture (one project / all).
 export function TimelinePage() {
+  const t = useT();
   const [mode, setMode] = useState<'project' | 'date'>('project');
   const [projectId, setProjectIdRaw] = useState<string | null>(() => load('pinloom:timeline:project'));
   const [projDate, setProjDateRaw] = useState<string | null>(() => load('pinloom:timeline:date'));
@@ -85,9 +87,9 @@ export function TimelinePage() {
       if (ps?.length) out.push({ key: g.id, label: g.name, isUngrouped: false, items: ps });
     }
     const ung = byGroup.get(null);
-    if (ung?.length) out.push({ key: '__ung__', label: 'Ungrouped', isUngrouped: true, items: ung });
+    if (ung?.length) out.push({ key: '__ung__', label: t('page.timeline.ungrouped'), isUngrouped: true, items: ung });
     return out;
-  }, [projects, groups]);
+  }, [projects, groups, t]);
 
   // Group-scope filter for the project column. '' = all groups.
   const [filterGroupId, setFilterGroupId] = useState('');
@@ -180,7 +182,7 @@ export function TimelinePage() {
       void globalMutate('timeline:index');
       if (capJob.date) void globalMutate(['timeline:date', capJob.date]);
       if (projectId && capJob.date) void globalMutate(['timeline:entry', projectId, capJob.date]);
-      setNotice(`Captured ${capJob.captured}/${capJob.total} projects`);
+      setNotice(t('page.timeline.capturedProjects', { captured: capJob.captured, total: capJob.total }));
       setTimeout(() => setNotice(null), 6000);
     }
     wasRunning.current = capJob?.running ?? false;
@@ -205,15 +207,15 @@ export function TimelinePage() {
   async function captureNow() {
     if (!projectId || busy) return;
     setBusy(true);
-    setNotice('Capturing…');
+    setNotice(t('page.timeline.capturing'));
     try {
       const r = await api.captureTimeline(projectId, captureDate);
-      setNotice(r.written ? `Captured ${r.date}` : 'Nothing to capture');
+      setNotice(r.written ? t('page.timeline.capturedDate', { date: r.date }) : t('page.timeline.nothingToCapture'));
       void globalMutate('timeline:index');
       void globalMutate(['timeline:entry', projectId, r.date]);
       if (r.written) setProjDate(r.date);
     } catch (e) {
-      setNotice(`Failed: ${String(e)}`);
+      setNotice(t('page.timeline.failed', { error: String(e) }));
     } finally {
       setBusy(false);
       setTimeout(() => setNotice(null), 4000);
@@ -226,7 +228,7 @@ export function TimelinePage() {
       await api.captureTimelineAll(captureDate);
       void globalMutate('timeline:capture-status'); // kick off polling immediately
     } catch (e) {
-      setNotice(`Failed: ${String(e)}`);
+      setNotice(t('page.timeline.failed', { error: String(e) }));
       setTimeout(() => setNotice(null), 4000);
     }
   }
@@ -238,22 +240,22 @@ export function TimelinePage() {
     <div className="flex flex-col h-full min-h-0">
       <header className="border-b border-[var(--color-border)] pl-4 pr-60 py-2 flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
-          <CalendarDays size={16} /> Work Timeline
+          <CalendarDays size={16} /> {t('page.timeline.title')}
         </div>
         <div className="flex rounded border border-[var(--color-border)] overflow-hidden text-xs">
           <button
             onClick={() => setMode('project')}
-            title="Browse one project's entries — pick a project, then a date"
+            title={t('page.timeline.byProjectTooltip')}
             className={`px-2 py-1 ${mode === 'project' ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]' : 'text-[var(--color-ink-muted)]'}`}
           >
-            By project
+            {t('page.timeline.byProject')}
           </button>
           <button
             onClick={() => setMode('date')}
-            title="See every project's entry for a single day"
+            title={t('page.timeline.byDateTooltip')}
             className={`px-2 py-1 ${mode === 'date' ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]' : 'text-[var(--color-ink-muted)]'}`}
           >
-            By date (all)
+            {t('page.timeline.byDate')}
           </button>
         </div>
 
@@ -261,15 +263,15 @@ export function TimelinePage() {
         {mode === 'project' && selected && (
           <label
             className="flex items-center gap-1 text-xs text-[var(--color-ink-muted)] cursor-pointer"
-            title={`Auto-capture for ${selected.projectName} (per-project).\nSchedule: a background sweep runs every ~1 min and captures a session once it has been idle ~15 min AND ≥80 chars of new work accrued since the last capture. An already-captured day re-distills at most once every 30 min. Closing a session tab deletes it — capture before then (or use Capture).`}
+            title={t('page.timeline.autoCaptureTooltip', { name: selected.projectName })}
           >
             <input type="checkbox" checked={selected.auto} onChange={() => void toggleAuto()} />
-            Auto-capture
+            {t('page.timeline.autoCapture')}
           </label>
         )}
         {mode === 'date' && (
           <label className="flex items-center gap-1.5 text-xs">
-            <span className="text-[var(--color-ink-muted)]">Viewing</span>
+            <span className="text-[var(--color-ink-muted)]">{t('page.timeline.viewing')}</span>
             <input
               type="date"
               value={date}
@@ -282,10 +284,10 @@ export function TimelinePage() {
           <select
             value={filterGroupId}
             onChange={(e) => setFilterGroupId(e.target.value)}
-            title="Filter the project column by group"
+            title={t('page.timeline.filterByGroup')}
             className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs text-[var(--color-ink-muted)]"
           >
-            <option value="">All groups</option>
+            <option value="">{t('page.timeline.allGroups')}</option>
             {[...groups]
               .sort((a, b) => a.orderIndex - b.orderIndex)
               .map((g) => (
@@ -293,7 +295,7 @@ export function TimelinePage() {
                   {g.name}
                 </option>
               ))}
-            <option value="__ungrouped__">Ungrouped</option>
+            <option value="__ungrouped__">{t('page.timeline.ungrouped')}</option>
           </select>
         )}
 
@@ -301,13 +303,13 @@ export function TimelinePage() {
             the capture date isn't mistaken for the view date. */}
         <div className="ml-auto flex items-center gap-1.5">
           <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-muted)]">
-            Capture
+            {t('page.timeline.capture')}
           </span>
           <input
             type="date"
             value={captureDate}
             max={localToday()}
-            title="Target day — pick a past day to backfill it"
+            title={t('page.timeline.targetDayTooltip')}
             onChange={(e) => setCaptureDate(e.target.value)}
             className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1 text-xs"
           />
@@ -315,20 +317,20 @@ export function TimelinePage() {
             <button
               onClick={() => void captureNow()}
               disabled={busy}
-              title={`Capture / regenerate ${captureDate} for ${selected.projectName} (from that day's sessions + git commits)`}
+              title={t('page.timeline.captureThisTooltip', { date: captureDate, name: selected.projectName })}
               className={captureBtnCls}
             >
-              <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> This project
+              <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> {t('page.timeline.thisProject')}
             </button>
           )}
           <button
             onClick={() => void captureAll()}
             disabled={busy || capturingAll}
-            title={`Capture / regenerate ${captureDate} for every project (runs in the background — progress shows here)`}
+            title={t('page.timeline.captureAllTooltip', { date: captureDate })}
             className={captureBtnCls}
           >
             <RefreshCw size={12} className={capturingAll ? 'animate-spin' : ''} />{' '}
-            {capturingAll ? `${capJob!.done}/${capJob!.total}…` : 'All projects'}
+            {capturingAll ? `${capJob!.done}/${capJob!.total}…` : t('page.timeline.allProjects')}
           </button>
           {notice && <span className="text-xs text-[var(--color-ink-muted)]">{notice}</span>}
         </div>
@@ -340,7 +342,7 @@ export function TimelinePage() {
             {/* Column 1 — projects, grouped + collapsible (like the sidebar) */}
             <div className="w-52 shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-1">
               {projects.length === 0 ? (
-                <div className="text-xs text-[var(--color-ink-muted)] p-3">No projects.</div>
+                <div className="text-xs text-[var(--color-ink-muted)] p-3">{t('page.timeline.noProjects')}</div>
               ) : (
                 visibleSections.map((sec) => {
                   const open = !collapsedGroups.has(sec.key);
@@ -401,9 +403,9 @@ export function TimelinePage() {
             {/* Column 2 — the selected project's dates */}
             <div className="w-44 shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-1">
               {!selected ? (
-                <div className="text-xs text-[var(--color-ink-muted)] p-3">Select a project.</div>
+                <div className="text-xs text-[var(--color-ink-muted)] p-3">{t('page.timeline.selectProject')}</div>
               ) : selected.dates.length === 0 ? (
-                <div className="text-xs text-[var(--color-ink-muted)] p-3">No entries yet.</div>
+                <div className="text-xs text-[var(--color-ink-muted)] p-3">{t('page.timeline.noEntries')}</div>
               ) : (
                 selected.dates.map((d) => (
                   <button
@@ -436,32 +438,32 @@ export function TimelinePage() {
                             disabled={savingEntry}
                             className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-50"
                           >
-                            <X size={12} /> Cancel
+                            <X size={12} /> {t('page.timeline.cancel')}
                           </button>
                           <button
                             onClick={() => void saveEntry()}
                             disabled={savingEntry}
                             className="flex items-center gap-1 rounded bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-black disabled:opacity-50"
                           >
-                            <Save size={12} /> {savingEntry ? 'Saving…' : 'Save'}
+                            <Save size={12} /> {savingEntry ? t('page.timeline.saving') : t('page.timeline.save')}
                           </button>
                         </>
                       ) : (
                         <>
                           <button
                             onClick={startEditEntry}
-                            title="Edit this entry in place"
+                            title={t('page.timeline.editTooltip')}
                             className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs hover:border-[var(--color-accent)]"
                           >
-                            <Pencil size={12} /> Edit
+                            <Pencil size={12} /> {t('page.timeline.edit')}
                           </button>
                           <button
                             onClick={() => void openEntryFile()}
                             disabled={!entry?.markdown}
-                            title="Reveal this entry's .md file in Finder (opens its folder)"
+                            title={t('page.timeline.revealTooltip')}
                             className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-1 text-xs hover:border-[var(--color-accent)] disabled:opacity-50"
                           >
-                            <FolderOpen size={12} /> Reveal
+                            <FolderOpen size={12} /> {t('page.timeline.reveal')}
                           </button>
                         </>
                       )}
@@ -473,18 +475,18 @@ export function TimelinePage() {
                       onChange={(e) => setDraft(e.target.value)}
                       spellCheck={false}
                       className="h-[calc(100%-2.5rem)] min-h-64 w-full resize-none rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 font-mono text-xs leading-relaxed"
-                      placeholder="# Markdown for this day…"
+                      placeholder={t('page.timeline.entryPlaceholder')}
                     />
                   ) : entry?.markdown ? (
                     <Markdown content={entry.markdown} />
                   ) : (
                     <div className="text-sm text-[var(--color-ink-muted)]">
-                      No entry for this day. <span className="text-[var(--color-ink-muted)]">Click Edit to write one.</span>
+                      {t('page.timeline.noEntryForDay')} <span className="text-[var(--color-ink-muted)]">{t('page.timeline.clickEditToWrite')}</span>
                     </div>
                   )}
                 </>
               ) : (
-                <div className="text-sm text-[var(--color-ink-muted)]">Pick a date.</div>
+                <div className="text-sm text-[var(--color-ink-muted)]">{t('page.timeline.pickDate')}</div>
               )}
             </div>
           </>
@@ -492,7 +494,7 @@ export function TimelinePage() {
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             {(globalData?.entries ?? []).length === 0 ? (
               <div className="text-sm text-[var(--color-ink-muted)]">
-                No work recorded on {date}.
+                {t('page.timeline.noWorkOnDate', { date })}
               </div>
             ) : (
               globalData!.entries.map((e) => (

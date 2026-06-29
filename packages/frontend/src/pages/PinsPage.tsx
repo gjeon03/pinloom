@@ -4,8 +4,10 @@ import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { PinnedPanel } from '../components/PinnedPanel.js';
+import { useT } from '../i18n/t.js';
 
 export function PinsPage() {
+  const t = useT();
   const { sessionId } = useParams<{ sessionId: string }>();
   const [session, setSession] = useState<Session | null>(null);
   const [project, setProject] = useState<Project | null>(null);
@@ -76,7 +78,7 @@ export function PinsPage() {
   if (!sessionId) {
     return (
       <div className="p-6 text-sm text-[var(--color-ink-muted)]">
-        No session id.
+        {t('page.pins.noSessionId')}
       </div>
     );
   }
@@ -90,14 +92,16 @@ export function PinsPage() {
       <header className="titlebar-trafficlights border-b border-[var(--color-border)] px-4 py-2 flex items-center justify-between">
         <div>
           <div className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
-            Pins
+            {t('page.pins.title')}
           </div>
           <div className="text-sm font-semibold">
-            {session?.title ?? `Chat ${sessionId.slice(0, 6)}`}
+            {session?.title ?? t('page.pins.chatFallback', { id: sessionId.slice(0, 6) })}
           </div>
         </div>
         <div className="text-xs text-[var(--color-ink-muted)]">
-          {pins.length} pin{pins.length === 1 ? '' : 's'}
+          {pins.length === 1
+            ? t('page.pins.count.one', { n: pins.length })
+            : t('page.pins.count.other', { n: pins.length })}
         </div>
       </header>
 

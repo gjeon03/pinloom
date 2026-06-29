@@ -1,22 +1,19 @@
+import type { UiLocale } from '@pinloom/shared';
 import { useUiLocale } from '../stores/uiConfig.js';
-import { en } from './en.js';
-import { ko } from './ko.js';
+import { STRINGS } from './strings.js';
 
-// Lightweight i18n. Keys live in en.ts/ko.ts (flat, dotted namespaces). English
-// is the fallback for any key missing in another locale, and the key itself is
+// Lightweight i18n. STRINGS (strings.ts) is the single source: key → {en, ko}.
+// English is the fallback for a locale missing a value, and the key itself is
 // the last-resort fallback so a missing string is visible, never blank. Proper
-// nouns (Wiki, Teams, Recap…) intentionally read the same in every locale.
-export type Dict = Record<string, string>;
-
-const DICTS: Record<string, Dict> = { en, ko };
+// nouns (Wiki, Teams, Recap…) read the same in every locale by design.
 
 export function translate(
-  locale: string,
+  locale: UiLocale,
   key: string,
   vars?: Record<string, string | number>,
 ): string {
-  const dict = DICTS[locale] ?? en;
-  const s = dict[key] ?? en[key] ?? key;
+  const entry = STRINGS[key];
+  const s = entry ? (entry[locale] ?? entry.en) : key;
   if (!vars) return s;
   return s.replace(/\{(\w+)\}/g, (_, k: string) =>
     vars[k] !== undefined ? String(vars[k]) : `{${k}}`,

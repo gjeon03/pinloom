@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { GithubLink } from './GithubLink.js';
 import { FeatureSettings } from './FeatureSettings.js';
-import { useT } from '../i18n/t.js';
+import { useT, type TFn } from '../i18n/t.js';
 import type {
   HealthResponse,
   PromptTemplate,
@@ -25,6 +25,7 @@ import { isDesktopApp } from '../utils/desktop.js';
 type CliStatus = HealthResponse['agents']['claude'];
 
 function CliRow({ label, status }: { label: string; status: CliStatus }) {
+  const t = useT();
   return (
     <div className="flex items-baseline justify-between py-1.5">
       <span className="text-sm">{label}</span>
@@ -34,7 +35,7 @@ function CliRow({ label, status }: { label: string; status: CliStatus }) {
             status.installed ? 'text-emerald-300' : 'text-red-400'
           }
         >
-          {status.installed ? 'installed' : 'not found'}
+          {status.installed ? t('cmp.settings.cli.installed') : t('cmp.settings.cli.notFound')}
         </span>
         {status.version && (
           <span className="text-[var(--color-ink-muted)] text-xs">
@@ -66,6 +67,7 @@ const emptyDraft: DraftEnvVar = {
 };
 
 function EnvVarsSection() {
+  const t = useT();
   const [items, setItems] = useState<UserEnvVar[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftEnvVar | null>(null);
@@ -105,11 +107,11 @@ function EnvVarsSection() {
   async function save() {
     if (!draft) return;
     if (!KEY_PATTERN.test(draft.key)) {
-      setError('Key must match /^[A-Za-z_][A-Za-z0-9_]*$/');
+      setError(t('cmp.settings.env.keyPattern'));
       return;
     }
     if (draft.value.length === 0) {
-      setError('Value cannot be empty');
+      setError(t('cmp.settings.env.valueEmpty'));
       return;
     }
     setBusy(true);
@@ -130,7 +132,7 @@ function EnvVarsSection() {
   }
 
   async function remove(key: string) {
-    if (!confirm(`Delete ${key}?`)) return;
+    if (!confirm(t('cmp.settings.env.deleteConfirm', { key }))) return;
     setBusy(true);
     try {
       await api.deleteEnvVar(key);
@@ -146,7 +148,7 @@ function EnvVarsSection() {
     <section>
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
-          Environment Variables
+          {t('cmp.settings.env.title')}
         </h3>
         {!draft && (
           <button
@@ -154,24 +156,22 @@ function EnvVarsSection() {
             className="text-xs flex items-center gap-1 px-2 py-1 rounded border border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
           >
             <Plus size={12} />
-            Add
+            {t('cmp.settings.env.add')}
           </button>
         )}
       </div>
 
       <p className="text-xs text-[var(--color-ink-muted)] mb-3">
-        Stored locally. Exposed to every agent run as <code>$KEY</code> in
-        Bash. Use for Asana / GitLab / Notion tokens, custom API base URLs,
-        etc. Values never leave this machine.
+        {t('cmp.settings.env.descBefore')}<code>$KEY</code>{t('cmp.settings.env.descAfter')}
       </p>
 
       {items === null && !error && (
-        <p className="text-[var(--color-ink-muted)] text-sm">Loading…</p>
+        <p className="text-[var(--color-ink-muted)] text-sm">{t('cmp.settings.env.loading')}</p>
       )}
 
       {items && items.length === 0 && !draft && (
         <p className="text-[var(--color-ink-muted)] text-sm py-2">
-          No variables configured yet.
+          {t('cmp.settings.env.none')}
         </p>
       )}
 
@@ -191,19 +191,19 @@ function EnvVarsSection() {
                 )}
               </div>
               <span className="font-mono text-xs text-[var(--color-ink-muted)]">
-                {v.isSecret ? '••••••••' : 'plain'}
+                {v.isSecret ? '••••••••' : t('cmp.settings.env.plain')}
               </span>
               <button
                 onClick={() => startEdit(v)}
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-1 rounded hover:bg-[var(--color-surface-3)]"
-                title="Edit"
+                title={t('cmp.settings.env.edit')}
               >
                 <Pencil size={14} />
               </button>
               <button
                 onClick={() => remove(v.key)}
                 className="text-[var(--color-ink-muted)] hover:text-red-400 p-1 rounded hover:bg-[var(--color-surface-3)]"
-                title="Delete"
+                title={t('cmp.settings.env.delete')}
                 disabled={busy}
               >
                 <Trash2 size={14} />
@@ -224,7 +224,7 @@ function EnvVarsSection() {
         <div className="mt-3 border border-[var(--color-border)] rounded p-3 bg-[var(--color-surface-3)] space-y-2">
           <div>
             <label className="text-xs text-[var(--color-ink-muted)] block mb-1">
-              Key
+              {t('cmp.settings.env.key')}
             </label>
             <input
               autoFocus={!draft.editingExisting}
@@ -242,10 +242,10 @@ function EnvVarsSection() {
           </div>
           <div>
             <label className="text-xs text-[var(--color-ink-muted)] block mb-1">
-              Value
+              {t('cmp.settings.env.value')}
               {draft.editingExisting && (
                 <span className="ml-1 text-[10px]">
-                  (paste again to overwrite)
+                  {t('cmp.settings.env.pasteAgain')}
                 </span>
               )}
             </label>
@@ -254,7 +254,7 @@ function EnvVarsSection() {
               type="text"
               value={draft.value}
               onChange={(e) => setDraft({ ...draft, value: e.target.value })}
-              placeholder="paste token here"
+              placeholder={t('cmp.settings.env.valuePlaceholder')}
               autoComplete="off"
               spellCheck={false}
               data-1p-ignore="true"
@@ -269,14 +269,14 @@ function EnvVarsSection() {
           </div>
           <div>
             <label className="text-xs text-[var(--color-ink-muted)] block mb-1">
-              Description (optional)
+              {t('cmp.settings.env.description')}
             </label>
             <input
               value={draft.description}
               onChange={(e) =>
                 setDraft({ ...draft, description: e.target.value })
               }
-              placeholder="e.g. Asana personal access token"
+              placeholder={t('cmp.settings.env.descriptionPlaceholder')}
               autoComplete="off"
               className="w-full px-2 py-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm"
             />
@@ -289,7 +289,7 @@ function EnvVarsSection() {
                 setDraft({ ...draft, isSecret: e.target.checked })
               }
             />
-            Treat as secret (mask in UI)
+            {t('cmp.settings.env.treatSecret')}
           </label>
           {error && <p className="text-red-400 text-xs">{error}</p>}
           <div className="flex justify-end gap-2 pt-1">
@@ -301,14 +301,14 @@ function EnvVarsSection() {
               disabled={busy}
               className="px-3 py-1 rounded text-xs border border-[var(--color-border)] hover:bg-[var(--color-surface-2)]"
             >
-              Cancel
+              {t('cmp.settings.env.cancel')}
             </button>
             <button
               onClick={save}
               disabled={busy}
               className="px-3 py-1 rounded text-xs bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-60"
             >
-              {busy ? 'Saving…' : 'Save'}
+              {busy ? t('cmp.settings.env.saving') : t('cmp.settings.env.save')}
             </button>
           </div>
         </div>
@@ -322,6 +322,7 @@ function EnvVarsSection() {
 }
 
 function UserProfileSection() {
+  const t = useT();
   const [text, setText] = useState<string | null>(null);
   const [maxChars, setMaxChars] = useState(4000);
   const [saving, setSaving] = useState(false);
@@ -356,26 +357,23 @@ function UserProfileSection() {
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-        About You
+        {t('cmp.settings.profile.title')}
       </h3>
       <p className="text-xs text-[var(--color-ink-muted)] mb-3">
-        Your preferences and working style — included in <strong>every</strong>{' '}
-        agent's system prompt, across all projects (distinct from the
-        project-scoped wiki). Stored locally at{' '}
-        <code>~/.pinloom/wiki/USER.md</code>;{' '}
-        <strong>it is sent to the model on every turn</strong>, so keep it
-        concise and free of secrets.
+        {t('cmp.settings.profile.descBefore')}
+        <code>~/.pinloom/wiki/USER.md</code>
+        {t('cmp.settings.profile.descAfter')}
       </p>
       {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
       {text === null ? (
-        <p className="text-[var(--color-ink-muted)] text-sm">Loading…</p>
+        <p className="text-[var(--color-ink-muted)] text-sm">{t('cmp.settings.profile.loading')}</p>
       ) : (
         <>
           <textarea
             value={text}
             maxLength={maxChars}
             onChange={(e) => setText(e.target.value)}
-            placeholder="e.g. I prefer pnpm + TypeScript strict. Conventional commits. Be terse. Ask before large refactors."
+            placeholder={t('cmp.settings.profile.placeholder')}
             rows={6}
             className="w-full text-sm px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] resize-y"
           />
@@ -388,7 +386,7 @@ function UserProfileSection() {
               disabled={saving}
               className="text-xs px-3 py-1.5 rounded bg-[var(--color-accent)] text-black font-medium disabled:opacity-50"
             >
-              {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
+              {saving ? t('cmp.settings.profile.saving') : saved ? t('cmp.settings.profile.saved') : t('cmp.settings.profile.save')}
             </button>
           </div>
         </>
@@ -526,14 +524,15 @@ const EMB_MODES = [
 ] as const;
 
 const fmtCount = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-function timeAgo(iso: string): string {
+function timeAgo(iso: string, t: TFn): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return `${Math.floor(s)}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
+  if (s < 60) return t('cmp.settings.ago.s', { n: Math.floor(s) });
+  if (s < 3600) return t('cmp.settings.ago.m', { n: Math.floor(s / 60) });
+  return t('cmp.settings.ago.h', { n: Math.floor(s / 3600) });
 }
 
 function EmbeddingsSection() {
+  const t = useT();
   const { data, mutate } = useSWR('settings:embeddings', () => api.getEmbeddingsStatus(), {
     refreshInterval: 4000,
   });
@@ -573,11 +572,10 @@ function EmbeddingsSection() {
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-        Search embeddings
+        {t('cmp.settings.emb.title')}
       </h3>
       <p className="mb-2 text-xs text-[var(--color-ink-muted)]">
-        Powers semantic ⌘K search + Recap. Ollama gives stronger embeddings (esp. Korean);
-        switching re-embeds in the background (keyword-only meanwhile).
+        {t('cmp.settings.emb.desc')}
       </p>
       <div className="flex rounded border border-[var(--color-border)] overflow-hidden text-xs w-fit">
         {EMB_MODES.map((m) => (
@@ -591,34 +589,35 @@ function EmbeddingsSection() {
                 : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
             } disabled:opacity-50`}
           >
-            {m.label}
+            {t(`cmp.settings.emb.mode.${m.id}`)}
           </button>
         ))}
       </div>
 
       <div className="mt-2 text-xs">
-        {mode === 'off' && <span className="text-[var(--color-ink-muted)]">Keyword search only.</span>}
+        {mode === 'off' && <span className="text-[var(--color-ink-muted)]">{t('cmp.settings.emb.keywordOnly')}</span>}
         {mode === 'in-process' && (
           <span className="text-[var(--color-ink-muted)]">
-            {data?.ready ? `✓ ready (${data.id})` : 'warming up…'}
+            {data?.ready ? t('cmp.settings.emb.ready', { id: data.id ?? '' }) : t('cmp.settings.emb.warming')}
           </span>
         )}
         {mode === 'ollama' && data && (
           <>
             {!data.ollama.running ? (
               <div className="text-[var(--color-ink-muted)]">
-                Ollama isn’t reachable. Already installed? It just needs to be{' '}
-                <em>started</em>.{' '}
+                {t('cmp.settings.emb.notReachableBefore')}
+                <em>{t('cmp.settings.emb.started')}</em>
+                {t('cmp.settings.emb.notReachableAfter')}{' '}
                 <button
                   onClick={() => setGuideOpen(true)}
                   className="text-[var(--color-accent)] hover:underline"
                 >
-                  Setup guide →
+                  {t('cmp.settings.emb.setupGuide')}
                 </button>
               </div>
             ) : pull ? (
               <div className="text-[var(--color-ink-muted)]">
-                Downloading {data.ollamaModel}… {pull.status} {pct > 0 ? `${pct}%` : ''}
+                {t('cmp.settings.emb.downloading', { model: data.ollamaModel })} {pull.status} {pct > 0 ? `${pct}%` : ''}
                 <div className="mt-1 h-1.5 w-full max-w-xs rounded bg-[var(--color-surface-3)]">
                   <div className="h-full rounded bg-[var(--color-accent)]" style={{ width: `${pct}%` }} />
                 </div>
@@ -628,11 +627,11 @@ function EmbeddingsSection() {
                 onClick={() => void download()}
                 className="rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2.5 py-1 hover:border-[var(--color-accent)]"
               >
-                Download {data.ollamaModel}
+                {t('cmp.settings.emb.download', { model: data.ollamaModel })}
               </button>
             ) : (
               <span className="text-[var(--color-ink-muted)]">
-                {data.ready ? `✓ ${data.id} ready` : 're-embedding corpus… (keyword search meanwhile)'}
+                {data.ready ? t('cmp.settings.emb.modelReady', { id: data.id ?? '' }) : t('cmp.settings.emb.reEmbedding')}
               </span>
             )}
           </>
@@ -642,18 +641,25 @@ function EmbeddingsSection() {
       {data?.indexing && mode !== 'off' && (
         <div className="mt-2 border-t border-[var(--color-border)] pt-2 text-[11px]">
           <div className="text-[var(--color-ink-muted)]">
-            Indexed: messages {fmtCount(data.indexing.messages.indexed)}/
-            {fmtCount(data.indexing.messages.total)} · timeline {data.indexing.timeline.indexed} · wiki{' '}
-            {data.indexing.wiki.indexed}/{data.indexing.wiki.total}
+            {t('cmp.settings.emb.indexed', {
+              messagesIndexed: fmtCount(data.indexing.messages.indexed),
+              messagesTotal: fmtCount(data.indexing.messages.total),
+              timeline: data.indexing.timeline.indexed,
+              wikiIndexed: data.indexing.wiki.indexed,
+              wikiTotal: data.indexing.wiki.total,
+            })}
             {data.indexing.messages.indexed < data.indexing.messages.total && !data.indexing.lastError && (
-              <span className="ml-1 text-[var(--color-accent)]">· indexing…</span>
+              <span className="ml-1 text-[var(--color-accent)]">{t('cmp.settings.emb.indexing')}</span>
             )}
           </div>
           {data.indexing.lastError && (
             <div className="mt-1 text-amber-500">
-              ⚠ last error ({data.indexing.lastError.pass}): {data.indexing.lastError.message}
+              {t('cmp.settings.emb.lastError', {
+                pass: data.indexing.lastError.pass,
+                message: data.indexing.lastError.message,
+              })}
               <span className="ml-1 text-[var(--color-ink-muted)]">
-                · {timeAgo(data.indexing.lastError.at)}
+                · {timeAgo(data.indexing.lastError.at, t)}
               </span>
             </div>
           )}
@@ -673,6 +679,7 @@ function EmbeddingsSection() {
 // does NOT start the server, so the status stays "not reachable" until `ollama
 // serve` (or the app) is running — step 2 calls that out explicitly.
 function OllamaCmd({ children }: { children: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -687,18 +694,19 @@ function OllamaCmd({ children }: { children: string }) {
           },
         );
       }}
-      title="Copy"
+      title={t('cmp.settings.ollama.copy')}
       className="group inline-flex items-center gap-1.5 rounded bg-[var(--color-surface-3)] px-2 py-1 font-mono text-xs hover:ring-1 hover:ring-[var(--color-accent)]"
     >
       <span>{children}</span>
       <span className="text-[10px] text-[var(--color-ink-muted)] group-hover:text-[var(--color-accent)]">
-        {copied ? 'copied' : 'copy'}
+        {copied ? t('cmp.settings.ollama.copied') : t('cmp.settings.ollama.copyShort')}
       </span>
     </button>
   );
 }
 
 function OllamaGuideModal({ model, onClose }: { model: string; onClose: () => void }) {
+  const t = useT();
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
@@ -707,14 +715,14 @@ function OllamaGuideModal({ model, onClose }: { model: string; onClose: () => vo
       <div
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label="Ollama setup guide"
+        aria-label={t('cmp.settings.ollama.guideAria')}
         className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 text-sm"
       >
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-semibold">Use Ollama for embeddings</h3>
+          <h3 className="font-semibold">{t('cmp.settings.ollama.guideTitle')}</h3>
           <button
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('cmp.settings.ollama.close')}
             className="rounded p-1 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
           >
             <X size={16} />
@@ -723,9 +731,9 @@ function OllamaGuideModal({ model, onClose }: { model: string; onClose: () => vo
 
         <ol className="space-y-3">
           <li>
-            <div className="font-medium">1. Install (once)</div>
+            <div className="font-medium">{t('cmp.settings.ollama.step1')}</div>
             <div className="mt-1 text-[var(--color-ink-muted)]">
-              macOS: <OllamaCmd>brew install ollama</OllamaCmd> — or download from{' '}
+              {t('cmp.settings.ollama.step1Before')}<OllamaCmd>brew install ollama</OllamaCmd>{t('cmp.settings.ollama.step1Mid')}{' '}
               <a
                 href="https://ollama.com/download"
                 target="_blank"
@@ -738,27 +746,26 @@ function OllamaGuideModal({ model, onClose }: { model: string; onClose: () => vo
             </div>
           </li>
           <li>
-            <div className="font-medium">2. Start the server</div>
+            <div className="font-medium">{t('cmp.settings.ollama.step2')}</div>
             <div className="mt-1 text-[var(--color-ink-muted)]">
-              Installing alone isn’t enough — the server must run. Either run{' '}
-              <OllamaCmd>ollama serve</OllamaCmd> in a terminal, or open the{' '}
-              <strong>Ollama app</strong> (menu-bar icon). To keep it always on:{' '}
+              {t('cmp.settings.ollama.step2Before')}{' '}
+              <OllamaCmd>ollama serve</OllamaCmd>{t('cmp.settings.ollama.step2Mid')}{' '}
+              <strong>{t('cmp.settings.ollama.ollamaApp')}</strong>{t('cmp.settings.ollama.step2Mid2')}{' '}
               <OllamaCmd>brew services start ollama</OllamaCmd>.
             </div>
           </li>
           <li>
-            <div className="font-medium">3. Back here</div>
+            <div className="font-medium">{t('cmp.settings.ollama.step3')}</div>
             <div className="mt-1 text-[var(--color-ink-muted)]">
-              This panel auto-detects it within a few seconds, then a{' '}
-              <strong>Download {model}</strong> button appears — click it and pinloom pulls the
-              model (with a progress bar) and re-embeds in the background.
+              {t('cmp.settings.ollama.step3Before')}
+              <strong>{t('cmp.settings.ollama.downloadModel', { model })}</strong>
+              {t('cmp.settings.ollama.step3After')}
             </div>
           </li>
         </ol>
 
         <p className="mt-4 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-ink-muted)]">
-          pinloom checks <code>http://localhost:11434</code>. Running Ollama on another host or
-          port? Set <code>PINLOOM_OLLAMA_URL</code> and restart the backend.
+          {t('cmp.settings.ollama.checkBefore')}<code>http://localhost:11434</code>{t('cmp.settings.ollama.checkMid')}<code>PINLOOM_OLLAMA_URL</code>{t('cmp.settings.ollama.checkAfter')}
         </p>
       </div>
     </div>
@@ -770,24 +777,23 @@ function OllamaGuideModal({ model, onClose }: { model: string; onClose: () => vo
 // the native dialog); iOS Safari has no programmatic prompt, so we fall back to
 // the manual "Add to Home Screen" instructions.
 function InstallAppSection() {
+  const t = useT();
   const { canInstall, isInstalled, isIos, promptInstall } = usePwaInstall();
 
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-        Install as app
+        {t('cmp.settings.install.title')}
       </h3>
       <div className="space-y-2 text-sm">
         {isInstalled ? (
           <p className="text-[var(--color-ink-muted)]">
-            pinloom is running as an installed app. Pair this with “Start at
-            login” below so the backend is always up when you open it.
+            {t('cmp.settings.install.installed')}
           </p>
         ) : canInstall ? (
           <>
             <p className="text-[var(--color-ink-muted)]">
-              Install pinloom as a desktop app — its own window with a
-              dock/taskbar icon, no browser tabs.
+              {t('cmp.settings.install.canInstall')}
             </p>
             <button
               type="button"
@@ -795,20 +801,17 @@ function InstallAppSection() {
               className="inline-flex items-center gap-1.5 rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm"
             >
               <Download size={14} />
-              Install pinloom
+              {t('cmp.settings.install.button')}
             </button>
           </>
         ) : isIos ? (
           <p className="text-[var(--color-ink-muted)]">
-            On iOS Safari, tap the <strong>Share</strong> button, then{' '}
-            <strong>Add to Home Screen</strong> to install pinloom as an app.
+            {t('cmp.settings.install.iosBefore')}<strong>{t('cmp.settings.install.share')}</strong>{t('cmp.settings.install.iosMid')}{' '}
+            <strong>{t('cmp.settings.install.addToHome')}</strong>{t('cmp.settings.install.iosAfter')}
           </p>
         ) : (
           <p className="text-[var(--color-ink-muted)]">
-            Installation isn’t available in this browser right now. In
-            Chrome/Edge, look for the install icon in the address bar; if it’s
-            missing, the app may already be installed or the browser doesn’t
-            support it.
+            {t('cmp.settings.install.unavailable')}
           </p>
         )}
       </div>
@@ -822,6 +825,7 @@ function InstallAppSection() {
 // reflects out-of-band changes. Unsupported platforms get a manual unit-file
 // download instead.
 function AutostartSection() {
+  const t = useT();
   const [status, setStatus] = useState<AutostartStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -865,15 +869,15 @@ function AutostartSection() {
       ? 'macOS (LaunchAgent)'
       : status?.platform === 'linux'
         ? 'Linux (systemd --user)'
-        : 'this platform';
+        : t('cmp.settings.autostart.thisPlatform');
 
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-        Start at login
+        {t('cmp.settings.autostart.title')}
       </h3>
       {status === null && !error ? (
-        <p className="text-[var(--color-ink-muted)] text-sm">Loading…</p>
+        <p className="text-[var(--color-ink-muted)] text-sm">{t('cmp.settings.autostart.loading')}</p>
       ) : status && status.supported ? (
         <div className="space-y-2 text-sm">
           <label className="flex items-center gap-2">
@@ -884,19 +888,16 @@ function AutostartSection() {
               onChange={(e) => void toggle(e.target.checked)}
             />
             <span>
-              Launch pinloom automatically when you log in ({platformLabel})
+              {t('cmp.settings.autostart.toggle', { platform: platformLabel })}
             </span>
           </label>
           <p className="text-[11px] leading-relaxed text-[var(--color-ink-muted)]">
-            Runs <code>pnpm start:served</code> from a login shell — it serves
-            the current build (no rebuild). After pulling new code, run{' '}
-            <code>pnpm build</code> to refresh it. Toggle off to remove the
-            agent completely.
+            {t('cmp.settings.autostart.descBefore')}<code>pnpm start:served</code>{t('cmp.settings.autostart.descMid')}{' '}
+            <code>pnpm build</code>{t('cmp.settings.autostart.descAfter')}
           </p>
           {status.installed && !status.registered && (
             <p className="text-amber-400 text-xs">
-              The unit file exists but the OS doesn’t report it as loaded — try
-              toggling off and on again.
+              {t('cmp.settings.autostart.notLoaded')}
             </p>
           )}
           {warnings.length > 0 && (
@@ -907,15 +908,14 @@ function AutostartSection() {
       ) : (
         <div className="space-y-2 text-sm">
           <p className="text-[var(--color-ink-muted)]">
-            Automatic login start isn’t supported on {platformLabel} yet. You
-            can download the launcher unit and install it manually.
+            {t('cmp.settings.autostart.unsupported', { platform: platformLabel })}
           </p>
           <button
             type="button"
             onClick={downloadUnit}
             className="rounded border border-[var(--color-border)] text-sm px-3 py-1.5 hover:border-[var(--color-accent)]"
           >
-            Download launcher file
+            {t('cmp.settings.autostart.downloadUnit')}
           </button>
           {error && <p className="text-red-400 text-xs">{error}</p>}
         </div>
@@ -931,6 +931,7 @@ function AutostartSection() {
 // preserved by id-based skip-if-exists, so a repeated import is a
 // no-op.
 function DatabaseFileSection() {
+  const t = useT();
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
@@ -976,14 +977,11 @@ function DatabaseFileSection() {
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-        Database file
+        {t('cmp.settings.db.title')}
       </h3>
       <div className="space-y-2 text-sm">
         <p className="text-[var(--color-ink-muted)]">
-          Save your projects, sessions and messages as a single JSON file you
-          can keep anywhere. On another machine, upload that file to merge it
-          into the local DB. Existing project/session ids are skipped, so
-          re-importing the same file is a no-op.
+          {t('cmp.settings.db.desc')}
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           <button
@@ -991,14 +989,14 @@ function DatabaseFileSection() {
             onClick={download}
             className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm"
           >
-            Download backup
+            {t('cmp.settings.db.download')}
           </button>
           <label
             className={`rounded border border-[var(--color-border)] text-sm px-3 py-1.5 hover:border-[var(--color-accent)] cursor-pointer ${
               importing ? 'opacity-50 pointer-events-none' : ''
             }`}
           >
-            {importing ? 'Importing…' : 'Upload backup…'}
+            {importing ? t('cmp.settings.db.importing') : t('cmp.settings.db.upload')}
             <input
               key={fileInputKey}
               type="file"
@@ -1012,13 +1010,18 @@ function DatabaseFileSection() {
           </label>
           {result && !importing && (
             <span className="text-xs text-[var(--color-ink-muted)]">
-              Imported {result.projectsImported} project(s),{' '}
-              {result.sessionsImported} session(s),{' '}
-              {result.messagesImported} message(s)
+              {t('cmp.settings.db.imported', {
+                projects: result.projectsImported,
+                sessions: result.sessionsImported,
+                messages: result.messagesImported,
+              })}
               {result.projectsSkipped + result.sessionsSkipped > 0 && (
                 <>
-                  {' '}(skipped {result.projectsSkipped} existing project(s),{' '}
-                  {result.sessionsSkipped} existing session(s))
+                  {' '}
+                  {t('cmp.settings.db.skipped', {
+                    projects: result.projectsSkipped,
+                    sessions: result.sessionsSkipped,
+                  })}
                 </>
               )}
               .
@@ -1051,6 +1054,7 @@ interface BackupRepo {
 }
 
 function BackupSection() {
+  const t = useT();
   const [config, setConfig] = useState<BackupConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1083,7 +1087,7 @@ function BackupSection() {
 
   async function saveToken() {
     if (tokenDraft.trim().length === 0) {
-      setError('Token is required');
+      setError(t('cmp.settings.backup.tokenRequired'));
       return;
     }
     setBusy(true);
@@ -1145,7 +1149,7 @@ function BackupSection() {
   async function createRepo() {
     const name = createName.trim();
     if (!name) {
-      setError('Repo name is required');
+      setError(t('cmp.settings.backup.repoNameRequired'));
       return;
     }
     setBusy(true);
@@ -1185,11 +1189,7 @@ function BackupSection() {
   }
 
   async function restoreNow() {
-    if (
-      !window.confirm(
-        'Pull wiki pages from the backup repo? Existing pages in pinloom will be left untouched — only files missing locally will be added.',
-      )
-    ) {
+    if (!window.confirm(t('cmp.settings.backup.restoreConfirm'))) {
       return;
     }
     setRestoring(true);
@@ -1210,44 +1210,39 @@ function BackupSection() {
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)] mb-2">
-        Wiki sync (GitHub)
+        {t('cmp.settings.backup.title')}
       </h3>
       {config === null ? (
-        <p className="text-sm text-[var(--color-ink-muted)]">Loading…</p>
+        <p className="text-sm text-[var(--color-ink-muted)]">{t('cmp.settings.backup.loading')}</p>
       ) : (
         <div className="space-y-3 text-sm">
           {!config.connected ? (
             <div className="space-y-2">
               <p className="text-[var(--color-ink-muted)]">
-                Paste a GitHub Personal Access Token to back up your wiki tree
-                to a private repository. Either token type works:
+                {t('cmp.settings.backup.tokenIntro')}
               </p>
               <ul className="text-[var(--color-ink-muted)] text-xs list-disc pl-5 space-y-1">
                 <li>
-                  <strong>Classic</strong> (<code>ghp_…</code>) — easiest;{' '}
+                  <strong>{t('cmp.settings.backup.classic')}</strong> (<code>ghp_…</code>){t('cmp.settings.backup.classicBefore')}{' '}
                   <a
                     href="https://github.com/settings/tokens/new?scopes=repo&description=pinloom-wiki"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[var(--color-accent)] underline"
                   >
-                    generate with <code>repo</code> scope
+                    {t('cmp.settings.backup.classicLink')}
                   </a>{' '}
-                  and pinloom can both read and create repos.
+                  {t('cmp.settings.backup.classicAfter')}
                 </li>
                 <li>
-                  <strong>Fine-grained</strong> (<code>github_pat_…</code>) —
-                  more locked down. To create a new repo from inside pinloom
-                  you'll need <em>Administration: write</em> on{' '}
-                  <em>All repositories</em>. If you create the repo on GitHub
-                  first, the token only needs <em>Contents: write</em> on that
-                  specific repo.
+                  <strong>{t('cmp.settings.backup.fineGrained')}</strong> (<code>github_pat_…</code>){t('cmp.settings.backup.fineGrained1')}{' '}
+                  <em>{t('cmp.settings.backup.adminWrite')}</em>{t('cmp.settings.backup.fineGrained2')}{' '}
+                  <em>{t('cmp.settings.backup.allRepos')}</em>{t('cmp.settings.backup.fineGrained3')}{' '}
+                  <em>{t('cmp.settings.backup.contentsWrite')}</em>{t('cmp.settings.backup.fineGrained4')}
                 </li>
               </ul>
               <p className="text-[var(--color-ink-muted)] text-xs">
-                The token is stored as-is in pinloom's local DB — anyone with
-                the DB file effectively has the token, so revoke it on GitHub
-                if the file leaks.
+                {t('cmp.settings.backup.tokenStorage')}
               </p>
               <div className="flex gap-2">
                 <input
@@ -1263,7 +1258,7 @@ function BackupSection() {
                   disabled={busy || tokenDraft.trim().length === 0}
                   className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
                 >
-                  Connect
+                  {t('cmp.settings.backup.connect')}
                 </button>
               </div>
             </div>
@@ -1272,10 +1267,10 @@ function BackupSection() {
               <div className="flex items-center justify-between">
                 <div>
                   <span className="text-[var(--color-ink-muted)]">
-                    Connected as{' '}
+                    {t('cmp.settings.backup.connectedAs')}{' '}
                   </span>
                   <span className="font-medium">
-                    {config.user?.login ?? '(unknown)'}
+                    {config.user?.login ?? t('cmp.settings.backup.unknown')}
                   </span>
                 </div>
                 <button
@@ -1284,7 +1279,7 @@ function BackupSection() {
                   disabled={busy}
                   className="text-xs text-[var(--color-ink-muted)] hover:text-red-400"
                 >
-                  Disconnect
+                  {t('cmp.settings.backup.disconnect')}
                 </button>
               </div>
               {config.repo ? (
@@ -1292,7 +1287,7 @@ function BackupSection() {
                   <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 flex items-center justify-between">
                     <div>
                       <div className="text-[10px] uppercase text-[var(--color-ink-muted)]">
-                        Backup repository
+                        {t('cmp.settings.backup.repository')}
                       </div>
                       <div className="font-mono text-sm">
                         {config.repo.fullName}
@@ -1304,7 +1299,7 @@ function BackupSection() {
                       rel="noopener noreferrer"
                       className="text-xs text-[var(--color-accent)] underline"
                     >
-                      Open on GitHub
+                      {t('cmp.settings.backup.openOnGithub')}
                     </a>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1314,7 +1309,7 @@ function BackupSection() {
                       disabled={syncing || busy || restoring}
                       className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
                     >
-                      {syncing ? 'Syncing…' : 'Sync now'}
+                      {syncing ? t('cmp.settings.backup.syncing') : t('cmp.settings.backup.syncNow')}
                     </button>
                     <button
                       type="button"
@@ -1322,18 +1317,18 @@ function BackupSection() {
                       disabled={syncing || busy || restoring}
                       className="rounded border border-[var(--color-border)] text-sm px-3 py-1.5 hover:border-[var(--color-accent)] disabled:opacity-40"
                     >
-                      {restoring ? 'Restoring…' : 'Restore from repo'}
+                      {restoring ? t('cmp.settings.backup.restoring') : t('cmp.settings.backup.restoreFromRepo')}
                     </button>
                     {syncResult && !syncing && (
                       <span className="text-xs text-[var(--color-ink-muted)]">
                         {syncResult.committed
-                          ? `Pushed wiki snapshot (${formatBytes(syncResult.wikiBytes)}).`
-                          : 'No wiki changes to push.'}
+                          ? t('cmp.settings.backup.pushed', { bytes: formatBytes(syncResult.wikiBytes) })
+                          : t('cmp.settings.backup.noChanges')}
                       </span>
                     )}
                     {restoreResult && !restoring && (
                       <span className="text-xs text-[var(--color-ink-muted)]">
-                        Imported {restoreResult.wikiFilesImported} wiki file(s).
+                        {t('cmp.settings.backup.imported', { n: restoreResult.wikiFilesImported })}
                       </span>
                     )}
                   </div>
@@ -1350,7 +1345,7 @@ function BackupSection() {
                           : 'border border-[var(--color-border)] text-[var(--color-ink-muted)]'
                       }`}
                     >
-                      Create new
+                      {t('cmp.settings.backup.createNew')}
                     </button>
                     <button
                       type="button"
@@ -1364,7 +1359,7 @@ function BackupSection() {
                           : 'border border-[var(--color-border)] text-[var(--color-ink-muted)]'
                       }`}
                     >
-                      Select existing
+                      {t('cmp.settings.backup.selectExisting')}
                     </button>
                   </div>
                   {mode === 'create' ? (
@@ -1382,18 +1377,18 @@ function BackupSection() {
                         disabled={busy || createName.trim().length === 0}
                         className="rounded bg-[var(--color-accent)] text-black px-3 py-1.5 text-sm disabled:opacity-40"
                       >
-                        Create
+                        {t('cmp.settings.backup.create')}
                       </button>
                     </div>
                   ) : (
                     <div className="max-h-48 overflow-auto rounded border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
                       {repos === null ? (
                         <p className="px-3 py-2 text-[var(--color-ink-muted)]">
-                          Loading…
+                          {t('cmp.settings.backup.loading')}
                         </p>
                       ) : repos.length === 0 ? (
                         <p className="px-3 py-2 text-[var(--color-ink-muted)]">
-                          No repositories.
+                          {t('cmp.settings.backup.noRepos')}
                         </p>
                       ) : (
                         repos.map((r) => (
@@ -1407,7 +1402,7 @@ function BackupSection() {
                             <span className="font-mono">{r.fullName}</span>
                             {r.private && (
                               <span className="ml-2 text-[10px] uppercase text-[var(--color-ink-muted)]">
-                                private
+                                {t('cmp.settings.backup.private')}
                               </span>
                             )}
                           </button>
@@ -1419,7 +1414,7 @@ function BackupSection() {
               )}
               {config.lastSyncAt && (
                 <div className="text-xs text-[var(--color-ink-muted)]">
-                  Last sync: {new Date(config.lastSyncAt).toLocaleString()}
+                  {t('cmp.settings.backup.lastSync', { time: new Date(config.lastSyncAt).toLocaleString() })}
                 </div>
               )}
             </div>

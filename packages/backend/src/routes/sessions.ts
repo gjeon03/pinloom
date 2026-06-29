@@ -229,23 +229,32 @@ export async function sessionRoutes(app: FastifyInstance) {
     // CLI default (null). The user can still change the model per session.
     // A fixed model in the UI config wins (picker hidden → use the configured
     // model). Otherwise the pinned default. Codex keeps its CLI default (null).
-    const fixedModel = getUiConfig().pickers.model;
+    const uiPickers = getUiConfig().pickers;
+    const fixedModel = uiPickers.model;
     const defaultModel =
       agent === 'claude'
         ? fixedModel.mode === 'fixed'
           ? fixedModel.fixed
           : DEFAULT_CLAUDE_MODEL
         : null;
+    // A fixed effort (picker hidden) is applied at creation; 'default' / shown
+    // leaves it NULL (adapter default), settable later from the picker.
+    const fixedEffort = uiPickers.effort;
+    const defaultEffort =
+      fixedEffort.mode === 'fixed' && fixedEffort.fixed !== 'default'
+        ? fixedEffort.fixed
+        : null;
     db.prepare(
       `INSERT INTO sessions
-         (id, project_id, plan_id, agent, model, claude_session_id, agent_session_id, title, order_index, transport, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+         (id, project_id, plan_id, agent, model, reasoning_effort, claude_session_id, agent_session_id, title, order_index, transport, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       req.params.projectId,
       req.body.planId ?? null,
       agent,
       defaultModel,
+      defaultEffort,
       req.body.title ?? null,
       nextOrder,
       claudeTransport(),

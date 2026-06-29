@@ -38,7 +38,7 @@ import { AgentBadge } from './AgentBadge.js';
 import { MentionPopup, type MentionWorker } from './MentionPopup.js';
 import { TemplatePopup } from './TemplatePopup.js';
 import { useNotifications } from '../stores/notifications.js';
-import { usePickers } from '../stores/uiConfig.js';
+import { useFeatures, usePickers } from '../stores/uiConfig.js';
 import { Markdown } from './Markdown.js';
 import {
   CopyMarkdownButton,
@@ -1706,6 +1706,7 @@ function MessageBubbleInner({
     tool: 'border-[var(--color-tool-border)] text-[var(--color-tool-ink)] font-mono',
   };
 
+  const features = useFeatures();
   const canPin = (message.role === 'assistant' || message.role === 'user') && !streaming;
   // Tool/system messages are typically short and not pin targets — sticky there
   // just adds visual noise as it follows the scroll. Limit sticky to user/assistant.
@@ -1761,7 +1762,7 @@ function MessageBubbleInner({
               />
             </div>
           )}
-          {canPin && (
+          {canPin && features.pins && (
             <PinToggleButton
               pinned={message.pinned}
               onClick={() => onTogglePin(message)}

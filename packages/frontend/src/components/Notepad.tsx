@@ -3,6 +3,7 @@ import { Info, Plus, Rows2, SquarePen, X } from 'lucide-react';
 import { api, type NotepadDoc, type NotepadTab } from '../api/client.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { Tooltip } from './Tooltip.js';
+import { useT } from '../i18n/t.js';
 
 // The notepad is split into a toggle button (lives in the top-right control
 // cluster) and a docked panel (a real right-hand column in the app layout).
@@ -40,12 +41,13 @@ export function NotepadToggle({
   open: boolean;
   onToggle: () => void;
 }) {
+  const t = useT();
   return (
-    <Tooltip label="Notepad">
+    <Tooltip label={t('cmp.notepad.title')}>
       <button
         type="button"
         onClick={onToggle}
-        aria-label="Notepad"
+        aria-label={t('cmp.notepad.title')}
         className={`rounded-md border bg-[var(--color-surface-2)] p-1.5 inline-flex items-center justify-center ${
           open
             ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
@@ -59,6 +61,7 @@ export function NotepadToggle({
 }
 
 export function NotepadPanel({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const [doc, setDoc] = useState<NotepadDoc | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -212,7 +215,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
     mutate((d) => {
       const tab: NotepadTab = {
         id: makeId(),
-        name: `Note ${d.tabs.length + 1}`,
+        name: t('cmp.notepad.noteName', { n: d.tabs.length + 1 }),
         panes: [{ id: makeId(), content: '', height: DEFAULT_PANE_HEIGHT }],
       };
       return { ...d, tabs: [...d.tabs, tab], activeTabId: tab.id };
@@ -292,7 +295,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
           widthDrag.current = { x: e.clientX, w: width };
           setWidthDragging(true);
         }}
-        title="Drag to resize"
+        title={t('cmp.notepad.dragResize')}
         className={`absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-ew-resize hover:bg-[var(--color-accent)]/40 ${
           widthDragging ? 'bg-[var(--color-accent)]/40' : ''
         }`}
@@ -301,8 +304,8 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <SquarePen size={14} />
-          Notepad
-          <Tooltip label="Saved to the local SQLite DB" side="bottom">
+          {t('cmp.notepad.title')}
+          <Tooltip label={t('cmp.notepad.savedInfo')} side="bottom">
             <Info
               size={13}
               className="cursor-help text-[var(--color-ink-muted)]"
@@ -311,12 +314,12 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
         </div>
         <div className="flex items-center gap-1">
           <span className="mr-1 text-[10px] text-[var(--color-ink-muted)]">
-            {saving ? 'saving…' : loaded ? 'saved' : ''}
+            {saving ? t('cmp.notepad.saving') : loaded ? t('cmp.notepad.saved') : ''}
           </span>
           <button
             type="button"
             onClick={addPane}
-            title="Split (add a pane below)"
+            title={t('cmp.notepad.split')}
             className="rounded p-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
           >
             <Rows2 size={14} />
@@ -324,7 +327,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={addTab}
-            title="New tab"
+            title={t('cmp.notepad.newTab')}
             className="rounded p-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
           >
             <Plus size={14} />
@@ -332,7 +335,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={onClose}
-            title="Close"
+            title={t('cmp.notepad.close')}
             className="rounded p-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
           >
             <X size={14} />
@@ -372,9 +375,9 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
                     <span className="absolute right-1 top-1 z-10">
                       <ConfirmButton
                         needsConfirm={pane.content.trim() !== ''}
-                        message="Remove this pane?"
+                        message={t('cmp.notepad.removePaneConfirm')}
                         onConfirm={() => removePane(pane.id)}
-                        title="Remove pane"
+                        title={t('cmp.notepad.removePane')}
                         className="rounded p-0.5 text-[var(--color-ink-muted)] opacity-0 hover:text-red-400 group-hover:opacity-100"
                       >
                         <X size={11} />
@@ -385,7 +388,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
                     autoFocus={i === 0}
                     value={pane.content}
                     onChange={(e) => setPaneContent(pane.id, e.target.value)}
-                    placeholder="Quick notes…"
+                    placeholder={t('cmp.notepad.placeholder')}
                     className="h-full w-full resize-none bg-[var(--color-surface)] px-4 py-3 text-sm font-mono leading-relaxed outline-none"
                   />
                 </div>
@@ -400,7 +403,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
                       };
                       setPaneDragging(true);
                     }}
-                    title="Drag to resize"
+                    title={t('cmp.notepad.dragResize')}
                     className={`h-1.5 shrink-0 cursor-ns-resize border-y border-[var(--color-border)] hover:bg-[var(--color-accent)]/40 ${
                       paneDragging ? 'bg-[var(--color-accent)]/40' : ''
                     }`}
@@ -412,7 +415,7 @@ export function NotepadPanel({ onClose }: { onClose: () => void }) {
         </div>
       ) : (
         <div className="grid flex-1 place-items-center text-xs text-[var(--color-ink-muted)]">
-          Loading…
+          {t('cmp.notepad.loading')}
         </div>
       )}
     </div>
@@ -434,6 +437,7 @@ function TabChip({
   onClose: () => void;
   onRename: (name: string) => void;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
 
@@ -469,7 +473,7 @@ function TabChip({
     <div
       onClick={onSelect}
       onDoubleClick={() => setEditing(true)}
-      title="Double-click to rename"
+      title={t('cmp.notepad.dblClickRename')}
       className={`group flex shrink-0 cursor-pointer items-center gap-1 rounded-t border-b-2 px-3 py-1.5 text-xs ${
         active
           ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-ink)]'
@@ -479,9 +483,9 @@ function TabChip({
       <span className="max-w-[120px] truncate">{name}</span>
       <ConfirmButton
         needsConfirm={hasContent}
-        message="Delete this tab?"
+        message={t('cmp.notepad.deleteTabConfirm')}
         onConfirm={onClose}
-        title="Close tab"
+        title={t('cmp.notepad.closeTab')}
         className="opacity-0 hover:text-red-400 group-hover:opacity-100"
       >
         <X size={11} />

@@ -34,6 +34,7 @@ import type {
 import { api } from '../api/client.js';
 import { AgentBadge } from '../components/AgentBadge.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
+import { useT, type TFn } from '../i18n/t.js';
 
 interface WorkerState {
   alias: string;
@@ -68,10 +69,10 @@ function statusColor(s: WorkerState): string {
   return '#22c55e'; // green — idle
 }
 
-function statusLabel(s: WorkerState): string {
-  if (s.running) return 'running';
-  if (s.queued > 0) return `queued ${s.queued}`;
-  return 'idle';
+function statusLabel(s: WorkerState, t: TFn): string {
+  if (s.running) return t('page.canvas.status.running');
+  if (s.queued > 0) return t('page.canvas.status.queued', { n: s.queued });
+  return t('page.canvas.status.idle');
 }
 
 interface TeamCanvasPageProps {
@@ -90,6 +91,7 @@ export function TeamCanvasPage({
   teamId: teamIdProp,
   showHeader = true,
 }: TeamCanvasPageProps = {}) {
+  const t = useT();
   const params = useParams<{ teamId: string }>();
   const teamId = teamIdProp ?? params.teamId;
   const [team, setTeam] = useState<Team | null>(null);
@@ -219,7 +221,7 @@ export function TeamCanvasPage({
     const session = sessionsById.get(sessionId);
     if (!session) {
       return {
-        title: '(deleted session)',
+        title: t('page.canvas.deletedSession'),
         agent: null,
         projectName: null,
         projectId: null,
@@ -227,7 +229,7 @@ export function TeamCanvasPage({
     }
     const project = projectsById.get(session.projectId);
     return {
-      title: session.title ?? `Chat ${session.id.slice(0, 6)}`,
+      title: session.title ?? t('page.canvas.chatFallback', { id: session.id.slice(0, 6) }),
       agent: session.agent,
       projectName: project?.name ?? null,
       projectId: session.projectId,
@@ -307,7 +309,7 @@ export function TeamCanvasPage({
   if (!teamId) {
     return (
       <div className="p-8 text-sm text-[var(--color-ink-muted)]">
-        Team id missing.
+        {t('page.canvas.teamIdMissing')}
       </div>
     );
   }
@@ -318,7 +320,7 @@ export function TeamCanvasPage({
         {error}
         <div className="mt-2">
           <Link to="/teams" className="text-[var(--color-accent)]">
-            ← Back to Teams
+            ← {t('page.canvas.backToTeams')}
           </Link>
         </div>
       </div>
@@ -327,7 +329,7 @@ export function TeamCanvasPage({
 
   if (!team) {
     return (
-      <div className="p-8 text-sm text-[var(--color-ink-muted)]">Loading…</div>
+      <div className="p-8 text-sm text-[var(--color-ink-muted)]">{t('page.canvas.loading')}</div>
     );
   }
 
@@ -338,13 +340,15 @@ export function TeamCanvasPage({
           <Link
             to="/teams"
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-            aria-label="Back to Teams"
+            aria-label={t('page.canvas.backToTeams')}
           >
             <ArrowLeft size={16} />
           </Link>
           <h1 className="text-sm font-semibold">{team.name}</h1>
           <span className="text-[11px] text-[var(--color-ink-muted)]">
-            {team.members.length} worker{team.members.length === 1 ? '' : 's'}
+            {team.members.length === 1
+              ? t('page.canvas.workerCount.one', { n: team.members.length })
+              : t('page.canvas.workerCount.other', { n: team.members.length })}
           </span>
         </div>
       )}
@@ -370,6 +374,7 @@ interface CanvasNodeProps {
 }
 
 function CanvasNode({ data }: CanvasNodeProps) {
+  const t = useT();
   const navigate = useNavigate();
   const isOrch = data.kind === 'orchestrator';
   const state: WorkerState = {
@@ -472,15 +477,15 @@ function CanvasNode({ data }: CanvasNodeProps) {
             style={{ background: statusColor(state) }}
           />
           <span className="text-[var(--color-ink-muted)]">
-            {statusLabel(state)}
+            {statusLabel(state, t)}
           </span>
           {data.projectId && (
             <button
               type="button"
               onClick={goToTab}
               className="ml-auto text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]"
-              aria-label="Go to this tab"
-              title="Go to this tab"
+              aria-label={t('page.canvas.goToTab')}
+              title={t('page.canvas.goToTab')}
             >
               <PanelRight size={10} />
             </button>
@@ -488,8 +493,8 @@ function CanvasNode({ data }: CanvasNodeProps) {
           <Link
             to={`/s/${data.sessionId}`}
             className={`${data.projectId ? '' : 'ml-auto'} text-[var(--color-ink-muted)] hover:text-[var(--color-accent)]`}
-            aria-label="Open in new browser tab"
-            title="Open in new browser tab"
+            aria-label={t('page.canvas.openInBrowser')}
+            title={t('page.canvas.openInBrowser')}
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -504,10 +509,10 @@ function CanvasNode({ data }: CanvasNodeProps) {
               type="button"
               onClick={goToTab}
               className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] inline-flex items-center gap-1"
-              aria-label="Go to this tab"
-              title="Go to this tab"
+              aria-label={t('page.canvas.goToTab')}
+              title={t('page.canvas.goToTab')}
             >
-              go <PanelRight size={10} />
+              {t('page.canvas.go')} <PanelRight size={10} />
             </button>
           )}
           <Link
@@ -515,9 +520,9 @@ function CanvasNode({ data }: CanvasNodeProps) {
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] inline-flex items-center gap-1"
             target="_blank"
             rel="noopener noreferrer"
-            title="Open in new browser tab"
+            title={t('page.canvas.openInBrowser')}
           >
-            open <ExternalLink size={10} />
+            {t('page.canvas.open')} <ExternalLink size={10} />
           </Link>
         </div>
       )}

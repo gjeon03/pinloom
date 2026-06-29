@@ -7,6 +7,8 @@ import { api, type TimelineSearchHit, type WikiSearchHit } from '../api/client.j
 import { cacheKeys } from '../api/cacheKeys.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { gotoSessionTab } from '../utils/gotoSession.js';
+import { useT, type TFn } from '../i18n/t.js';
+import { useFeatures } from '../stores/uiConfig.js';
 
 // Global full-text search over conversation history (knowledge-system v2,
 // Phase 1). A command-palette modal: type → debounced /api/search → pick a
@@ -38,21 +40,22 @@ function renderExcerpt(
   return out;
 }
 
-function timeAgo(iso: string): string {
+function timeAgo(iso: string, t: TFn): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return '';
   const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (secs < 60) return `${secs}s ago`;
+  if (secs < 60) return t('cmp.search.ago.s', { n: secs });
   const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return t('cmp.search.ago.m', { n: mins });
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
+  if (hrs < 24) return t('cmp.search.ago.h', { n: hrs });
   const days = Math.round(hrs / 24);
-  if (days < 30) return `${days}d ago`;
+  if (days < 30) return t('cmp.search.ago.d', { n: days });
   return new Date(iso).toLocaleDateString();
 }
 
 export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
@@ -78,8 +81,11 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
     { keepPreviousData: true },
   );
   const results = data?.results ?? [];
-  const timeline = data?.timeline ?? [];
-  const wiki = data?.wiki ?? [];
+  // Drop result groups for disabled features so search never surfaces (or links
+  // into) a hidden surface — the route guard would bounce the click anyway.
+  const features = useFeatures();
+  const timeline = features.timeline ? (data?.timeline ?? []) : [];
+  const wiki = features.wiki ? (data?.wiki ?? []) : [];
 
   // Reset the cursor on a NEW query (not on every `results` identity change —
   // a background revalidation must not snap the selection back to 0).
@@ -140,15 +146,14 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
   }
 
   const status = useMemo(() => {
-    if (!active)
-      return `Type at least ${MIN_CHARS} characters to search your history`;
+    if (!active) return t('cmp.search.hint', { n: MIN_CHARS });
     const total = results.length + timeline.length + wiki.length;
-    if (isLoading && total === 0) return 'Searching…';
-    if (total === 0) return 'No matches';
-    return `${results.length} message${results.length === 1 ? '' : 's'}${
-      timeline.length > 0 ? ` · ${timeline.length} timeline` : ''
-    }${wiki.length > 0 ? ` · ${wiki.length} wiki` : ''}`;
-  }, [active, isLoading, results.length, timeline.length, wiki.length]);
+    if (isLoading && total === 0) return t('cmp.search.searching');
+    if (total === 0) return t('cmp.search.noMatches');
+    return `${t('cmp.search.messageCount', { n: results.length })}${
+      timeline.length > 0 ? ` · ${t('cmp.search.timelineCount', { n: timeline.length })}` : ''
+    }${wiki.length > 0 ? ` · ${t('cmp.search.wikiCount', { n: wiki.length })}` : ''}`;
+  }, [t, active, isLoading, results.length, timeline.length, wiki.length]);
 
   return (
     <div
@@ -163,7 +168,7 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Search conversation history"
+        aria-label={t('cmp.search.ariaLabel')}
         onKeyDown={onKeyDown}
         className="flex w-full max-w-xl flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
         style={{ maxHeight: 'min(640px, 80vh)' }}
@@ -174,29 +179,29 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search conversation history…"
+            placeholder={t('cmp.search.placeholder')}
             className="flex-1 bg-transparent text-sm text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-muted)]"
           />
           {groups.length > 0 && (
             <select
               value={groupId}
               onChange={(e) => setGroupId(e.target.value)}
-              title="Scope to a project group"
+              title={t('cmp.search.scopeTitle')}
               className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1 text-xs text-[var(--color-ink-muted)]"
             >
-              <option value="">All</option>
+              <option value="">{t('cmp.search.all')}</option>
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name}
                 </option>
               ))}
-              <option value="__ungrouped__">Ungrouped</option>
+              <option value="__ungrouped__">{t('cmp.search.ungrouped')}</option>
             </select>
           )}
           <button
             onClick={onClose}
             className="rounded p-1 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
-            title="Close (Esc)"
+            title={t('cmp.search.close')}
           >
             <X size={15} />
           </button>
@@ -229,10 +234,10 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
                 </span>
                 <span aria-hidden>·</span>
                 <span className="truncate">
-                  {r.sessionTitle || 'Untitled session'}
+                  {r.sessionTitle || t('cmp.search.untitledSession')}
                 </span>
                 <span className="ml-auto shrink-0 tabular-nums">
-                  {timeAgo(r.createdAt)}
+                  {timeAgo(r.createdAt, t)}
                 </span>
               </div>
               <div className="line-clamp-2 text-xs text-[var(--color-ink)]">
@@ -247,7 +252,7 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
           {timeline.length > 0 && (
             <div className="mt-1 border-t border-[var(--color-border)] pt-1">
               <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-                Work timeline
+                {t('cmp.search.workTimeline')}
               </div>
               {timeline.map((t) => (
                 <button
@@ -271,7 +276,7 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
           {wiki.length > 0 && (
             <div className="mt-1 border-t border-[var(--color-border)] pt-1">
               <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-muted)]">
-                Wiki
+                {t('cmp.search.wiki')}
               </div>
               {wiki.map((w) => (
                 <button
@@ -290,7 +295,7 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
         <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-ink-muted)]">
           {status}
           <span className="float-right hidden sm:inline">
-            ↑↓ navigate · ↵ open · esc close
+            {t('cmp.search.kbdHints')}
           </span>
         </div>
       </div>

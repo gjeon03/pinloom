@@ -11,8 +11,10 @@ import { PinnedPanel } from '../components/PinnedPanel.js';
 import { BottomPanel } from '../components/BottomPanel.js';
 import { HSplitter } from '../components/HSplitter.js';
 import { applyPinChange } from '../utils/pins.js';
+import { useT } from '../i18n/t.js';
 
 export function SessionPage() {
+  const t = useT();
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   // In the installed PWA there is no browser back button, so a session/bot page
@@ -38,7 +40,7 @@ export function SessionPage() {
         if (cancelled) return;
         setProject(p);
         setSession(found);
-        document.title = found.title ?? 'pinloom session';
+        document.title = found.title ?? t('page.session.docTitle');
       } catch (e) {
         if (!cancelled) setError(String(e));
       }
@@ -84,7 +86,7 @@ export function SessionPage() {
     return <div className="p-6 text-sm text-red-400">{error}</div>;
   }
   if (!session || !project) {
-    return <div className="p-6 text-sm text-[var(--color-ink-muted)]">Loading session…</div>;
+    return <div className="p-6 text-sm text-[var(--color-ink-muted)]">{t('page.session.loading')}</div>;
   }
 
   return (
@@ -93,8 +95,8 @@ export function SessionPage() {
         <button
           type="button"
           onClick={goBack}
-          title="Back"
-          aria-label="Back"
+          title={t('page.session.back')}
+          aria-label={t('page.session.back')}
           className="shrink-0 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1.5 text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
         >
           <ArrowLeft size={16} />
@@ -104,7 +106,7 @@ export function SessionPage() {
             {project.name}
           </div>
           <div className="text-sm font-semibold truncate">
-            {session.title ?? `Chat ${session.id.slice(0, 6)}`}
+            {session.title ?? t('page.session.chatFallback', { id: session.id.slice(0, 6) })}
           </div>
         </div>
       </header>
