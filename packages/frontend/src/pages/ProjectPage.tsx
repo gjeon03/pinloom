@@ -886,7 +886,7 @@ export function ProjectPage({
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <header className="titlebar-drag border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3">
+      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center gap-3">
         <div>
           <EditableTitle
             value={project.name}

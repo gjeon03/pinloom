@@ -165,6 +165,14 @@ textarea::placeholder {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
+/* Floating control clusters (e.g. the global top-right toolbar) overlay the
+   top headers, so they must opt OUT of any drag region behind them or the OS
+   swallows their clicks as window-drags. Punch the whole cluster + children. */
+.pinloom-desktop .titlebar-no-drag,
+.pinloom-desktop .titlebar-no-drag * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
 /* Clear the traffic lights (top-left) so the leftmost header content sits to
    their right. ~72px covers the three lights plus inset. */
 .pinloom-desktop .titlebar-trafficlights {
