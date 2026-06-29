@@ -10,6 +10,9 @@
     "types": ["vite/client"]
   },
   "include": ["src"],
+  // Tests run via vitest (esbuild) + use node builtins; excluded from the app
+  // typecheck so node globals don't pollute the DOM-typed app build.
+  "exclude": ["src/**/*.test.ts"],
   "references": [
     { "path": "../shared" }
   ]
