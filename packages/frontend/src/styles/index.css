@@ -176,9 +176,13 @@ textarea::placeholder {
 /* Clear the traffic lights (top-left) so the leftmost header content sits to
    their right. ~72px covers the three lights plus inset. */
 .pinloom-desktop .titlebar-trafficlights {
-  padding-left: 72px;
+  padding-left: 80px;
 }
-/* Collapsed sidebar: push the top button below the traffic lights. */
+/* Collapsed sidebar: the macOS traffic lights overflow the narrow strip into
+   the main content's top-left (obscuring e.g. the page title). Widen the strip
+   to reserve the lights' width so the main content starts clear of them, and
+   push the strip's own button below the lights. */
 .pinloom-desktop .titlebar-collapsed-strip {
+  width: 5rem;
   padding-top: 30px;
 }

@@ -87,7 +87,7 @@ export function PinsPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[var(--color-surface)]">
-      <header className="border-b border-[var(--color-border)] px-4 py-2 flex items-center justify-between">
+      <header className="titlebar-trafficlights border-b border-[var(--color-border)] px-4 py-2 flex items-center justify-between">
         <div>
           <div className="text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
             Pins
