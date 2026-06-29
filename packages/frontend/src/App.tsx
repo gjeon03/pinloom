@@ -76,7 +76,7 @@ export function App() {
               relative to this column (not the viewport) so it tracks the
               content edge and never overlaps the docked notepad. */}
           <div className="relative flex-1 min-w-0">
-          <div className="absolute top-3 right-3 z-40 flex items-center gap-1.5">
+          <div className="titlebar-no-drag absolute top-3 right-3 z-40 flex items-center gap-1.5">
             <Tooltip label="Search history (⌘K)">
               <button
                 type="button"
