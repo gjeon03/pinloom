@@ -52,6 +52,13 @@ function applySideEffects(c: UiConfig): void {
 }
 applySideEffects(current);
 
+// First-run state for the preset chooser: 'unknown' until the server says
+// whether a config was ever saved, then 'needed' (fresh install) or 'done'.
+let firstRun: 'unknown' | 'needed' | 'done' = 'unknown';
+function notify(): void {
+  listeners.forEach((l) => l());
+}
+
 let hydrated = false;
 /** Revalidate from the server once at startup (fire-and-forget). */
 export async function hydrateUiConfig(): Promise<void> {
@@ -59,7 +66,15 @@ export async function hydrateUiConfig(): Promise<void> {
   hydrated = true;
   try {
     const res = await fetch('/api/settings/ui-config');
-    if (res.ok) set(mergeUiConfig(await res.json()));
+    if (res.ok) {
+      const json = (await res.json()) as { config?: unknown; configured?: boolean };
+      // New backend returns { config, configured }; tolerate an older bare-config
+      // response (treat as already-configured so the chooser never wrongly shows).
+      const hasWrapper = json && typeof json === 'object' && 'config' in json;
+      set(mergeUiConfig(hasWrapper ? json.config : json));
+      firstRun = hasWrapper && json.configured === false ? 'needed' : 'done';
+      notify();
+    }
   } catch {
     /* offline / not ready — keep cached */
   }
@@ -67,6 +82,10 @@ export async function hydrateUiConfig(): Promise<void> {
 
 async function persist(next: UiConfig): Promise<void> {
   set(next);
+  if (firstRun !== 'done') {
+    firstRun = 'done'; // any explicit save completes first-run
+    notify();
+  }
   try {
     await fetch('/api/settings/ui-config', {
       method: 'PUT',
@@ -131,4 +150,10 @@ export function usePickers(): PickerSettings {
 
 export function useUiLocale(): UiLocale {
   return useUiConfig().locale;
+}
+
+/** True only after hydration confirms a fresh install (never configured) — so
+ *  the first-run preset chooser never flashes before we know. */
+export function useFirstRunNeeded(): boolean {
+  return useSyncExternalStore(subscribe, () => firstRun === 'needed');
 }

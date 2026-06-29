@@ -7,7 +7,7 @@ import {
   upsertUserEnvVar,
 } from '../services/user-env.js';
 import { getSetting, setSetting, deleteSetting } from '../services/app-settings.js';
-import { getUiConfig, setUiConfig } from '../services/ui-config.js';
+import { getUiConfig, setUiConfig, isUiConfigured } from '../services/ui-config.js';
 import {
   claudeTransport,
   DEFAULT_TRANSPORT_KEY,
@@ -164,11 +164,17 @@ export async function settingsRoutes(app: FastifyInstance) {
   // Per-install UI config (feature flags, picker defaults, locale). Single JSON
   // blob in app_settings; always normalized through mergeUiConfig. PUT replaces
   // the whole config (the UI sends the full object after toggling/preset).
-  app.get('/api/settings/ui-config', async () => getUiConfig());
+  // `configured` is false on a fresh install (never saved) → the UI shows a
+  // one-time Simple/Full preset chooser. PUT always marks it configured.
+  app.get('/api/settings/ui-config', async () => ({
+    config: getUiConfig(),
+    configured: isUiConfigured(),
+  }));
 
-  app.put<{ Body: unknown }>('/api/settings/ui-config', async (req) => {
-    return setUiConfig(req.body);
-  });
+  app.put<{ Body: unknown }>('/api/settings/ui-config', async (req) => ({
+    config: setUiConfig(req.body),
+    configured: true,
+  }));
 
   // Login autostart (macOS LaunchAgent / Linux systemd --user). The OS is the
   // source of truth — every GET re-reads the unit file + queries the loader,
