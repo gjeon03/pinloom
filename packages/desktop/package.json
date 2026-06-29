@@ -2,13 +2,18 @@
   "name": "@pinloom/desktop",
   "version": "0.0.1",
   "private": true,
-  "description": "Electron shell — a standalone window onto the locally-running pinloom (escapes the browser tab).",
+  "author": "pinloom",
+  "description": "Electron desktop app — connects to a running pinloom, or spawns a bundled backend sidecar for standalone use.",
   "main": "main.cjs",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "stage": "node scripts/stage.mjs",
+    "dist": "electron-builder --mac dmg --config electron-builder.config.cjs",
+    "dmg": "pnpm run stage && pnpm run dist"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.6",
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
   }
 }

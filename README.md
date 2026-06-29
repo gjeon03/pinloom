@@ -4,6 +4,17 @@ Local Claude Code workspace. Persistent history, pinned answers, project Wiki, T
 
 ![pinloom workspace](docs/screenshots/05-project-workspace.png)
 
+## Download
+
+Want the app without building from source?
+
+**[⬇ Download pinloom for macOS (Apple Silicon)](https://github.com/gjeon03/pinloom/releases/latest)**
+
+Unsigned build — on first launch, right-click the app → **Open** (or **System
+Settings → Privacy & Security → Open Anyway**). Still needs the Claude Code CLI
+installed and logged in. Prefer to build it yourself? See [Quick start](#quick-start)
+and [`packages/desktop`](packages/desktop/README.md).
+
 ## Why
 
 Claude Code's CLI is great but loses session context across `~/.claude/` resets, SDK upgrades, and machine moves. pinloom keeps the conversation, the per-project notes, and the team setup in its own local SQLite + filesystem so they survive all of that.

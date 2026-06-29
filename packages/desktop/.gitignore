@@ -1,0 +1,3 @@
+# Build payload staged for electron-builder + the packaged output.
+staging/
+dist-app/

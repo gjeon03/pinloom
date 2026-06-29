@@ -1153,6 +1153,14 @@ function resolveMcpServerEntry(): string | null {
 }
 const MCP_SERVER_ENTRY = resolveMcpServerEntry();
 
+// In the packaged desktop app the backend runs under Electron-as-node, so
+// process.execPath is the Electron binary. Spawning it for the MCP stdio child
+// must carry ELECTRON_RUN_AS_NODE=1, or it boots the GUI instead of running the
+// MCP server as plain Node. Empty (no-op) under a normal Node backend.
+const MCP_CHILD_ELECTRON_ENV: Record<string, string> = process.versions.electron
+  ? { ELECTRON_RUN_AS_NODE: '1' }
+  : {};
+
 // If the given session is an orchestrator, mint a fresh per-run token
 // and return the MCP server config to inject. Workers and untethered
 // sessions get null — they don't need MCP wiring.
@@ -1165,9 +1173,10 @@ function buildOrchestratorMcpConfig(
   const token = mintTeamToken(team.id);
   return {
     pinloom: {
-      command: process.execPath, // current Node binary
+      command: process.execPath, // current Node binary (or Electron-as-node)
       args: [MCP_SERVER_ENTRY],
       env: {
+        ...MCP_CHILD_ELECTRON_ENV,
         PINLOOM_TEAM_ID: team.id,
         PINLOOM_TEAM_TOKEN: token,
         // Default backend URL is fine for local dev; expose an override
@@ -1193,6 +1202,7 @@ function buildBotMcpConfig(
       command: process.execPath,
       args: [MCP_SERVER_ENTRY],
       env: {
+        ...MCP_CHILD_ELECTRON_ENV,
         PINLOOM_BOT_SESSION_ID: ctx.id,
         PINLOOM_BOT_TOKEN: token,
         PINLOOM_BOT_KIND: ctx.botKind,

@@ -16,6 +16,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "@fastify/cors": "^10.0.2",
+    "@fastify/static": "^8.0.4",
     "@fastify/websocket": "^11.0.2",
     "@huggingface/transformers": "^4.2.0",
     "@pinloom/mcp-server": "workspace:*",
