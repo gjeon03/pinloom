@@ -147,3 +147,30 @@ textarea::placeholder {
 .dockview-theme-dark .dv-tabs-and-actions-container {
   border-bottom: 1px solid var(--color-border);
 }
+
+/* ── Desktop app: native title bar hidden (titleBarStyle hiddenInset) ────────
+   The app's own top headers fill the title-bar region. Mark them as drag
+   regions so the frameless window can still be moved, keep interactive
+   children clickable (no-drag), and pad the top-left header to clear the macOS
+   traffic lights. All scoped to .pinloom-desktop so the browser/PWA is
+   unaffected. */
+.pinloom-desktop .titlebar-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.pinloom-desktop .titlebar-drag :where(
+  button, a, input, textarea, select, label,
+  [role='tab'], [role='button'], [contenteditable], [draggable='true']
+) {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+/* Clear the traffic lights (top-left) so the leftmost header content sits to
+   their right. ~72px covers the three lights plus inset. */
+.pinloom-desktop .titlebar-trafficlights {
+  padding-left: 72px;
+}
+/* Collapsed sidebar: push the top button below the traffic lights. */
+.pinloom-desktop .titlebar-collapsed-strip {
+  padding-top: 30px;
+}

@@ -402,7 +402,7 @@ export function AppShell({ children }: Props) {
   return (
     <div className="flex h-full">
       {sidebarHidden ? (
-        <div className="w-9 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col items-center py-3">
+        <div className="titlebar-drag titlebar-collapsed-strip w-9 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col items-center py-3">
           <button
             type="button"
             aria-label="Show sidebar"
@@ -415,7 +415,7 @@ export function AppShell({ children }: Props) {
         </div>
       ) : (
         <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
-        <div className="px-3 py-3 flex items-center justify-between gap-1">
+        <div className="titlebar-drag titlebar-trafficlights px-3 py-3 flex items-center justify-between gap-1">
           <div className="text-sm font-semibold tracking-wide truncate">pinloom</div>
           <div className="flex items-center gap-0.5">
             <Tooltip label="New group" side="bottom">
