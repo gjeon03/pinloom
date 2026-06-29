@@ -11,9 +11,9 @@ export interface ModelOption {
 
 export const CLAUDE_MODELS: ModelOption[] = [
   {
-    id: 'opus',
-    label: 'Opus (latest)',
-    description: 'Always the newest Opus — tracks releases automatically (default)',
+    id: 'claude-opus-4-8',
+    label: 'Opus 4.8',
+    description: 'Latest Opus — best for complex work (pinloom default)',
   },
   {
     id: 'claude-opus-4-8[1m]',
