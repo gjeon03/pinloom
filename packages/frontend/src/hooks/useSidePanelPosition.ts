@@ -13,7 +13,7 @@ function read(): SidePanelPosition {
   const v = localStorage.getItem(KEY);
   return v === 'left' || v === 'right' || v === 'top' || v === 'bottom'
     ? v
-    : 'right';
+    : 'left';
 }
 
 let current: SidePanelPosition = read();

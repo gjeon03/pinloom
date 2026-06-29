@@ -110,7 +110,7 @@ export function TerminalSidePanel({
   onHandoff,
   onSendPin,
   tabs = ALL_TABS,
-  position = 'right',
+  position = 'left',
 }: Props) {
   const hasHistory = tabs.includes('history');
   const vertical = isVerticalRail(position);
@@ -119,9 +119,12 @@ export function TerminalSidePanel({
     const saved = localStorage.getItem(tabKey(sessionId));
     return isTab(saved) && tabs.includes(saved) ? saved : tabs[0];
   });
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem(collapsedKey(sessionId)) === '1',
-  );
+  // Default to COLLAPSED for a new session (no saved preference); respect the
+  // user's explicit open/closed choice once they've toggled it.
+  const [collapsed, setCollapsed] = useState(() => {
+    const saved = localStorage.getItem(collapsedKey(sessionId));
+    return saved === null ? true : saved === '1';
+  });
   const [error, setError] = useState<string | null>(null);
   const [limit, setLimit] = useState(WINDOW);
   // Per-message "show full content" toggles (history rows truncate by default).
