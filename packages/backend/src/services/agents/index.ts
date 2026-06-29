@@ -12,23 +12,25 @@ export const DEFAULT_TRANSPORT_KEY = 'default_claude_transport';
 
 /**
  * The default claude transport for NEW sessions:
- *  - 'sdk':      Agent SDK (streaming, structured chat). Default, zero regression.
+ *  - 'terminal': interactive `claude` rendered live in an xterm.js terminal —
+ *                the real TUI experience, matching what a user gets in their own
+ *                terminal. DEFAULT (interactive bucket, streaming).
+ *                See docs/terminal-chat-mode-plan.md.
+ *  - 'sdk':      Agent SDK (streaming, structured chat).
  *  - 'pty':      PTY-driven interactive `claude` as a structured adapter
  *                (interactive bucket, non-streaming). See docs/billing/.
- *  - 'terminal': interactive `claude` rendered live in an xterm.js terminal
- *                (interactive bucket, streaming). See docs/terminal-chat-mode-plan.md.
  *
  * Resolution order: the user-managed app setting (Settings UI) wins, then the
- * PINLOOM_CLAUDE_TRANSPORT env (dev/ops override), then 'sdk'. A session pins
- * the value it was created under in sessions.transport, so changing the default
- * later doesn't strand an existing session. Read per call (one indexed PK
- * lookup) so a change applies without a restart.
+ * PINLOOM_CLAUDE_TRANSPORT env (dev/ops override), then 'terminal'. A session
+ * pins the value it was created under in sessions.transport, so changing the
+ * default later doesn't strand an existing session. Read per call (one indexed
+ * PK lookup) so a change applies without a restart.
  */
 export function claudeTransport(): ClaudeTransport {
   const s = getSetting(DEFAULT_TRANSPORT_KEY);
   if (s === 'sdk' || s === 'pty' || s === 'terminal') return s;
   const v = process.env.PINLOOM_CLAUDE_TRANSPORT;
-  return v === 'pty' || v === 'terminal' ? v : 'sdk';
+  return v === 'sdk' || v === 'pty' ? v : 'terminal';
 }
 
 export function claudeTransportIsPty(): boolean {
