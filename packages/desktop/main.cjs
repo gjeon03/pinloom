@@ -18,6 +18,8 @@ const {
   shell,
   dialog,
   nativeImage,
+  ipcMain,
+  session,
 } = require('electron');
 const path = require('node:path');
 const os = require('node:os');
@@ -83,6 +85,57 @@ function isUp(url) {
   });
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function fetchJson(url) {
+  return new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(8000, () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
+}
+
+// The #1 way the app fails for a new user: pinloom runs agents through the
+// Claude Code (or Codex) CLI, which can't be bundled. If neither is found once
+// the backend is up, point them at the install instead of letting agent
+// launches fail silently. Shown once per launch.
+let onboardingShown = false;
+async function checkClaudeOnboarding(baseUrl) {
+  if (onboardingShown) return;
+  const health = await fetchJson(`${baseUrl}/api/health`);
+  if (!health || !health.agents) return; // couldn't check — don't nag
+  const claudeOk = health.agents.claude?.installed;
+  const codexOk = health.agents.codex?.installed;
+  if (claudeOk || codexOk) return; // at least one agent CLI works
+  onboardingShown = true;
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    title: 'pinloom',
+    message: 'Claude Code CLI not found',
+    detail:
+      "pinloom runs your agents through the Claude Code CLI (or Codex), which " +
+      "it can't bundle. Install Claude Code and sign in, then reopen pinloom — " +
+      "`claude --version` should work in your terminal afterwards.",
+    buttons: ['Get Claude Code', 'Continue anyway'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response === 0) {
+    shell.openExternal('https://docs.anthropic.com/en/docs/claude-code/overview');
+  }
+}
 
 // ── sidecar backend (SPAWN path) ────────────────────────────────────────────
 function backendEntry() {
@@ -303,6 +356,11 @@ async function createWindow({ show = true } = {}) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+      // Keep the renderer's event loop full-speed when the window is hidden, so
+      // a long agent turn that finishes while the app sits in the menu bar still
+      // fires its native notification immediately (not throttled to ~1Hz).
+      backgroundThrottling: false,
     },
   });
   const win = mainWindow;
@@ -336,6 +394,7 @@ async function createWindow({ show = true } = {}) {
 
   const target = await resolveTarget();
   await waitAndLoad(target);
+  void checkClaudeOnboarding(target);
   return win;
 }
 
@@ -385,6 +444,21 @@ function createTray() {
 // ── app lifecycle ─────────────────────────────────────────────────────────────
 if (gotTheLock) {
   app.whenReady().then(() => {
+    // Grant the renderer (our own localhost content) the permissions it needs:
+    // notifications for "agent finished" banners, clipboard for terminal paste.
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
+      cb(['notifications', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission));
+    });
+    // Renderer → native bridge (see preload.cjs). Kept to a tiny allowlist.
+    ipcMain.handle('pinloom:focus', () => {
+      showWindow();
+    });
+    ipcMain.handle('pinloom:set-badge', (_e, count) => {
+      if (!app.dock) return;
+      const n = Number(count);
+      app.dock.setBadge(Number.isFinite(n) && n > 0 ? String(Math.min(Math.floor(n), 99)) : '');
+    });
+
     try {
       createTray();
       trayOk = true;

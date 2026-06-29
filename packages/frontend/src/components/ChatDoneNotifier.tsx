@@ -1,9 +1,15 @@
 import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { WS_RUNS_CHANNEL } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { useNotifications } from '../stores/notifications.js';
 import { isSessionVisible } from '../stores/activeSession.js';
-import { setSessionRunning } from '../stores/sessionRunning.js';
+import {
+  setSessionRunning,
+  useRunningSessions,
+} from '../stores/sessionRunning.js';
+import { notifyNative, setDockBadge } from '../utils/desktop.js';
+import { gotoSessionTab } from '../utils/gotoSession.js';
 
 // Debounce a finish before raising the notification: when the user has
 // queued several messages, a turn boundary emits `finished` and then the next
@@ -17,7 +23,15 @@ const SETTLE_MS = 1200;
 //  - on genuine idle, raise a "done" notification you can click to jump back.
 export function ChatDoneNotifier() {
   const { notify } = useNotifications();
+  const navigate = useNavigate();
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  // Mirror the running-session count onto the desktop app's dock badge (no-op
+  // in a browser). Ambient "is anything working" without opening the window.
+  const running = useRunningSessions();
+  useEffect(() => {
+    setDockBadge(running.length);
+  }, [running.length]);
 
   useWebSocket(WS_RUNS_CHANNEL, (ev) => {
     if (ev.type !== 'run_activity') return;
@@ -58,15 +72,25 @@ export function ChatDoneNotifier() {
       ) {
         return;
       }
+      const headline =
+        phase === 'error'
+          ? `${label} — ${agentName} stopped`
+          : `${label} — ${agentName} is waiting for you`;
       notify({
         kind: 'chat-done',
         status: phase === 'error' ? 'error' : 'success',
-        title:
-          phase === 'error'
-            ? `${label} — ${agentName} stopped`
-            : `${label} — ${agentName} is waiting for you`,
+        title: headline,
         meta: { sessionId, projectId, sessionTitle: title },
       });
+      // Native OS banner when the window isn't focused (you're in another app
+      // or it's hidden in the menu bar) — desktop app only; no-op in a browser.
+      // Click brings pinloom forward and jumps to the session.
+      if (!document.hasFocus() && projectId) {
+        notifyNative({
+          title: headline,
+          onClick: () => gotoSessionTab(navigate, projectId, sessionId),
+        });
+      }
     }, SETTLE_MS);
     pending.set(sessionId, timer);
   });
