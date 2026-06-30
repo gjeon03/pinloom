@@ -175,6 +175,33 @@ export function saveTimeline(sessionId: string, markdown: string): string {
   return now;
 }
 
+// In-flight generations, so the status survives client navigation: the tab can
+// remount and still learn "this session is generating" via GET. A second POST
+// for the same session joins the running one instead of starting a duplicate.
+const inFlight = new Map<string, Promise<HandoverResult & { generatedAt: string }>>();
+
+/** Is a generation currently running for this session? */
+export function isHandoverGenerating(sessionId: string): boolean {
+  return inFlight.has(sessionId);
+}
+
+/** Generate + persist, deduped per session. Concurrent callers share one run. */
+export function regenerateAndSaveTimeline(
+  sessionId: string,
+): Promise<HandoverResult & { generatedAt: string }> {
+  const existing = inFlight.get(sessionId);
+  if (existing) return existing;
+  const run = (async () => {
+    const result = await generateSessionHandover(sessionId);
+    const generatedAt = saveTimeline(sessionId, result.markdown);
+    return { ...result, generatedAt };
+  })();
+  inFlight.set(sessionId, run);
+  // Clear the flag whether it resolves or throws.
+  void run.finally(() => inFlight.delete(sessionId));
+  return run;
+}
+
 // Cheap fingerprint of a day's message set — changes iff messages are
 // added/edited for that day. A past (stable) day keeps the same hash → cache hit.
 function dayContentHash(msgs: MsgRow[]): string {

@@ -35,9 +35,9 @@ import { broadcast } from '../ws/hub.js';
 import { runSandboxedSync } from '../services/wiki-sync.js';
 import { createProposal } from '../services/wiki-proposals.js';
 import {
-  generateSessionHandover,
   getSavedTimeline,
-  saveTimeline,
+  isHandoverGenerating,
+  regenerateAndSaveTimeline,
 } from '../services/session-handover.js';
 
 const ALLOWED_IMAGE_MIME: ReadonlySet<ImageMediaType> = new Set<ImageMediaType>([
@@ -867,7 +867,13 @@ export async function sessionRoutes(app: FastifyInstance) {
     '/api/sessions/:sessionId/handover',
     async (req) => {
       const saved = getSavedTimeline(req.params.sessionId);
-      return { markdown: saved?.markdown ?? null, generatedAt: saved?.generatedAt ?? null };
+      return {
+        markdown: saved?.markdown ?? null,
+        generatedAt: saved?.generatedAt ?? null,
+        // True while a generation is running — lets the tab show "generating"
+        // even after the user navigated away and came back.
+        generating: isHandoverGenerating(req.params.sessionId),
+      };
     },
   );
 
@@ -882,9 +888,10 @@ export async function sessionRoutes(app: FastifyInstance) {
         return { error: 'session not found' };
       }
       try {
-        const result = await generateSessionHandover(req.params.sessionId);
-        const generatedAt = saveTimeline(req.params.sessionId, result.markdown);
-        return { ...result, generatedAt };
+        // Deduped: a second POST for a session already generating joins the
+        // running one instead of starting a duplicate.
+        const result = await regenerateAndSaveTimeline(req.params.sessionId);
+        return result;
       } catch (err) {
         reply.code(500);
         return { error: err instanceof Error ? err.message : String(err) };

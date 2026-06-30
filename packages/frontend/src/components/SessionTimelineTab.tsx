@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Copy, Download, Check, RefreshCw } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Markdown } from './Markdown.js';
@@ -16,34 +16,47 @@ export function SessionTimelineTab({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    setLoaded(false);
+  const aliveRef = useRef(true);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Source of truth = the server's GET (markdown + `generating`). Re-reading it
+  // on mount means navigating away and back shows the real state ("generating"
+  // vs done), and we poll while a generation is in flight so completion lands
+  // even though the click happened on a since-unmounted instance.
+  function load() {
     api
       .getHandover(sessionId)
       .then((r) => {
-        if (!alive) return;
+        if (!aliveRef.current) return;
         setMd(r.markdown);
         setGeneratedAt(r.generatedAt);
+        setGenerating(r.generating);
+        setLoaded(true);
+        if (r.generating) pollRef.current = setTimeout(load, 3000);
       })
-      .catch(() => {})
-      .finally(() => alive && setLoaded(true));
+      .catch(() => aliveRef.current && setLoaded(true));
+  }
+
+  useEffect(() => {
+    aliveRef.current = true;
+    setLoaded(false);
+    load();
     return () => {
-      alive = false;
+      aliveRef.current = false;
+      if (pollRef.current) clearTimeout(pollRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   async function generate() {
-    setGenerating(true);
     setError(null);
+    setGenerating(true);
     try {
-      const r = await api.generateHandover(sessionId);
-      setMd(r.markdown);
-      setGeneratedAt(r.generatedAt);
+      await api.generateHandover(sessionId); // resolves when done (or joins an in-flight run)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (aliveRef.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setGenerating(false);
+      if (aliveRef.current) load(); // refresh from server (markdown + generating=false)
     }
   }
   function copy() {
