@@ -265,3 +265,94 @@ export function listSkills(
     };
   });
 }
+
+export interface SkillDetail extends SkillSummary {
+  /** The editable SKILL.md body (everything after the frontmatter). */
+  body: string;
+  /** Absolute path to the skill's source dir. */
+  path: string;
+}
+
+/** Split a SKILL.md into its description (from frontmatter) and editable body. */
+function parseSkillMd(md: string): { description: string; body: string } {
+  const fm = md.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  const body = fm ? md.slice(fm[0].length).replace(/^\s+/, '') : md.trim();
+  return { description: readDescription(md), body };
+}
+
+/** Resolve a skill's source dir for a scope (global source vs project tree). */
+function skillSourceDir(
+  scope: SkillScope,
+  name: string,
+  roots: SkillRoots,
+  projectCwd?: string,
+): string {
+  if (scope === 'project') {
+    if (!projectCwd) throw new SkillError('project scope requires projectCwd');
+    return path.join(projectCwd, '.claude', 'skills', name);
+  }
+  return path.join(roots.pinloom, name);
+}
+
+/** Read one skill's full content (description + body) for editing. */
+export function readSkill(
+  scope: SkillScope,
+  name: string,
+  opts: { projectCwd?: string; roots?: SkillRoots } = {},
+): SkillDetail {
+  assertSkillName(name);
+  const roots = opts.roots ?? defaultSkillRoots();
+  const dir = skillSourceDir(scope, name, roots, opts.projectCwd);
+  const skillMd = path.join(dir, 'SKILL.md');
+  if (!existsSync(skillMd)) throw new SkillError(`skill not found: ${name}`, 404);
+  const { description, body } = parseSkillMd(readFileSync(skillMd, 'utf8'));
+  const base: SkillDetail = { name, scope, description, body, path: dir };
+  if (scope === 'global') {
+    base.linkedClaude = isLinkedTo(roots.claude, name, dir);
+    base.linkedCodex = isLinkedTo(roots.codex, name, dir);
+  }
+  return base;
+}
+
+/**
+ * Delete a skill. For global: remove the source dir AND only the claude/codex
+ * symlinks that still point at our source (never a real dir or the user's own
+ * link). For project: remove the project's skill dir.
+ */
+export function deleteSkill(
+  scope: SkillScope,
+  name: string,
+  opts: { projectCwd?: string; roots?: SkillRoots } = {},
+): void {
+  assertSkillName(name);
+  const roots = opts.roots ?? defaultSkillRoots();
+  const dir = skillSourceDir(scope, name, roots, opts.projectCwd);
+  if (!existsSync(dir)) throw new SkillError(`skill not found: ${name}`, 404);
+  if (scope === 'global') {
+    for (const root of [roots.claude, roots.codex]) {
+      if (isLinkedTo(root, name, dir)) rmSync(path.join(root, name));
+    }
+  }
+  rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * Repair a global skill's claude/codex symlinks (e.g. a link broke or a stale
+ * one points elsewhere inside our root). No-op-safe; returns each link's status
+ * so the UI can surface a remaining 'conflict' (a real dir / user-owned link we
+ * refuse to clobber).
+ */
+export function relinkGlobalSkill(
+  name: string,
+  roots: SkillRoots = defaultSkillRoots(),
+): { claude: LinkStatus; codex: LinkStatus } {
+  assertSkillName(name);
+  const canonicalDir = path.join(roots.pinloom, name);
+  if (!existsSync(path.join(canonicalDir, 'SKILL.md'))) {
+    throw new SkillError(`skill not found: ${name}`, 404);
+  }
+  return {
+    claude: linkInto(roots.claude, name, canonicalDir, roots.pinloom),
+    codex: linkInto(roots.codex, name, canonicalDir, roots.pinloom),
+  };
+}

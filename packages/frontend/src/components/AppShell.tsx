@@ -14,6 +14,7 @@ import {
   Plus,
   Settings,
   Sparkles,
+  Wand2,
   Sun,
   Users,
 } from 'lucide-react';
@@ -115,6 +116,7 @@ export function AppShell({ children }: Props) {
   const onTeams = location.pathname.startsWith('/teams');
   const onTimeline = location.pathname.startsWith('/timeline');
   const onRecap = location.pathname.startsWith('/recap');
+  const onSkills = location.pathname.startsWith('/skills');
 
   const [sidebarHidden, setSidebarHidden] = useState(
     () => localStorage.getItem('pinloom:sidebarHidden') === '1',
@@ -680,6 +682,19 @@ export function AppShell({ children }: Props) {
           >
             <Sparkles size={12} />
             {t('cmp.appShell.nav.recap')}
+          </button>
+          )}
+          {features.skillBot && (
+          <button
+            onClick={() => navigate('/skills')}
+            className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-1.5 ${
+              onSkills
+                ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]'
+            }`}
+          >
+            <Wand2 size={12} />
+            {t('cmp.appShell.nav.skills')}
           </button>
           )}
           <div className="flex items-center gap-1">

@@ -8,6 +8,9 @@ import {
   assertSkillName,
   listSkills,
   saveSkill,
+  readSkill,
+  deleteSkill,
+  relinkGlobalSkill,
   type SkillRoots,
 } from './skills.js';
 
@@ -157,5 +160,38 @@ describe('listSkills', () => {
     const list = listSkills('project', { projectCwd: proj });
     expect(list.map((s) => s.name)).toEqual(['p-skill']);
     expect(list[0].scope).toBe('project');
+  });
+});
+
+describe('readSkill / deleteSkill / relinkGlobalSkill', () => {
+  it('reads back a saved global skill (description, body, link status)', () => {
+    saveSkill({ name: 'rd', scope: 'global', description: 'when reading', body: '# Body\nline' }, roots);
+    const d = readSkill('global', 'rd', { roots });
+    expect(d.description).toBe('when reading');
+    expect(d.body).toContain('# Body');
+    expect(d.body).not.toContain('---'); // frontmatter stripped
+    expect(d.linkedClaude).toBe(true);
+    expect(d.linkedCodex).toBe(true);
+  });
+
+  it('readSkill throws 404 for a missing skill', () => {
+    expect(() => readSkill('global', 'nope', { roots })).toThrow(SkillError);
+  });
+
+  it('deleteSkill removes the source + our claude/codex symlinks', () => {
+    saveSkill({ name: 'del', scope: 'global', description: 'x', body: 'b' }, roots);
+    deleteSkill('global', 'del', { roots });
+    expect(existsSync(path.join(roots.pinloom, 'del'))).toBe(false);
+    expect(existsSync(path.join(roots.claude, 'del'))).toBe(false);
+    expect(existsSync(path.join(roots.codex, 'del'))).toBe(false);
+  });
+
+  it('relinkGlobalSkill repairs a broken link', async () => {
+    saveSkill({ name: 'rl', scope: 'global', description: 'x', body: 'b' }, roots);
+    await rm(path.join(roots.claude, 'rl'), { force: true }); // break the claude link
+    expect(existsSync(path.join(roots.claude, 'rl'))).toBe(false);
+    const links = relinkGlobalSkill('rl', roots);
+    expect(links.claude).toBe('linked');
+    expect(lstatSync(path.join(roots.claude, 'rl')).isSymbolicLink()).toBe(true);
   });
 });
