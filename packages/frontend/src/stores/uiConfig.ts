@@ -17,6 +17,16 @@ import {
 
 const CACHE_KEY = 'pinloom:uiConfig';
 
+// On a FRESH install (no saved config) default the UI language to the system's,
+// so a Korean-system colleague lands in Korean rather than English. Only ko/en
+// are supported; anything else → en. Pure (testable) + the navigator wrapper.
+export function detectSystemLocale(lang: string | undefined): UiLocale {
+  return lang?.toLowerCase().startsWith('ko') ? 'ko' : 'en';
+}
+function detectLocale(): UiLocale {
+  return detectSystemLocale(typeof navigator !== 'undefined' ? navigator.language : undefined);
+}
+
 function readCache(): UiConfig {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
@@ -24,7 +34,7 @@ function readCache(): UiConfig {
   } catch {
     /* ignore */
   }
-  return mergeUiConfig(undefined); // defaults (full preset)
+  return mergeUiConfig({ locale: detectLocale() }); // fresh: follow system language
 }
 
 function writeCache(c: UiConfig): void {
@@ -71,8 +81,13 @@ export async function hydrateUiConfig(): Promise<void> {
       // New backend returns { config, configured }; tolerate an older bare-config
       // response (treat as already-configured so the chooser never wrongly shows).
       const hasWrapper = json && typeof json === 'object' && 'config' in json;
-      set(mergeUiConfig(hasWrapper ? json.config : json));
-      firstRun = hasWrapper && json.configured === false ? 'needed' : 'done';
+      const isFresh = hasWrapper && json.configured === false;
+      const cfg = mergeUiConfig(hasWrapper ? json.config : json);
+      // On a fresh install the server's locale is just the 'en' default — keep
+      // the system-detected locale (from readCache) until the user picks. Once
+      // configured, the saved config is the source of truth.
+      set(isFresh ? { ...cfg, locale: current.locale } : cfg);
+      firstRun = isFresh ? 'needed' : 'done';
       notify();
     }
   } catch {
