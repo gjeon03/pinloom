@@ -6,6 +6,7 @@
 //
 // NOTE: distinct from handoff.ts, which FORKS a session into a fresh one. This
 // produces a read-only document for a person, not a new session.
+import { createHash } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { getDb } from '../db/connection.js';
 import { localDateOf } from './timeline/capture.js';
@@ -19,9 +20,13 @@ const TIMEOUT_MS = 5 * 60_000;
 // into one prompt is what made the model run past maxTurns and 500. A long day
 // is split into several of these windows and distilled separately.
 const CHUNK_CHARS = 22_000;
-// Backstop: a session spanning a huge number of days would fan out into that
-// many LLM calls. Cap and report what was dropped (oldest days first).
-const MAX_DAYS = 21;
+// Per-day notes are cached (session_timeline_days) and only re-distilled when a
+// day's content changes, so processing many days is cheap on re-gen. The cap
+// only bounds the FIRST generation's fan-out + the summary scope.
+const MAX_DAYS = 45;
+// How many uncached days to distill concurrently. Each distill spawns a claude
+// process, so keep this modest to avoid thrashing / rate limits.
+const DISTILL_CONCURRENCY = 4;
 
 interface MsgRow {
   id: string;
@@ -170,6 +175,46 @@ export function saveTimeline(sessionId: string, markdown: string): string {
   return now;
 }
 
+// Cheap fingerprint of a day's message set — changes iff messages are
+// added/edited for that day. A past (stable) day keeps the same hash → cache hit.
+function dayContentHash(msgs: MsgRow[]): string {
+  const h = createHash('sha1');
+  for (const m of msgs) h.update(m.id).update('|').update(String(m.content.length)).update('\n');
+  return h.digest('hex');
+}
+
+// Run fn over items with a bounded number in flight; preserves result order.
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
+}
+
+function saveDayNote(sessionId: string, date: string, hash: string, markdown: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO session_timeline_days (session_id, date, content_hash, markdown, generated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(session_id, date) DO UPDATE SET
+         content_hash = excluded.content_hash, markdown = excluded.markdown, generated_at = excluded.generated_at`,
+    )
+    .run(sessionId, date, hash, markdown, new Date().toISOString());
+}
+
 /** Generate a handover document for one session. */
 export async function generateSessionHandover(
   sessionId: string,
@@ -213,19 +258,18 @@ export async function generateSessionHandover(
 
   const locale = getUiConfig().locale;
 
-  // Per-day detailed distill — each day split into small windows so no single
-  // request is oversized (the cause of the maxTurns/500 failure). Sequential:
-  // independent claude calls, kept small + reliable.
   const sys = daySystem(locale);
-  const dayOutputs: { date: string; md: string }[] = [];
-  for (const date of dates) {
-    const chunks = chunkMessages(byDay.get(date)!, CHUNK_CHARS);
+  const cacheStmt = getDb().prepare(
+    'SELECT content_hash AS h, markdown AS md FROM session_timeline_days WHERE session_id = ? AND date = ?',
+  );
+
+  // Distill one day: split into small windows, distill each (isolated), join.
+  async function distillDay(date: string, dayMsgs: MsgRow[]): Promise<string> {
+    const chunks = chunkMessages(dayMsgs, CHUNK_CHARS);
     const partNotes: string[] = [];
     for (let i = 0; i < chunks.length; i++) {
       const transcript = renderTranscript(chunks[i], CHUNK_CHARS);
       const part = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
-      // Isolate each slice: one slice failing (e.g. a stray max-turns) must NOT
-      // 500 the whole doc — note the gap and keep the rest.
       try {
         const md = await runText(
           sys,
@@ -236,8 +280,29 @@ export async function generateSessionHandover(
         partNotes.push(`_(이 구간 정리 실패 / slice failed: ${err instanceof Error ? err.message : String(err)})_`);
       }
     }
-    if (partNotes.length > 0) dayOutputs.push({ date, md: partNotes.join('\n\n') });
+    return partNotes.join('\n\n');
   }
+
+  // Classify each day: cache hit (content unchanged) vs needs re-distill.
+  const dayInfos = dates.map((date) => {
+    const dayMsgs = byDay.get(date)!;
+    const hash = dayContentHash(dayMsgs);
+    const cached = cacheStmt.get(sessionId, date) as { h: string; md: string } | undefined;
+    return { date, dayMsgs, hash, md: cached && cached.h === hash ? cached.md : null as string | null };
+  });
+
+  // INCREMENTAL: only re-distill changed/new days; PARALLEL with a small cap.
+  // A month-long session re-gen then costs ~the latest day, not all of them.
+  const stale = dayInfos.filter((d) => d.md === null);
+  await mapPool(stale, DISTILL_CONCURRENCY, async (d) => {
+    const md = await distillDay(d.date, d.dayMsgs);
+    d.md = md;
+    if (md) saveDayNote(sessionId, d.date, d.hash, md);
+  });
+
+  const dayOutputs = dayInfos
+    .filter((d): d is typeof d & { md: string } => Boolean(d.md))
+    .map((d) => ({ date: d.date, md: d.md }));
 
   // Summary synthesized from the day notes. Cap the input so a long session's
   // concatenated notes don't oversize this one call either (keep the most

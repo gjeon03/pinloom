@@ -5,7 +5,9 @@ import { generateSessionHandover } from './session-handover.js';
 const db = getDb();
 
 function reset() {
-  db.exec('DELETE FROM messages; DELETE FROM sessions; DELETE FROM projects;');
+  db.exec(
+    'DELETE FROM messages; DELETE FROM sessions; DELETE FROM projects; DELETE FROM session_timeline_days; DELETE FROM session_timelines;',
+  );
   db.prepare(
     'INSERT INTO projects (id,name,cwd,created_at,updated_at) VALUES (?,?,?,?,?)',
   ).run('p1', 'proj', '/tmp/x', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z');
@@ -42,6 +44,39 @@ describe('generateSessionHandover', () => {
     expect(r.markdown).toContain('## 2026-06-12');
     expect(r.markdown).toContain('stub-summary');
     expect(r.markdown).toContain('stub-day');
+  });
+
+  it('caches per-day notes — regen with no new messages re-distills 0 days', async () => {
+    addMsg('m1', 'user', 'do the migration', '2026-06-10T09:00:00Z');
+    addMsg('m2', 'assistant', 'considered A vs B', '2026-06-10T09:05:00Z');
+    let calls = 0;
+    const counting = async (sys: string, p: string) => {
+      calls += 1;
+      return stub(sys, p);
+    };
+    await generateSessionHandover('s1', { runText: counting });
+    const first = calls; // 1 day distill + 1 summary
+    expect(first).toBeGreaterThan(1);
+    calls = 0;
+    await generateSessionHandover('s1', { runText: counting }); // unchanged
+    // day note served from cache → only the (uncached) summary call runs
+    expect(calls).toBe(1);
+  });
+
+  it('re-distills only a day whose content changed', async () => {
+    addMsg('m1', 'user', 'day one', '2026-06-10T09:00:00Z');
+    addMsg('m2', 'user', 'day two', '2026-06-12T09:00:00Z');
+    let calls = 0;
+    const counting = async (sys: string, p: string) => {
+      calls += 1;
+      return stub(sys, p);
+    };
+    await generateSessionHandover('s1', { runText: counting }); // 2 days + summary
+    calls = 0;
+    addMsg('m3', 'assistant', 'more on day two', '2026-06-12T10:00:00Z'); // changes day2 only
+    await generateSessionHandover('s1', { runText: counting });
+    // day1 cached (reused), day2 changed (1 distill) + summary = 2 calls
+    expect(calls).toBe(2);
   });
 
   it('handles an empty session gracefully', async () => {
