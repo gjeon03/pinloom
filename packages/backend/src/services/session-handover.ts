@@ -211,6 +211,14 @@ function dayContentHash(msgs: MsgRow[]): string {
   return h.digest('hex');
 }
 
+// Shift a YYYY-MM-DD by N days (UTC math) — widens the SQL date window so the
+// UTC-stored created_at safely covers a LOCAL-day range.
+function shiftYmd(ymd: string, days: number): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 // Run fn over items with a bounded number in flight; preserves result order.
 async function mapPool<T, R>(
   items: T[],
@@ -263,18 +271,41 @@ export async function generateSessionHandover(
     .get(sessionId) as { id: string; title: string | null } | undefined;
   if (!session) throw new Error('session not found');
 
+  const since = opts.since?.trim() || null;
+  const until = opts.until?.trim() || null;
+
+  // Only fetch rows near the requested range. created_at is UTC; the range is in
+  // LOCAL days, so over-fetch ±1 day in SQL (covers any tz offset) and let the
+  // localDateOf filter below trim to the exact days — same output, fewer rows
+  // read (so a "last 7 days" gen doesn't load a month + block the event loop).
+  const conds = [
+    'session_id = ?',
+    "role IN ('user','assistant')",
+    "content <> ''",
+    'source_message_id IS NULL',
+  ];
+  const params: string[] = [sessionId];
+  if (since) {
+    conds.push('created_at >= ?');
+    params.push(shiftYmd(since, -1));
+  }
+  if (until) {
+    conds.push('created_at < ?');
+    params.push(shiftYmd(until, 2)); // exclusive upper → includes all of until+1
+  }
   const msgs = db
     .prepare(
       `SELECT id, role, content, created_at FROM messages
-       WHERE session_id = ? AND role IN ('user','assistant')
-         AND content <> '' AND source_message_id IS NULL
+       WHERE ${conds.join(' AND ')}
        ORDER BY created_at ASC`,
     )
-    .all(sessionId) as MsgRow[];
+    .all(...params) as MsgRow[];
 
   const title = session.title?.trim() || `Session ${sessionId}`;
   if (msgs.length === 0) {
-    return { markdown: `# Handover — ${title}\n\n_(no conversation to hand over yet)_\n`, days: 0, truncatedDays: 0 };
+    // Range-aware: the SQL bounds may have excluded everything for a range.
+    const note = since || until ? 'no conversation in range' : 'no conversation to hand over yet';
+    return { markdown: `# Handover — ${title}\n\n_(${note})_\n`, days: 0, truncatedDays: 0 };
   }
 
   // Group by local day, chronological.
@@ -286,9 +317,7 @@ export async function generateSessionHandover(
     byDay.set(d, arr);
   }
   let dates = [...byDay.keys()].sort();
-  // Optional date-range filter (inclusive). YYYY-MM-DD string compare is sound.
-  const since = opts.since?.trim() || null;
-  const until = opts.until?.trim() || null;
+  // Exact local-day trim (the SQL over-fetched ±1 day). YYYY-MM-DD compare sound.
   if (since || until) {
     dates = dates.filter((d) => (!since || d >= since) && (!until || d <= until));
   }
