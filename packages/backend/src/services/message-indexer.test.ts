@@ -1,11 +1,12 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getDb, isVectorAvailable } from '../db/connection.js';
 import type { EmbeddingProvider } from './embeddings/types.js';
-import { indexOneBatch, runIndexPass } from './message-indexer.js';
+import { indexOneBatch, runIndexPass, backfillMessageIndexState } from './message-indexer.js';
 import {
   MESSAGE_VECTORS,
   ensureVectorTable,
   setVectorMeta,
+  upsertVector,
   vectorRowCount,
 } from './vector-store.js';
 
@@ -85,5 +86,24 @@ describe.skipIf(!available)('message-indexer', () => {
     ).run();
     const n = await indexOneBatch(db, fakeProvider, 2);
     expect(n).toBe(2);
+  });
+});
+
+describe.skipIf(!available)('backfillMessageIndexState (migration 40)', () => {
+  it('seeds state from pre-existing vectors so they are not re-embedded', () => {
+    // Simulate a pre-migration install: vectors exist, but the state table is empty.
+    db.exec(`DELETE FROM ${MESSAGE_VECTORS}; DELETE FROM message_index_state;`);
+    upsertVector(db, MESSAGE_VECTORS, 'x1', new Float32Array(4));
+    upsertVector(db, MESSAGE_VECTORS, 'x2', new Float32Array(4));
+
+    expect(backfillMessageIndexState(db)).toBe(2);
+    const ids = db
+      .prepare('SELECT doc_id FROM message_index_state ORDER BY doc_id')
+      .all()
+      .map((r) => (r as { doc_id: string }).doc_id);
+    expect(ids).toEqual(['x1', 'x2']);
+
+    // idempotent: state is no longer empty, so a re-run seeds nothing.
+    expect(backfillMessageIndexState(db)).toBe(0);
   });
 });
