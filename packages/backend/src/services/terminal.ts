@@ -103,11 +103,17 @@ export function attachTerminal(
     // fallback than zsh when it isn't (more universally present on Linux).
     const shell = process.env.SHELL || 'bash';
     const child = pty.spawn(shell, [], {
-      name: 'xterm-color',
+      name: 'xterm-256color',
       cols,
       rows,
       cwd,
-      env: cleanEnv(),
+      // FORCE TERM to match what xterm.js actually emulates. cleanEnv() copies
+      // the backend's process.env, which may carry an inherited TERM (the shell
+      // that launched `pnpm start`, tmux/screen, or none under launchd → the
+      // node-pty `name` default). A mismatched TERM makes terminfo-heavy TUIs
+      // (nvim) mis-render — blank screen in the panel. xterm-256color +
+      // truecolor is correct for xterm.js.
+      env: { ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     });
     const created: TerminalSession = {
       pty: child,
