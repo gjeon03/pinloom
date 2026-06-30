@@ -176,6 +176,16 @@ export const api = {
     }),
   deletePromptTemplate: (id: string) =>
     request<{ ok: true }>(`/api/prompt-templates/${id}`, { method: 'DELETE' }),
+  // Session timeline / handover doc: structured summary + day-by-day detail.
+  getHandover: (sessionId: string) =>
+    request<{ markdown: string | null; generatedAt: string | null }>(
+      `/api/sessions/${sessionId}/handover`,
+    ),
+  generateHandover: (sessionId: string) =>
+    request<{ markdown: string; days: number; truncatedDays: number; generatedAt: string }>(
+      `/api/sessions/${sessionId}/handover`,
+      { method: 'POST' },
+    ),
   reorderPromptTemplates: (ids: string[]) =>
     request<PromptTemplate[]>('/api/prompt-templates/reorder', {
       method: 'POST',

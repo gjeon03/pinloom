@@ -81,7 +81,7 @@ function SessionRailLayout({
 // SDK sessions get the same right rail as terminal sessions, minus History
 // (ChatView already shows the full conversation). Keeps pins/wiki consistent
 // across both modes and per-panel under splits.
-const SDK_SIDE_TABS = ['pins', 'wiki'] as const;
+const SDK_SIDE_TABS = ['pins', 'wiki', 'timeline'] as const;
 
 export function ChatPanel(props: IDockviewPanelProps) {
   const { sessionId } = props.params as SessionPanelParams;

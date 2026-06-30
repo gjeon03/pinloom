@@ -641,6 +641,19 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 37,
+    // Per-session "Session Timeline" handover doc: a generated markdown digest
+    // (structured summary + day-by-day detail). One row per session, regenerated
+    // on demand. Kept in the DB so it backs up + survives ~/.claude resets.
+    sql: `
+      CREATE TABLE IF NOT EXISTS session_timelines (
+        session_id   TEXT PRIMARY KEY,
+        markdown     TEXT NOT NULL,
+        generated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

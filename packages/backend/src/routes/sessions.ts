@@ -34,6 +34,11 @@ import {
 import { broadcast } from '../ws/hub.js';
 import { runSandboxedSync } from '../services/wiki-sync.js';
 import { createProposal } from '../services/wiki-proposals.js';
+import {
+  generateSessionHandover,
+  getSavedTimeline,
+  saveTimeline,
+} from '../services/session-handover.js';
 
 const ALLOWED_IMAGE_MIME: ReadonlySet<ImageMediaType> = new Set<ImageMediaType>([
   'image/jpeg',
@@ -853,4 +858,37 @@ export async function sessionRoutes(app: FastifyInstance) {
       sourceFiller: sourceFiller ? toSession(sourceFiller) : null,
     };
   });
+
+  // Session Timeline (handover doc): GET the saved one; POST regenerates +
+  // saves it. Structured summary + detailed day-by-day account. POST is
+  // long-running (per-day LLM distills) — the client shows a generating state.
+  // See services/session-handover.ts (distinct from handoff = session fork).
+  app.get<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/handover',
+    async (req) => {
+      const saved = getSavedTimeline(req.params.sessionId);
+      return { markdown: saved?.markdown ?? null, generatedAt: saved?.generatedAt ?? null };
+    },
+  );
+
+  app.post<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/handover',
+    async (req, reply) => {
+      const exists = db
+        .prepare('SELECT id FROM sessions WHERE id = ?')
+        .get(req.params.sessionId) as { id: string } | undefined;
+      if (!exists) {
+        reply.code(404);
+        return { error: 'session not found' };
+      }
+      try {
+        const result = await generateSessionHandover(req.params.sessionId);
+        const generatedAt = saveTimeline(req.params.sessionId, result.markdown);
+        return { ...result, generatedAt };
+      } catch (err) {
+        reply.code(500);
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
 }
