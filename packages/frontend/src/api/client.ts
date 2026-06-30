@@ -178,13 +178,16 @@ export const api = {
     request<{ ok: true }>(`/api/prompt-templates/${id}`, { method: 'DELETE' }),
   // Session timeline / handover doc: structured summary + day-by-day detail.
   getHandover: (sessionId: string) =>
-    request<{ markdown: string | null; generatedAt: string | null }>(
+    request<{ markdown: string | null; generatedAt: string | null; generating: boolean }>(
       `/api/sessions/${sessionId}/handover`,
     ),
-  generateHandover: (sessionId: string) =>
+  generateHandover: (
+    sessionId: string,
+    range?: { since?: string | null; until?: string | null },
+  ) =>
     request<{ markdown: string; days: number; truncatedDays: number; generatedAt: string }>(
       `/api/sessions/${sessionId}/handover`,
-      { method: 'POST' },
+      { method: 'POST', body: JSON.stringify(range ?? {}) },
     ),
   reorderPromptTemplates: (ids: string[]) =>
     request<PromptTemplate[]>('/api/prompt-templates/reorder', {

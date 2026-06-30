@@ -654,6 +654,24 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 38,
+    // Per-day distilled notes cache for the Session Timeline. Lets regeneration
+    // re-distill ONLY the days whose content changed (content_hash mismatch) —
+    // a month-long session then costs ~the latest day per regen instead of
+    // re-distilling everything. Keyed (session_id, date); content_hash covers
+    // that day's message set so a stable past day is a cache hit.
+    sql: `
+      CREATE TABLE IF NOT EXISTS session_timeline_days (
+        session_id   TEXT NOT NULL,
+        date         TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        markdown     TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, date)
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
