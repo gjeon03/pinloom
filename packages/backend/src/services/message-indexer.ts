@@ -39,12 +39,19 @@ const BATCH = 32;
 const INTERVAL_MS = 5000;
 const nextTick = () => new Promise<void>((r) => setImmediate(r));
 
+// Plain indexed mirror of which message ids are embedded (migration 40). The
+// old pending query anti-joined against the vec0 virtual table, which forced a
+// full scan of it every sweep (~100ms even when idle — the event-loop blocker).
+// An anti-join against this B-tree-indexed table is O(log n). Mirrors the
+// timeline/wiki indexers' *_index_state tables.
+const MESSAGE_INDEX_STATE = 'message_index_state';
+
 // Pending = content-bearing user/assistant rows (mirrors the FTS predicate),
 // not already embedded. source_message_id IS NULL skips worker-mirror rows.
 const PENDING_SQL = `
   SELECT id, content FROM messages
   WHERE role IN ('user','assistant') AND content <> '' AND source_message_id IS NULL
-    AND id NOT IN (SELECT doc_id FROM ${MESSAGE_VECTORS})
+    AND id NOT IN (SELECT doc_id FROM ${MESSAGE_INDEX_STATE})
   ORDER BY created_at ASC
   LIMIT ?`;
 
@@ -55,15 +62,41 @@ function ensureSchema(db: Database, provider: EmbeddingProvider): void {
   if (!meta) {
     ensureVectorTable(db, MESSAGE_VECTORS, provider.dim);
     setVectorMeta(db, MESSAGE_VECTORS, provider.id, provider.dim);
-    return;
-  }
-  if (meta.modelId !== provider.id || meta.dim !== provider.dim) {
+  } else if (meta.modelId !== provider.id || meta.dim !== provider.dim) {
     // eslint-disable-next-line no-console
     console.error(
       `[vector] embedding model changed (${meta.modelId} → ${provider.id}); rebuilding + re-embedding`,
     );
     rebuildVectorTable(db, MESSAGE_VECTORS, provider.dim);
     setVectorMeta(db, MESSAGE_VECTORS, provider.id, provider.dim);
+    db.exec(`DELETE FROM ${MESSAGE_INDEX_STATE}`); // dropped vectors → re-embed all
+  }
+
+  backfillMessageIndexState(db);
+}
+
+/**
+ * One-time backfill: an existing install already has embedded vectors but the
+ * state table (migration 40) is empty. Seed it from the vec table ONCE so the
+ * whole corpus isn't re-embedded. This is the only remaining scan of the vec0
+ * table — after it the pending query is a pure B-tree anti-join. Returns the
+ * number of rows seeded (0 if already populated / empty corpus). Exported for
+ * tests.
+ */
+export function backfillMessageIndexState(db: Database): number {
+  const stateEmpty =
+    (db.prepare(`SELECT COUNT(*) AS c FROM ${MESSAGE_INDEX_STATE}`).get() as { c: number }).c === 0;
+  if (!stateEmpty) return 0;
+  try {
+    const info = db
+      .prepare(
+        `INSERT OR IGNORE INTO ${MESSAGE_INDEX_STATE} (doc_id, indexed_at)
+         SELECT doc_id, ? FROM ${MESSAGE_VECTORS}`,
+      )
+      .run(new Date().toISOString());
+    return info.changes;
+  } catch {
+    return 0; // vec table not queryable yet — the next sweep indexes from scratch.
   }
 }
 
@@ -76,9 +109,14 @@ export async function indexOneBatch(
   const rows = db.prepare(PENDING_SQL).all(limit) as { id: string; content: string }[];
   if (rows.length === 0) return 0;
   const vecs = await provider.embedPassages(rows.map((r) => r.content));
+  const markIndexed = db.prepare(
+    `INSERT OR REPLACE INTO ${MESSAGE_INDEX_STATE} (doc_id, indexed_at) VALUES (?, ?)`,
+  );
   const writeBatch = db.transaction(() => {
+    const now = new Date().toISOString();
     for (let i = 0; i < rows.length; i++) {
       upsertVector(db, MESSAGE_VECTORS, rows[i].id, vecs[i]);
+      markIndexed.run(rows[i].id, now); // keep the fast-lookup mirror in sync
     }
   });
   writeBatch();
@@ -172,6 +210,7 @@ async function tick(): Promise<void> {
       // at search.)
       if (processed > 0) {
         gcOrphans(db, MESSAGE_VECTORS, 'SELECT id FROM messages');
+        gcOrphans(db, MESSAGE_INDEX_STATE, 'SELECT id FROM messages'); // keep mirror in sync
       }
     } catch (err) {
       record('message', err);

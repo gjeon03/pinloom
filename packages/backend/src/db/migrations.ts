@@ -686,6 +686,20 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 40,
+    // Fast "pending messages" lookup for the vector indexer. The old query did
+    // `id NOT IN (SELECT doc_id FROM message_vectors)`, forcing a full scan of
+    // the vec0 virtual table every 5s sweep (~100ms, even when idle) — the
+    // event-loop blocker. Mirror the timeline/wiki indexers: track indexed
+    // message ids in a plain indexed table so "pending" is an O(log n) anti-join.
+    sql: `
+      CREATE TABLE IF NOT EXISTS message_index_state (
+        doc_id     TEXT PRIMARY KEY,
+        indexed_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
