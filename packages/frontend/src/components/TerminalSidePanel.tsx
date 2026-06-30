@@ -30,6 +30,7 @@ import { useFeatures } from '../stores/uiConfig.js';
 import { ActionIconButton, CopyMarkdownButton, PinToggleButton } from './MessageActions.js';
 import { PinnedPanel } from './PinnedPanel.js';
 import { Markdown } from './Markdown.js';
+import { SessionTimelineTab } from './SessionTimelineTab.js';
 import { useT } from '../i18n/t.js';
 
 // Right rail for a session, shared by terminal AND structured (SDK) sessions:
@@ -44,14 +45,14 @@ import { useT } from '../i18n/t.js';
 // the running TUI keeps its launch-time prompt), so a freshly-pinned note
 // reaches the agent after the session is reopened / resumed.
 
-type Tab = 'history' | 'pins' | 'wiki';
-const ALL_TABS: Tab[] = ['history', 'pins', 'wiki'];
+type Tab = 'history' | 'pins' | 'wiki' | 'timeline';
+const ALL_TABS: Tab[] = ['history', 'pins', 'wiki', 'timeline'];
 
 const collapsedKey = (sid: string) => `pinloom:termpanel:collapsed:${sid}`;
 const tabKey = (sid: string) => `pinloom:termpanel:tab:${sid}`;
 
 function isTab(v: string | null): v is Tab {
-  return v === 'history' || v === 'pins' || v === 'wiki';
+  return v === 'history' || v === 'pins' || v === 'wiki' || v === 'timeline';
 }
 
 // Mirror of backend computeWikiSlug (basename of cwd, slugified). We skip the
@@ -491,6 +492,7 @@ export function TerminalSidePanel({
                 : t('cmp.termPanel.tab.pins'),
             )}
           {tabs.includes('wiki') && tabBtn('wiki', t('cmp.termPanel.tab.wiki'))}
+          {tabs.includes('timeline') && tabBtn('timeline', t('cmp.termPanel.tab.timeline'))}
         </div>
         <div className="flex items-center gap-0.5">
           {/* Position picker — dock the rail to any edge. */}
@@ -702,6 +704,7 @@ export function TerminalSidePanel({
         </div>
       )}
       {tab === 'wiki' && <WikiTab sessionId={sessionId} projectCwd={projectCwd} />}
+      {tab === 'timeline' && <SessionTimelineTab sessionId={sessionId} />}
     </aside>
   );
 }
