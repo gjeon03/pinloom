@@ -238,6 +238,10 @@ export const api = {
   // Open (find-or-create) a built-in bot session and return it for navigation.
   openBot: (kind: BotKind) =>
     request<Session>(`/api/bots/${kind}/open`, { method: 'POST' }),
+  // Reset a bot's singleton session (clear messages + resume token) so the next
+  // request starts fresh without prior-context contamination.
+  resetBot: (kind: BotKind) =>
+    request<Session>(`/api/bots/${kind}/reset`, { method: 'POST' }),
 
   // A session + its project in one call, resolving hidden-project (bot)
   // sessions that the project list omits.

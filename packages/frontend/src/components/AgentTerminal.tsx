@@ -273,6 +273,25 @@ export function AgentTerminal({
     setConnKey((k) => k + 1);
   };
 
+  // Auto-reconnect when the window regains focus/visibility and the socket had
+  // dropped (backgrounded long enough that the browser closed the WS). The pty
+  // is kept alive on the backend, so this just re-attaches + replays scrollback
+  // — no manual "reconnect" click needed. Only for 'disconnected'; a genuine
+  // 'exited' agent still requires the explicit overlay action.
+  useEffect(() => {
+    if (status !== 'disconnected') return;
+    function onWake() {
+      if (document.visibilityState === 'visible') restart();
+    }
+    window.addEventListener('focus', onWake);
+    document.addEventListener('visibilitychange', onWake);
+    return () => {
+      window.removeEventListener('focus', onWake);
+      document.removeEventListener('visibilitychange', onWake);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
   const btnClass =
     'rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)]';
 

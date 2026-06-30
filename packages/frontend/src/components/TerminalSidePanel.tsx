@@ -306,7 +306,10 @@ export function TerminalSidePanel({
     if (!stick.current) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [windowed.length, collapsed, tab]);
+    // rows.length (full count) — not windowed.length — so a new turn still
+    // triggers the stick-scroll once history exceeds the window (windowed.length
+    // is then pinned at `limit` and would never change).
+  }, [rows.length, collapsed, tab]);
 
   // Re-anchor after paging in older rows so the viewport doesn't jump.
   useLayoutEffect(() => {

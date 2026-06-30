@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, RotateCcw } from 'lucide-react';
 import useSWR from 'swr';
 import type { Message, Project, Session } from '@pinloom/shared';
 import { api } from '../api/client.js';
@@ -23,6 +23,19 @@ export function SessionPage() {
   function goBack() {
     if (window.history.length > 1) navigate(-1);
     else navigate(project ? `/projects/${project.id}` : '/');
+  }
+  // Bot sessions are singletons (reused), so a new request inherits the prior
+  // one's context — let the user reset to a clean slate.
+  async function resetBotSession() {
+    if (!session?.botKind) return;
+    if (!window.confirm(t('page.session.resetConfirm'))) return;
+    try {
+      await api.resetBot(session.botKind);
+      sessionStorage.removeItem(`pinloom:input:${session.id}`);
+      window.location.reload();
+    } catch {
+      /* ignore — leave the session as-is */
+    }
   }
   const [session, setSession] = useState<Session | null>(null);
   const [project, setProject] = useState<Project | null>(null);
@@ -109,6 +122,17 @@ export function SessionPage() {
             {session.title ?? t('page.session.chatFallback', { id: session.id.slice(0, 6) })}
           </div>
         </div>
+        {session.botKind && (
+          <button
+            type="button"
+            onClick={resetBotSession}
+            title={t('page.session.reset')}
+            className="ml-auto shrink-0 inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1.5 text-xs text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+          >
+            <RotateCcw size={14} />
+            {t('page.session.reset')}
+          </button>
+        )}
       </header>
 
       <div className="flex-1 flex min-h-0">

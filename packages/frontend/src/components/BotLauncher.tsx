@@ -13,7 +13,10 @@ function seedDraft(sessionId: string, hint: string) {
   try {
     const key = `pinloom:input:${sessionId}`;
     const existing = sessionStorage.getItem(key) ?? '';
-    sessionStorage.setItem(key, existing ? `${hint}${existing}` : hint);
+    // Skill bot is a singleton session, so re-opening would otherwise prepend
+    // the hint again and again. Only seed if it isn't already there.
+    if (existing.startsWith(hint)) return;
+    sessionStorage.setItem(key, existing ? `${hint} ${existing}` : hint);
   } catch {
     // sessionStorage unavailable — the bot still opens, just without the seed.
   }
@@ -80,8 +83,8 @@ export function BotLauncher() {
     try {
       const session = await api.openBot('skill');
       const hint = projectName
-        ? `I want to create a skill for the project '${projectName}'. Turn the following into a skill:\n`
-        : 'I want to create a global skill. Turn the following into a skill:\n';
+        ? `I want to create a skill for the project '${projectName}'. Turn the following into a skill:`
+        : 'I want to create a global skill. Turn the following into a skill:';
       seedDraft(session.id, hint);
       navigate(`/s/${session.id}`);
     } catch (err) {

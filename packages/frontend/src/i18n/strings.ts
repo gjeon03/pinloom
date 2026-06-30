@@ -360,6 +360,8 @@ export const STRINGS: Record<string, { en: string; ko: string }> = {
   "page.session.docTitle": { "en": "pinloom session", "ko": "pinloom 세션" },
   "page.session.loading": { "en": "Loading session…", "ko": "세션 불러오는 중…" },
   "page.session.back": { "en": "Back", "ko": "뒤로" },
+  "page.session.reset": { "en": "Reset", "ko": "초기화" },
+  "page.session.resetConfirm": { "en": "Reset this bot session? Its conversation will be cleared.", "ko": "이 봇 세션을 초기화할까요? 대화 내용이 지워집니다." },
   "page.session.chatFallback": { "en": "Chat {id}", "ko": "대화 {id}" },
   "page.pins.noSessionId": { "en": "No session id.", "ko": "세션 ID가 없습니다." },
   "page.pins.title": { "en": "Pins", "ko": "Pins" },
