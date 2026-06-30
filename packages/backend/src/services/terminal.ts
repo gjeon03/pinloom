@@ -14,6 +14,7 @@
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { cleanChildEnv } from './child-env.js';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { getDb } from '../db/connection.js';
@@ -50,13 +51,9 @@ function loadProjectCwd(projectId: string): string | null {
   return row?.cwd ?? null;
 }
 
-function cleanEnv(): { [key: string]: string } {
-  const env: { [key: string]: string } = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === 'string') env[k] = v;
-  }
-  return env;
-}
+// Drop pinloom's own runtime vars (PORT etc.) so the user's shell behaves like
+// a plain terminal — see services/child-env.ts.
+const cleanEnv = cleanChildEnv;
 
 export interface TerminalHandle {
   /** Scrollback snapshot to replay into the freshly attached client. */
