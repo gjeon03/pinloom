@@ -877,7 +877,10 @@ export async function sessionRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post<{ Params: { sessionId: string } }>(
+  app.post<{
+    Params: { sessionId: string };
+    Body: { since?: string | null; until?: string | null };
+  }>(
     '/api/sessions/:sessionId/handover',
     async (req, reply) => {
       const exists = db
@@ -890,7 +893,10 @@ export async function sessionRoutes(app: FastifyInstance) {
       try {
         // Deduped: a second POST for a session already generating joins the
         // running one instead of starting a duplicate.
-        const result = await regenerateAndSaveTimeline(req.params.sessionId);
+        const result = await regenerateAndSaveTimeline(req.params.sessionId, {
+          since: req.body?.since ?? null,
+          until: req.body?.until ?? null,
+        });
         return result;
       } catch (err) {
         reply.code(500);

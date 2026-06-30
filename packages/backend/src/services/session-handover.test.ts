@@ -79,6 +79,24 @@ describe('generateSessionHandover', () => {
     expect(calls).toBe(2);
   });
 
+  it('range filter (since) limits which days are included', async () => {
+    addMsg('a', 'user', 'd1', '2026-06-10T09:00:00Z');
+    addMsg('b', 'user', 'd2', '2026-06-12T09:00:00Z');
+    addMsg('c', 'user', 'd3', '2026-06-14T09:00:00Z');
+    const r = await generateSessionHandover('s1', { runText: stub, since: '2026-06-12' });
+    expect(r.days).toBe(2);
+    expect(r.markdown).not.toContain('## 2026-06-10');
+    expect(r.markdown).toContain('## 2026-06-12');
+    expect(r.markdown).toContain('## 2026-06-14');
+  });
+
+  it('range with no matching days returns a friendly note (no throw)', async () => {
+    addMsg('a', 'user', 'd1', '2026-06-10T09:00:00Z');
+    const r = await generateSessionHandover('s1', { runText: stub, since: '2026-07-01' });
+    expect(r.days).toBe(0);
+    expect(r.markdown).toContain('no conversation in range');
+  });
+
   it('handles an empty session gracefully', async () => {
     const r = await generateSessionHandover('s1', { runText: stub });
     expect(r.days).toBe(0);

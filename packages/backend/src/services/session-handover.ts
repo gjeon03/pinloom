@@ -188,11 +188,12 @@ export function isHandoverGenerating(sessionId: string): boolean {
 /** Generate + persist, deduped per session. Concurrent callers share one run. */
 export function regenerateAndSaveTimeline(
   sessionId: string,
+  range: HandoverRange = {},
 ): Promise<HandoverResult & { generatedAt: string }> {
   const existing = inFlight.get(sessionId);
   if (existing) return existing;
   const run = (async () => {
-    const result = await generateSessionHandover(sessionId);
+    const result = await generateSessionHandover(sessionId, range);
     const generatedAt = saveTimeline(sessionId, result.markdown);
     return { ...result, generatedAt };
   })();
@@ -242,10 +243,18 @@ function saveDayNote(sessionId: string, date: string, hash: string, markdown: st
     .run(sessionId, date, hash, markdown, new Date().toISOString());
 }
 
-/** Generate a handover document for one session. */
+/** Optional date range (local YYYY-MM-DD, inclusive). Omit for the whole session. */
+export interface HandoverRange {
+  since?: string | null;
+  until?: string | null;
+}
+
+/** Generate a handover document for one session, optionally limited to a range. */
 export async function generateSessionHandover(
   sessionId: string,
-  opts: { runText?: (system: string, prompt: string) => Promise<string> } = {},
+  opts: {
+    runText?: (system: string, prompt: string) => Promise<string>;
+  } & HandoverRange = {},
 ): Promise<HandoverResult> {
   const runText = opts.runText ?? run;
   const db = getDb();
@@ -277,6 +286,20 @@ export async function generateSessionHandover(
     byDay.set(d, arr);
   }
   let dates = [...byDay.keys()].sort();
+  // Optional date-range filter (inclusive). YYYY-MM-DD string compare is sound.
+  const since = opts.since?.trim() || null;
+  const until = opts.until?.trim() || null;
+  if (since || until) {
+    dates = dates.filter((d) => (!since || d >= since) && (!until || d <= until));
+  }
+  if (dates.length === 0) {
+    const label = since || until ? ` (${since ?? '…'} ~ ${until ?? '…'})` : '';
+    return {
+      markdown: `# Handover — ${title}\n\n_(no conversation in range${label})_\n`,
+      days: 0,
+      truncatedDays: 0,
+    };
+  }
   let truncatedDays = 0;
   if (dates.length > MAX_DAYS) {
     truncatedDays = dates.length - MAX_DAYS;
@@ -354,6 +377,9 @@ export async function generateSessionHandover(
   }
 
   const parts: string[] = [`# Handover — ${title}`, ''];
+  if (since || until) {
+    parts.push(`> 범위 / range: ${since ?? '처음'} ~ ${until ?? '오늘'}`, '');
+  }
   if (truncatedDays > 0) {
     parts.push(`> _${truncatedDays} older day(s) omitted (cap ${MAX_DAYS})._`, '');
   }
