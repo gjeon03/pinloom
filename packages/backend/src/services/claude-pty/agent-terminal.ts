@@ -27,7 +27,18 @@ import {
 } from './launch-spec.js';
 import { getStopHookServer } from './shared-server.js';
 import { submitToTui } from './tui-input.js';
-import { startCapture, stopCapture } from './transcript-capture.js';
+import {
+  startCapture,
+  stopCapture,
+  linkClaudeSessionId,
+  isRescanPending,
+} from './transcript-capture.js';
+import {
+  listSessionFiles,
+  discoverNewSessionFile,
+  sessionIdOf,
+} from './transcript.js';
+import { getDb } from '../../db/connection.js';
 import type { StopHookPayload } from './stop-hook-server.js';
 
 // Read per spawn so tests can point it at a mock binary via env.
@@ -60,6 +71,10 @@ interface AgentTerminalSession {
   turnInFlight: boolean;
   /** Unregister the Stop listener that clears turnInFlight. */
   unregisterTurnTracker: () => void;
+  /** Turns submitted so far (diagnostic for the #188 capture-failure signal). */
+  turns: number;
+  /** Aborts the background transcript-discovery watcher (#188 defense) on teardown. */
+  discoverAbort: AbortController | null;
 }
 
 // Serializes dispatches per worker so two orchestrator asks can't interleave.
@@ -136,6 +151,11 @@ async function spawnAgentTerminal(
     { pinloomSessionId: sessionId },
   );
 
+  // Snapshot existing transcripts BEFORE spawn so the #188 defense can spot the
+  // one this fresh session creates (a resumed session already has a known id).
+  const isFresh = !launchInput.resume;
+  const beforeFiles = isFresh ? listSessionFiles(launchInput.cwd) : new Set<string>();
+
   const child = pty.spawn(claudeBin(), launch.args, {
     name: 'xterm-color',
     cols,
@@ -155,6 +175,8 @@ async function spawnAgentTerminal(
     lastDataAt: Date.now(),
     turnInFlight: false,
     unregisterTurnTracker: () => {},
+    turns: 0,
+    discoverAbort: null,
   };
   child.onData((d) => {
     created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
@@ -174,7 +196,53 @@ async function spawnAgentTerminal(
   // Persist this session's turns to the messages table in the background
   // (history / pins / notifications / teams). resume token seeds the agent id.
   void startCapture(sessionId, launchInput.resume);
+
+  // DEFENSE (#188): the Stop-hook forwarder is normally the ONLY writer of
+  // claude_session_id; if it dies (broken `node` in the app's PATH, a competing
+  // wrapper hook) capture never links and every backend restart loses context.
+  // As a net, watch the fs for the transcript this fresh session writes and link
+  // it ourselves. Keyed discovery refuses if ambiguous (a sibling claude in the
+  // same cwd), so it can never mis-link another session. Best-effort — the Stop
+  // hook still wins the race when it works.
+  if (isFresh) {
+    created.discoverAbort = new AbortController();
+    void discoverAndLink(sessionId, launchInput.cwd, beforeFiles, created);
+  }
   return created;
+}
+
+/**
+ * Background watcher for the #188 defense: wait for the fresh session's new
+ * transcript to appear, then link its claude session id (idempotent — no-op if
+ * the Stop hook already set it). Swallows the ambiguous/timeout/abort throws —
+ * the Stop hook remains the primary path.
+ */
+async function discoverAndLink(
+  sessionId: string,
+  cwd: string,
+  before: ReadonlySet<string>,
+  session: AgentTerminalSession,
+): Promise<void> {
+  try {
+    const file = await discoverNewSessionFile(cwd, before, {
+      timeoutMs: 5 * 60_000,
+      signal: session.discoverAbort?.signal,
+    });
+    linkClaudeSessionId(sessionId, sessionIdOf(file));
+  } catch {
+    // Timed out (no turn taken), aborted (torn down), or ambiguous (a sibling
+    // claude in the same cwd) — best-effort. Diagnostic: a turn ran but we still
+    // never linked an id → the exact #188 signal that went silent before.
+    const linked = getDb()
+      .prepare('SELECT claude_session_id AS c FROM sessions WHERE id = ?')
+      .get(sessionId) as { c: string | null } | undefined;
+    if (session.turns > 0 && !linked?.c && !session.discoverAbort?.signal.aborted) {
+      console.warn(
+        `[agent-terminal] ${sessionId}: ${session.turns} turn(s) ran but claude_session_id ` +
+          `is still null — transcript capture is not linking (issue #188 signal).`,
+      );
+    }
+  }
 }
 
 /** Common teardown for a session: stop capture, drop bookkeeping, free temp dir. */
@@ -185,6 +253,7 @@ function teardownSession(sessionId: string): void {
   stopCapture(sessionId);
   if (session) {
     session.unregisterTurnTracker();
+    session.discoverAbort?.abort();
     session.launch.cleanup();
   }
 }
@@ -209,6 +278,7 @@ const STRAY_ENTER_MS = 4000;
 function beginTurn(session: AgentTerminalSession, sessionId: string): void {
   if (session.turnInFlight) return;
   session.turnInFlight = true;
+  session.turns += 1;
   emitRunStatus(sessionId, 'started');
   const dataAtStart = session.lastDataAt;
   setTimeout(() => {
@@ -343,6 +413,9 @@ export function reapIdleAgentTerminals(nowMs: number, idleMs: number): string[] 
   const reaped: string[] = [];
   for (const [sessionId, s] of sessions) {
     if (!shouldReapTerminal(s, nowMs, idleMs)) continue;
+    // Don't reap mid-rescan: capture is chasing a late-flushing reply, and
+    // killing now would orphan it (teardown-vs-rescan gap).
+    if (isRescanPending(sessionId)) continue;
     killAgentTerminal(sessionId);
     reaped.push(sessionId);
   }
@@ -384,7 +457,10 @@ export async function killAllAgentTerminals(): Promise<void> {
   sessions.clear();
   dispatchChains.clear();
   for (const id of ids) stopCapture(id);
-  for (const s of live) s.unregisterTurnTracker();
+  for (const s of live) {
+    s.unregisterTurnTracker();
+    s.discoverAbort?.abort();
+  }
   if (live.length === 0) return;
 
   for (const s of live) {

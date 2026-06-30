@@ -137,6 +137,39 @@ function catchUpFromTranscript(
   }
 }
 
+/**
+ * Link a claude session id discovered OUT-OF-BAND (from the fs, not the Stop
+ * hook) — the issue #188 defense. The Stop-hook forwarder is normally the only
+ * writer of `claude_session_id`; if it dies (a broken `node` in the desktop
+ * app's PATH, or a competing wrapper hook) capture never links and every restart
+ * loses context. Recording the id here + folding the transcript makes capture
+ * self-sufficient. Idempotent: no-op if the id is already known (the hook won the
+ * race) or the session isn't being captured.
+ */
+export function linkClaudeSessionId(
+  pinloomSessionId: string,
+  claudeSessionId: string,
+): void {
+  const state = captures.get(pinloomSessionId);
+  if (!state || state.agentSessionId === claudeSessionId) return;
+  state.agentSessionId = claudeSessionId;
+  getDb()
+    .prepare(
+      'UPDATE sessions SET agent_session_id = ?, claude_session_id = ?, updated_at = ? WHERE id = ?',
+    )
+    .run(claudeSessionId, claudeSessionId, new Date().toISOString(), pinloomSessionId);
+  catchUpFromTranscript(pinloomSessionId, state, claudeSessionId);
+}
+
+/**
+ * Whether a session's capture is mid-rescan (chasing a late-flushing reply).
+ * The agent-terminal reaper consults this so it doesn't kill the pty during the
+ * teardown-vs-rescan gap and orphan the reply.
+ */
+export function isRescanPending(pinloomSessionId: string): boolean {
+  return captures.get(pinloomSessionId)?.rescanPending ?? false;
+}
+
 export function stopCapture(pinloomSessionId: string): void {
   const state = captures.get(pinloomSessionId);
   if (!state) return;

@@ -6,7 +6,7 @@ import { getDb } from '../../db/connection.js';
 import { getStopHookServer, shutdownStopHookServer } from './shared-server.js';
 import { sessionFilePath } from './transcript.js';
 import { persistMessage } from '../runner.js';
-import { startCapture, stopCapture } from './transcript-capture.js';
+import { startCapture, stopCapture, linkClaudeSessionId } from './transcript-capture.js';
 
 // Catch-up tests write transcripts to the real `sessionFilePath` location (under
 // ~/.claude/projects/<slug>/), since that's the path startCapture derives. The
@@ -124,6 +124,44 @@ describe('transcript capture', () => {
       .get(sid) as { c: string | null; a: string | null };
     expect(cur.c).toBe('a1');
     expect(cur.a).toBe('claude-x');
+
+    stopCapture(sid);
+  });
+
+  // Issue #188 defense: capture must link + fold even when NO Stop hook ever
+  // fires (the forwarder died) — driven by out-of-band fs discovery instead.
+  it('linkClaudeSessionId records the id + folds the transcript with no Stop hook', async () => {
+    const sid = 'sess-cap-link';
+    insertSession(sid);
+    const claudeSid = 'claude-link-1';
+    const tfile = sessionFilePath(cwdOf(sid), claudeSid);
+    mkdirSync(path.dirname(tfile), { recursive: true });
+    transcriptDirsToClean.push(path.dirname(tfile));
+    writeTranscript(tfile, [
+      { type: 'user', uuid: 'u1', parentUuid: null, message: { role: 'user', content: 'hello' } },
+      {
+        type: 'assistant',
+        uuid: 'a1',
+        parentUuid: 'u1',
+        message: { role: 'assistant', model: 'claude-opus-4-8', content: [{ type: 'text', text: 'world' }] },
+      },
+    ]);
+
+    await startCapture(sid, null); // fresh — no resume token, exactly the failing app case
+    linkClaudeSessionId(sid, claudeSid); // synchronous fold
+
+    const r = rows(sid);
+    expect(r.find((x) => x.role === 'user')?.content).toBe('hello');
+    expect(r.find((x) => x.role === 'assistant')?.content).toBe('world');
+    const cur = getDb()
+      .prepare('SELECT claude_session_id AS c, agent_session_id AS a FROM sessions WHERE id=?')
+      .get(sid) as { c: string | null; a: string | null };
+    expect(cur.c).toBe(claudeSid);
+    expect(cur.a).toBe(claudeSid);
+
+    // idempotent: re-linking the same id doesn't double-fold
+    linkClaudeSessionId(sid, claudeSid);
+    expect(rows(sid).length).toBe(2);
 
     stopCapture(sid);
   });

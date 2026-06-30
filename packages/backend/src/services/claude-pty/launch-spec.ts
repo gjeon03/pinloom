@@ -96,6 +96,34 @@ export interface BuiltClaudeLaunch {
 }
 
 /**
+ * Build the Stop-hook command string. Uses the backend's OWN node binary by
+ * ABSOLUTE path (`process.execPath`), never a bare `node`: a bare `node`
+ * resolves against claude's PATH, which in the desktop app is a login-shell PATH
+ * where a broken homebrew node can shadow the working one → the forwarder dies
+ * before POSTing → 0 captured turns + null claude_session_id (issue #188).
+ *
+ * When the backend runs under Electron, `process.execPath` is the Electron
+ * binary, so the command MUST carry `ELECTRON_RUN_AS_NODE=1` or every Stop hook
+ * would boot a GUI Electron instead of running node (worse than the silent
+ * failure). Mirrors the MCP-child pattern in runner.ts. Pure + exported so the
+ * absolute-path and electron-prefix invariants are unit-tested.
+ */
+export function buildStopHookCommand(
+  nodeExecPath: string,
+  isElectron: boolean,
+  forwarderPath: string,
+  stopHookUrl: string,
+  pinloomSessionId?: string,
+): string {
+  const nodeBin = JSON.stringify(nodeExecPath);
+  const envPrefix = isElectron ? 'ELECTRON_RUN_AS_NODE=1 ' : '';
+  const fwdArgs = pinloomSessionId
+    ? `${JSON.stringify(forwarderPath)} ${JSON.stringify(stopHookUrl)} ${JSON.stringify(pinloomSessionId)}`
+    : `${JSON.stringify(forwarderPath)} ${JSON.stringify(stopHookUrl)}`;
+  return `${envPrefix}${nodeBin} ${fwdArgs}`;
+}
+
+/**
  * Build the temp launch environment + argv for an interactive `claude`. The Stop
  * hook in the generated settings POSTs to `stopHookUrl`.
  */
@@ -111,9 +139,13 @@ export function buildClaudeLaunch(
 
   // The Stop-hook command forwards the payload to our server, tagging it with
   // the pinloom session id (3rd arg) so terminal-mode capture can map it back.
-  const command = opts.pinloomSessionId
-    ? `node ${JSON.stringify(forwarderPath)} ${JSON.stringify(stopHookUrl)} ${JSON.stringify(opts.pinloomSessionId)}`
-    : `node ${JSON.stringify(forwarderPath)} ${JSON.stringify(stopHookUrl)}`;
+  const command = buildStopHookCommand(
+    process.execPath,
+    Boolean(process.versions.electron),
+    forwarderPath,
+    stopHookUrl,
+    opts.pinloomSessionId,
+  );
 
   const settingsPath = path.join(tmp, 'settings.json');
   writeFileSync(
