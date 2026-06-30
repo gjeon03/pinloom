@@ -672,6 +672,23 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    // NOTE: id 39 is reserved for skill_usage (a sibling branch). This uses 40
+    // to avoid a duplicate-id collision; migration ids only need to be unique,
+    // so a gap is harmless and both apply regardless of merge order.
+    id: 40,
+    // Fast "pending messages" lookup for the vector indexer. The old query did
+    // `id NOT IN (SELECT doc_id FROM message_vectors)`, forcing a full scan of
+    // the vec0 virtual table every 5s sweep (~100ms, even when idle) — the
+    // event-loop blocker. Mirror the timeline/wiki indexers: track indexed
+    // message ids in a plain indexed table so "pending" is an O(log n) anti-join.
+    sql: `
+      CREATE TABLE IF NOT EXISTS message_index_state (
+        doc_id     TEXT PRIMARY KEY,
+        indexed_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
