@@ -224,11 +224,17 @@ export async function generateSessionHandover(
     for (let i = 0; i < chunks.length; i++) {
       const transcript = renderTranscript(chunks[i], CHUNK_CHARS);
       const part = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
-      const md = await runText(
-        sys,
-        `Date: ${date}${part}\nSession: "${title}"\n\nProduce a detailed account of what was done in this slice and the thinking behind it.\n\n--- TRANSCRIPT ---\n${transcript}`,
-      );
-      if (md) partNotes.push(md);
+      // Isolate each slice: one slice failing (e.g. a stray max-turns) must NOT
+      // 500 the whole doc — note the gap and keep the rest.
+      try {
+        const md = await runText(
+          sys,
+          `Date: ${date}${part}\nSession: "${title}"\n\nProduce a detailed account of what was done in this slice and the thinking behind it.\n\n--- TRANSCRIPT ---\n${transcript}`,
+        );
+        if (md) partNotes.push(md);
+      } catch (err) {
+        partNotes.push(`_(이 구간 정리 실패 / slice failed: ${err instanceof Error ? err.message : String(err)})_`);
+      }
     }
     if (partNotes.length > 0) dayOutputs.push({ date, md: partNotes.join('\n\n') });
   }
@@ -243,10 +249,17 @@ export async function generateSessionHandover(
     if (notesBlock.length + block.length > CHUNK_CHARS * 2) break;
     notesBlock = block + notesBlock; // prepend → keep chronological, drop oldest
   }
-  const summary = await runText(
-    summarySystem(locale),
-    `Session: "${title}"\n\n--- PER-DAY NOTES ---\n${notesBlock}`,
-  );
+  // Summary is best-effort — if it fails, still return the day-by-day detail
+  // (the bulk of the value) rather than 500 the whole request.
+  let summary = '';
+  try {
+    summary = await runText(
+      summarySystem(locale),
+      `Session: "${title}"\n\n--- PER-DAY NOTES ---\n${notesBlock}`,
+    );
+  } catch {
+    summary = '';
+  }
 
   const parts: string[] = [`# Handover — ${title}`, ''];
   if (truncatedDays > 0) {
