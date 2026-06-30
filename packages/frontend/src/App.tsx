@@ -25,6 +25,7 @@ import { WikiDetailPage } from './pages/WikiDetailPage.js';
 import { WikiProposalsPage } from './pages/WikiProposalsPage.js';
 import { TimelinePage } from './pages/TimelinePage.js';
 import { RecapPage } from './pages/RecapPage.js';
+import { SkillsPage } from './pages/SkillsPage.js';
 import { cacheKeys } from './api/cacheKeys.js';
 
 // SWR defaults: revalidate on browser focus + network reconnect so a tab
@@ -142,6 +143,14 @@ export function App() {
               element={
                 <FeatureRoute flag="teams">
                   <AppShell>{() => <TeamsPage />}</AppShell>
+                </FeatureRoute>
+              }
+            />
+            <Route
+              path="/skills"
+              element={
+                <FeatureRoute flag="skillBot">
+                  <AppShell>{() => <SkillsPage />}</AppShell>
                 </FeatureRoute>
               }
             />

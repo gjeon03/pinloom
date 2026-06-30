@@ -98,6 +98,33 @@ export interface BrowseResponse {
   entries: BrowseEntry[];
 }
 
+export type SkillScope = 'global' | 'project';
+export type SkillOrigin = 'pinloom' | 'external' | 'local';
+export interface SkillSummary {
+  name: string;
+  description: string;
+  scope: SkillScope;
+  /** global only: whether the claude/codex symlinks point at our source. */
+  linkedClaude?: boolean;
+  linkedCodex?: boolean;
+  /** global only: pinloom-managed / external symlink / local real dir. */
+  origin?: SkillOrigin;
+  hasClaude?: boolean;
+  hasCodex?: boolean;
+  /** global only: editable here (true only for pinloom-managed). */
+  editable?: boolean;
+  /** external only: where the symlink points (for display). */
+  target?: string;
+  /** Fun stat: times the AI invoked this skill through pinloom. */
+  useCount?: number;
+  lastUsedAt?: string | null;
+}
+export interface SkillDetail extends SkillSummary {
+  /** Editable SKILL.md body (everything after the frontmatter). */
+  body: string;
+  path: string;
+}
+
 export const api = {
   health: () => request<HealthResponse>('/api/health'),
 
@@ -242,6 +269,33 @@ export const api = {
   // request starts fresh without prior-context contamination.
   resetBot: (kind: BotKind) =>
     request<Session>(`/api/bots/${kind}/reset`, { method: 'POST' }),
+
+  // ── Skills (management page) ──────────────────────────────────────────────
+  listSkills: (scope: SkillScope, projectId?: string) =>
+    request<SkillSummary[]>(
+      `/api/skills?scope=${scope}${projectId ? `&project=${encodeURIComponent(projectId)}` : ''}`,
+    ),
+  getSkill: (scope: SkillScope, name: string, projectId?: string) =>
+    request<SkillDetail>(
+      `/api/skills/${scope}/${encodeURIComponent(name)}${projectId ? `?project=${encodeURIComponent(projectId)}` : ''}`,
+    ),
+  saveSkill: (input: {
+    name: string;
+    scope: SkillScope;
+    description: string;
+    body: string;
+    project?: string;
+  }) => request<SkillDetail>(`/api/skills`, { method: 'PUT', body: JSON.stringify(input) }),
+  deleteSkill: (scope: SkillScope, name: string, projectId?: string) =>
+    request<{ ok: true }>(
+      `/api/skills/${scope}/${encodeURIComponent(name)}${projectId ? `?project=${encodeURIComponent(projectId)}` : ''}`,
+      { method: 'DELETE' },
+    ),
+  relinkSkill: (name: string) =>
+    request<{ links: { claude: string; codex: string } }>(
+      `/api/skills/${encodeURIComponent(name)}/relink`,
+      { method: 'POST' },
+    ),
 
   // A session + its project in one call, resolving hidden-project (bot)
   // sessions that the project list omits.

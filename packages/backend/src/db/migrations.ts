@@ -673,9 +673,20 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
     `,
   },
   {
-    // NOTE: id 39 is reserved for skill_usage (a sibling branch). This uses 40
-    // to avoid a duplicate-id collision; migration ids only need to be unique,
-    // so a gap is harmless and both apply regardless of merge order.
+    id: 39,
+    // Fun stat: how many times each skill the AI invoked (via the `Skill` tool)
+    // through pinloom. Keyed by the skill name from the tool_use input; counted
+    // forward as turns are captured (terminal + SDK both flow through
+    // persistMessage). Surfaced as a badge on the Skills page.
+    sql: `
+      CREATE TABLE IF NOT EXISTS skill_usage (
+        name         TEXT PRIMARY KEY,
+        count        INTEGER NOT NULL DEFAULT 0,
+        last_used_at TEXT
+      );
+    `,
+  },
+  {
     id: 40,
     // Fast "pending messages" lookup for the vector indexer. The old query did
     // `id NOT IN (SELECT doc_id FROM message_vectors)`, forcing a full scan of

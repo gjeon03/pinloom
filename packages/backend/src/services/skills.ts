@@ -198,6 +198,16 @@ export function saveSkill(
   };
 }
 
+/**
+ * Where a global skill actually lives, as seen from ~/.claude / ~/.codex:
+ *  - pinloom:  our managed source (symlink → ~/.pinloom/skills) — editable here.
+ *  - external: a symlink to somewhere else (another project's skills dir) — we
+ *              show it but never edit/delete (it's owned elsewhere).
+ *  - local:    a real dir the user created directly in ~/.claude or ~/.codex —
+ *              shown read-only (pinloom doesn't own it).
+ */
+export type SkillOrigin = 'pinloom' | 'external' | 'local';
+
 export interface SkillSummary {
   name: string;
   description: string;
@@ -205,6 +215,19 @@ export interface SkillSummary {
   /** global only: whether the claude/codex symlinks point at our source. */
   linkedClaude?: boolean;
   linkedCodex?: boolean;
+  /** global only: classification + presence so the page shows EVERY skill the
+   *  agents see, not just pinloom-managed ones. */
+  origin?: SkillOrigin;
+  /** global only: whether the skill is present in each agent's dir at all. */
+  hasClaude?: boolean;
+  hasCodex?: boolean;
+  /** global only: editable here (true only for pinloom-managed). */
+  editable?: boolean;
+  /** external only: the symlink target (for display). */
+  target?: string;
+  /** Fun stat: how many times the AI invoked this skill through pinloom. */
+  useCount?: number;
+  lastUsedAt?: string | null;
 }
 
 function readDescription(skillMd: string): string {
@@ -247,6 +270,97 @@ function listSkillsInDir(dir: string, scope: SkillScope): SkillSummary[] {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Classify a single ~/.claude or ~/.codex entry against our pinloom root. */
+function classifyEntry(
+  agentDir: string,
+  name: string,
+  pinloomRoot: string,
+): { origin: SkillOrigin; target?: string } | null {
+  const p = path.join(agentDir, name);
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(p);
+  } catch {
+    return null;
+  }
+  if (st.isSymbolicLink()) {
+    let resolved: string | null = null;
+    try {
+      resolved = path.resolve(agentDir, readlinkSync(p));
+    } catch {
+      resolved = null;
+    }
+    const rootPrefix = path.resolve(pinloomRoot) + path.sep;
+    if (resolved && (resolved + path.sep).startsWith(rootPrefix)) return { origin: 'pinloom' };
+    return { origin: 'external', target: resolved ?? undefined };
+  }
+  return { origin: 'local' };
+}
+
+// Effective SKILL.md path for a global skill: our source if present, else
+// whichever agent dir has it (following the symlink).
+function effectiveGlobalSkillMd(name: string, roots: SkillRoots): string | null {
+  for (const dir of [roots.pinloom, roots.claude, roots.codex]) {
+    const md = path.join(dir, name, 'SKILL.md');
+    if (existsSync(md)) return md;
+  }
+  return null;
+}
+
+/**
+ * Every global skill the agents actually see — the union across ~/.claude and
+ * ~/.codex (plus any unlinked source in ~/.pinloom), each tagged by origin so
+ * the page shows the user's own + other projects' skills, not only ours.
+ */
+export function listGlobalSkillsAll(roots: SkillRoots = defaultSkillRoots()): SkillSummary[] {
+  const names = new Set<string>();
+  for (const dir of [roots.pinloom, roots.claude, roots.codex]) {
+    if (!existsSync(dir)) continue;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue; // .DS_Store, .system, …
+      if (existsSync(path.join(dir, entry.name, 'SKILL.md'))) names.add(entry.name);
+    }
+  }
+  const out: SkillSummary[] = [];
+  for (const name of names) {
+    const pinloomHas = existsSync(path.join(roots.pinloom, name, 'SKILL.md'));
+    const hasClaude = existsSync(path.join(roots.claude, name, 'SKILL.md'));
+    const hasCodex = existsSync(path.join(roots.codex, name, 'SKILL.md'));
+    let origin: SkillOrigin = 'pinloom';
+    let target: string | undefined;
+    if (!pinloomHas) {
+      const c =
+        classifyEntry(roots.claude, name, roots.pinloom) ??
+        classifyEntry(roots.codex, name, roots.pinloom);
+      origin = c?.origin ?? 'local';
+      target = c?.target;
+    }
+    const md = effectiveGlobalSkillMd(name, roots);
+    let description = '';
+    if (md) {
+      try {
+        description = readDescription(readFileSync(md, 'utf8'));
+      } catch {
+        description = '';
+      }
+    }
+    const canonicalDir = path.join(roots.pinloom, name);
+    out.push({
+      name,
+      description,
+      scope: 'global',
+      origin,
+      hasClaude,
+      hasCodex,
+      editable: origin === 'pinloom',
+      target,
+      linkedClaude: origin === 'pinloom' ? isLinkedTo(roots.claude, name, canonicalDir) : undefined,
+      linkedCodex: origin === 'pinloom' ? isLinkedTo(roots.codex, name, canonicalDir) : undefined,
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function listSkills(
   scope: SkillScope,
   opts: { projectCwd?: string; roots?: SkillRoots } = {},
@@ -256,12 +370,115 @@ export function listSkills(
     if (!opts.projectCwd) throw new SkillError('project scope requires projectCwd');
     return listSkillsInDir(path.join(opts.projectCwd, '.claude', 'skills'), 'project');
   }
-  return listSkillsInDir(roots.pinloom, 'global').map((s) => {
-    const canonicalDir = path.join(roots.pinloom, s.name);
-    return {
-      ...s,
-      linkedClaude: isLinkedTo(roots.claude, s.name, canonicalDir),
-      linkedCodex: isLinkedTo(roots.codex, s.name, canonicalDir),
-    };
-  });
+  return listGlobalSkillsAll(roots);
+}
+
+export interface SkillDetail extends SkillSummary {
+  /** The editable SKILL.md body (everything after the frontmatter). */
+  body: string;
+  /** Absolute path to the skill's source dir. */
+  path: string;
+}
+
+/** Split a SKILL.md into its description (from frontmatter) and editable body. */
+function parseSkillMd(md: string): { description: string; body: string } {
+  const fm = md.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  const body = fm ? md.slice(fm[0].length).replace(/^\s+/, '') : md.trim();
+  return { description: readDescription(md), body };
+}
+
+/** Resolve a skill's source dir for a scope (global source vs project tree). */
+function skillSourceDir(
+  scope: SkillScope,
+  name: string,
+  roots: SkillRoots,
+  projectCwd?: string,
+): string {
+  if (scope === 'project') {
+    if (!projectCwd) throw new SkillError('project scope requires projectCwd');
+    return path.join(projectCwd, '.claude', 'skills', name);
+  }
+  return path.join(roots.pinloom, name);
+}
+
+/** Read one skill's full content (description + body) for editing. */
+export function readSkill(
+  scope: SkillScope,
+  name: string,
+  opts: { projectCwd?: string; roots?: SkillRoots } = {},
+): SkillDetail {
+  assertSkillName(name);
+  const roots = opts.roots ?? defaultSkillRoots();
+
+  if (scope === 'project') {
+    const dir = skillSourceDir('project', name, roots, opts.projectCwd);
+    const skillMd = path.join(dir, 'SKILL.md');
+    if (!existsSync(skillMd)) throw new SkillError(`skill not found: ${name}`, 404);
+    const { description, body } = parseSkillMd(readFileSync(skillMd, 'utf8'));
+    return { name, scope, description, body, path: dir };
+  }
+
+  // global: read whichever copy exists (pinloom source, or the agent symlink/dir
+  // for external/local skills). Editable only when pinloom owns the source.
+  const md = effectiveGlobalSkillMd(name, roots);
+  if (!md) throw new SkillError(`skill not found: ${name}`, 404);
+  const { description, body } = parseSkillMd(readFileSync(md, 'utf8'));
+  const summary = listGlobalSkillsAll(roots).find((s) => s.name === name);
+  return {
+    name,
+    scope: 'global',
+    description,
+    body,
+    path: path.dirname(md),
+    origin: summary?.origin,
+    editable: summary?.editable,
+    hasClaude: summary?.hasClaude,
+    hasCodex: summary?.hasCodex,
+    target: summary?.target,
+    linkedClaude: summary?.linkedClaude,
+    linkedCodex: summary?.linkedCodex,
+  };
+}
+
+/**
+ * Delete a skill. For global: remove the source dir AND only the claude/codex
+ * symlinks that still point at our source (never a real dir or the user's own
+ * link). For project: remove the project's skill dir.
+ */
+export function deleteSkill(
+  scope: SkillScope,
+  name: string,
+  opts: { projectCwd?: string; roots?: SkillRoots } = {},
+): void {
+  assertSkillName(name);
+  const roots = opts.roots ?? defaultSkillRoots();
+  const dir = skillSourceDir(scope, name, roots, opts.projectCwd);
+  if (!existsSync(dir)) throw new SkillError(`skill not found: ${name}`, 404);
+  if (scope === 'global') {
+    for (const root of [roots.claude, roots.codex]) {
+      if (isLinkedTo(root, name, dir)) rmSync(path.join(root, name));
+    }
+  }
+  rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * Repair a global skill's claude/codex symlinks (e.g. a link broke or a stale
+ * one points elsewhere inside our root). No-op-safe; returns each link's status
+ * so the UI can surface a remaining 'conflict' (a real dir / user-owned link we
+ * refuse to clobber).
+ */
+export function relinkGlobalSkill(
+  name: string,
+  roots: SkillRoots = defaultSkillRoots(),
+): { claude: LinkStatus; codex: LinkStatus } {
+  assertSkillName(name);
+  const canonicalDir = path.join(roots.pinloom, name);
+  if (!existsSync(path.join(canonicalDir, 'SKILL.md'))) {
+    throw new SkillError(`skill not found: ${name}`, 404);
+  }
+  return {
+    claude: linkInto(roots.claude, name, canonicalDir, roots.pinloom),
+    codex: linkInto(roots.codex, name, canonicalDir, roots.pinloom),
+  };
 }
