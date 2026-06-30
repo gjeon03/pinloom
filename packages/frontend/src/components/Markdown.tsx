@@ -43,7 +43,10 @@ export function Markdown({ content }: { content: string }) {
     // chat zoom); everywhere else the var is unset and it falls back to 0.875rem
     // (= the old text-sm), so pins / wiki / detail readers are unaffected.
     <div
-      className="md-body leading-relaxed"
+      // break-words (overflow-wrap is inherited) so long unbroken tokens — Java
+      // FQCNs, method sigs like Foo#bar(A|B) — wrap instead of forcing a
+      // horizontal scrollbar in narrow panels (session timeline, pins, wiki).
+      className="md-body leading-relaxed min-w-0 break-words"
       style={{ fontSize: 'var(--chat-font-size, 0.875rem)' }}
     >
       <ReactMarkdown

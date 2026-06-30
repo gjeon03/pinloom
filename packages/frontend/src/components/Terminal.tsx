@@ -70,6 +70,17 @@ export function Terminal({
     // those replies to the shell makes it echo junk like "1;2c". Drop
     // xterm→pty data during the replay window (live input is unaffected).
     let replaying = false;
+    // Safety: a reattach to a TUI (nvim/less) replays a big alt-screen buffer;
+    // if the write callback is slow/never fires, `replaying` would stay true and
+    // SWALLOW ALL KEYBOARD INPUT (the terminal looks dead). Force-clear it.
+    let replayTimer: ReturnType<typeof setTimeout> | null = null;
+    const endReplay = () => {
+      replaying = false;
+      if (replayTimer) {
+        clearTimeout(replayTimer);
+        replayTimer = null;
+      }
+    };
 
     const sendResize = () => {
       try {
@@ -104,11 +115,12 @@ export function Terminal({
       if (msg.t === 'o' && typeof msg.d === 'string') {
         if (msg.replay) {
           // Suppress xterm's query replies while the replayed scrollback is
-          // parsed; clear once xterm finishes processing this chunk.
+          // parsed; clear once xterm finishes — or after a hard cap so input
+          // can never be permanently swallowed.
           replaying = true;
-          term.write(msg.d, () => {
-            replaying = false;
-          });
+          if (replayTimer) clearTimeout(replayTimer);
+          replayTimer = setTimeout(endReplay, 1500);
+          term.write(msg.d, endReplay);
         } else {
           term.write(msg.d);
         }
@@ -137,9 +149,21 @@ export function Terminal({
     const ro = new ResizeObserver(debouncedResize);
     ro.observe(container);
 
+    // xterm derives cols/rows from the measured cell size, which is wrong until
+    // the font has actually loaded AND the panel settled to its final height. In
+    // the desktop app the font often isn't cached at mount, so the first fit
+    // computes too few rows → a full-screen TUI (nvim, less) draws into a
+    // collapsed area and looks blank. Refit (and re-send the size to the pty)
+    // once fonts settle and once more a beat later so the TUI gets a correct
+    // SIGWINCH and redraws. (Mirrors AgentTerminal.)
+    void document.fonts?.ready?.then(() => sendResize());
+    const lateFitTimer = setTimeout(sendResize, 300);
+
     return () => {
       cancelAnimationFrame(rafId);
       if (resizeTimer) clearTimeout(resizeTimer);
+      if (replayTimer) clearTimeout(replayTimer);
+      clearTimeout(lateFitTimer);
       ro.disconnect();
       disposeTheme();
       dataSub.dispose();

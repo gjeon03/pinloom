@@ -82,6 +82,30 @@ export async function botRoutes(app: FastifyInstance) {
     },
   );
 
+  // Reset a bot's singleton session to a clean slate: clear its messages and
+  // forget the resume token so the NEXT turn starts fresh. The skill bot reuses
+  // one session, so without this each new skill request inherits the prior one's
+  // context. Idempotent.
+  app.post<{ Params: { kind: string } }>(
+    '/api/bots/:kind/reset',
+    async (req, reply) => {
+      const def = getBotDefinition(req.params.kind);
+      if (!def) {
+        reply.code(400);
+        return { error: `unknown or unavailable bot: ${req.params.kind}` };
+      }
+      const sessionId = ensureBotSession(def.kind);
+      db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+      db.prepare(
+        'UPDATE sessions SET agent_session_id = NULL, claude_session_id = NULL, updated_at = ? WHERE id = ?',
+      ).run(new Date().toISOString(), sessionId);
+      const row = db
+        .prepare('SELECT * FROM sessions WHERE id = ?')
+        .get(sessionId) as SessionRow;
+      return toSession(row);
+    },
+  );
+
   app.get<{ Querystring: { sessionId?: string; limit?: string } }>(
     '/api/bots/dispatch/read-session',
     async (req, reply) => {
