@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Save, Link2, Eye, Pencil, RefreshCw } from 'lucide-react';
-import { api, type SkillScope, type SkillSummary, type SkillDetail } from '../api/client.js';
+import { api, type SkillScope, type SkillSummary, type SkillDetail, type SkillOrigin } from '../api/client.js';
 import type { Project } from '@pinloom/shared';
 import { Markdown } from '../components/Markdown.js';
 import { useT } from '../i18n/t.js';
@@ -55,6 +55,8 @@ export function SkillsPage() {
   }, [scope, projectId]);
 
   const dirty = detail != null && (desc !== detail.description || body !== detail.body);
+  // external / local global skills are owned elsewhere — view only.
+  const readOnly = detail?.editable === false;
 
   async function open(name: string) {
     setSelected(name);
@@ -144,17 +146,42 @@ export function SkillsPage() {
     </button>
   );
 
-  const badge = (ok: boolean | undefined, label: string) => (
-    <span
-      className={`rounded px-1 text-[10px] ${
-        ok ? 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)]' : 'bg-red-500/15 text-red-400'
-      }`}
-      title={ok ? `${label} linked` : `${label} not linked — relink`}
-    >
-      {label}
-      {ok ? ' ✓' : ' ✗'}
-    </span>
-  );
+  // Static t() calls (no template-literal keys) so the i18n guard can verify them.
+  const originLabel = (o: SkillOrigin) =>
+    o === 'pinloom'
+      ? t('cmp.skills.origin.pinloom')
+      : o === 'external'
+        ? t('cmp.skills.origin.external')
+        : t('cmp.skills.origin.local');
+
+  const originTag = (origin?: SkillOrigin) => {
+    if (!origin) return null;
+    const cls =
+      origin === 'pinloom'
+        ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
+        : 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)]';
+    return <span className={`rounded px-1 text-[10px] ${cls}`}>{originLabel(origin)}</span>;
+  };
+
+  // For pinloom-managed skills the agent badge reflects LINK HEALTH (✓ / ✗
+  // repairable); for external/local it's just presence.
+  const agentTag = (s: SkillSummary, label: 'claude' | 'codex') => {
+    const present = label === 'claude' ? s.hasClaude : s.hasCodex;
+    if (!present) return null;
+    const linked = label === 'claude' ? s.linkedClaude : s.linkedCodex;
+    const broken = s.origin === 'pinloom' && linked === false;
+    return (
+      <span
+        className={`rounded px-1 text-[10px] ${
+          broken ? 'bg-red-500/15 text-red-400' : 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)]'
+        }`}
+        title={broken ? `${label} not linked — relink` : `${label}`}
+      >
+        {label}
+        {broken ? ' ✗' : ''}
+      </span>
+    );
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -212,9 +239,10 @@ export function SkillsPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-xs font-medium text-[var(--color-ink)]">{s.name}</span>
                   {s.scope === 'global' && (
-                    <span className="ml-auto flex shrink-0 gap-1">
-                      {badge(s.linkedClaude, 'claude')}
-                      {badge(s.linkedCodex, 'codex')}
+                    <span className="ml-auto flex shrink-0 items-center gap-1">
+                      {originTag(s.origin)}
+                      {agentTag(s, 'claude')}
+                      {agentTag(s, 'codex')}
                     </span>
                   )}
                 </div>
@@ -232,7 +260,7 @@ export function SkillsPage() {
             <div className="flex flex-col gap-3 px-6 py-4">
               <div className="flex items-center gap-2">
                 <h2 className="font-mono text-sm font-semibold text-[var(--color-ink)]">{detail.name}</h2>
-                {scope === 'global' && (detail.linkedClaude === false || detail.linkedCodex === false) && (
+                {!readOnly && scope === 'global' && (detail.linkedClaude === false || detail.linkedCodex === false) && (
                   <button
                     type="button"
                     onClick={relink}
@@ -252,33 +280,47 @@ export function SkillsPage() {
                     {preview ? <Pencil size={12} /> : <Eye size={12} />}
                     {preview ? t('cmp.skills.edit') : t('cmp.skills.preview')}
                   </button>
-                  <button
-                    type="button"
-                    onClick={save}
-                    disabled={busy || !dirty}
-                    className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)] disabled:opacity-40"
-                  >
-                    {busy ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
-                    {t('cmp.skills.save')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={remove}
-                    disabled={busy}
-                    className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-1 text-xs text-red-400 hover:border-red-400 disabled:opacity-40"
-                  >
-                    <Trash2 size={12} />
-                    {t('cmp.skills.delete')}
-                  </button>
+                  {!readOnly && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={save}
+                        disabled={busy || !dirty}
+                        className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs text-[var(--color-ink)] hover:border-[var(--color-accent)] disabled:opacity-40"
+                      >
+                        {busy ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
+                        {t('cmp.skills.save')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={remove}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-1 text-xs text-red-400 hover:border-red-400 disabled:opacity-40"
+                      >
+                        <Trash2 size={12} />
+                        {t('cmp.skills.delete')}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
+
+              {readOnly && (
+                <p className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-[11px] text-[var(--color-ink-muted)]">
+                  {detail.origin === 'external'
+                    ? t('cmp.skills.readonly.external')
+                    : t('cmp.skills.readonly.local')}
+                  {detail.target ? ` — ${detail.target}` : ''}
+                </p>
+              )}
 
               <label className="text-xs text-[var(--color-ink-muted)]">
                 {t('cmp.skills.description')}
                 <input
                   value={desc}
                   onChange={(e) => setDesc(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-sm text-[var(--color-ink)]"
+                  readOnly={readOnly}
+                  className="mt-1 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-sm text-[var(--color-ink)] read-only:opacity-70"
                 />
               </label>
 
@@ -290,8 +332,9 @@ export function SkillsPage() {
                 <textarea
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
+                  readOnly={readOnly}
                   spellCheck={false}
-                  className="min-h-[50vh] w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 font-mono text-xs text-[var(--color-ink)]"
+                  className="min-h-[50vh] w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 font-mono text-xs text-[var(--color-ink)] read-only:opacity-70"
                 />
               )}
             </div>

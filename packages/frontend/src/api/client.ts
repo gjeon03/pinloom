@@ -99,6 +99,7 @@ export interface BrowseResponse {
 }
 
 export type SkillScope = 'global' | 'project';
+export type SkillOrigin = 'pinloom' | 'external' | 'local';
 export interface SkillSummary {
   name: string;
   description: string;
@@ -106,6 +107,14 @@ export interface SkillSummary {
   /** global only: whether the claude/codex symlinks point at our source. */
   linkedClaude?: boolean;
   linkedCodex?: boolean;
+  /** global only: pinloom-managed / external symlink / local real dir. */
+  origin?: SkillOrigin;
+  hasClaude?: boolean;
+  hasCodex?: boolean;
+  /** global only: editable here (true only for pinloom-managed). */
+  editable?: boolean;
+  /** external only: where the symlink points (for display). */
+  target?: string;
 }
 export interface SkillDetail extends SkillSummary {
   /** Editable SKILL.md body (everything after the frontmatter). */
