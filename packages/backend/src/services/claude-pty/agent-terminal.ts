@@ -17,6 +17,7 @@
 import { existsSync } from 'node:fs';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
+import { cleanChildEnv } from '../child-env.js';
 import { buildSessionLaunchInput, emitRunStatus, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
 import {
@@ -82,13 +83,9 @@ const sessions = new Map<string, AgentTerminalSession>();
 const spawning = new Map<string, Promise<AgentTerminalSession | { reason: 'no-session' | 'no-cwd' }>>();
 let attachSeq = 0;
 
-function cleanEnv(): { [key: string]: string } {
-  const env: { [key: string]: string } = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === 'string') env[k] = v;
-  }
-  return env;
-}
+// Drop pinloom's own runtime vars (PORT etc.) from the agent shell — see
+// services/child-env.ts.
+const cleanEnv = cleanChildEnv;
 
 export interface AgentTerminalHandle {
   /** Scrollback snapshot to replay into the freshly attached client. */

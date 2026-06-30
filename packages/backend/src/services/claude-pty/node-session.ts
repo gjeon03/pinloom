@@ -14,6 +14,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
+import { cleanChildEnv } from '../child-env.js';
 import { collectUuids, selectTurnLines, type JsonlLine } from '../claude-jsonl/index.js';
 import type { ImageInput } from '../runner-types.js';
 import type { UserPrompt } from '../agents/message-stream.js';
@@ -44,13 +45,8 @@ function ansiToAlpha(s: string): string {
     .toLowerCase();
 }
 
-function cleanEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === 'string') env[k] = v;
-  }
-  return env;
-}
+// Drop pinloom's own runtime vars (PORT etc.) — see services/child-env.ts.
+const cleanEnv = cleanChildEnv;
 
 function materializeImages(images: ImageInput[], dir: string, turn: number): string[] {
   const paths: string[] = [];

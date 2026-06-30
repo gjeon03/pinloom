@@ -12,6 +12,7 @@
 import { existsSync, rmSync } from 'node:fs';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
+import { cleanChildEnv } from '../child-env.js';
 import { buildSessionLaunchInput, emitRunStatus, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
 
@@ -69,13 +70,9 @@ const spawning = new Map<
 >();
 let attachSeq = 0;
 
-function cleanEnv(): { [key: string]: string } {
-  const env: { [key: string]: string } = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === 'string') env[k] = v;
-  }
-  return env;
-}
+// Drop pinloom's own runtime vars (PORT etc.) from the agent shell — see
+// services/child-env.ts.
+const cleanEnv = cleanChildEnv;
 
 export async function spawnCodexTerminal(
   sessionId: string,
