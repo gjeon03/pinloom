@@ -205,10 +205,12 @@ export function SkillsPage() {
             ))}
           </select>
         )}
+        {/* No ml-auto: the global control cluster floats absolute at top-right
+            (App.tsx), so header content stays left to avoid being covered. */}
         <button
           type="button"
           onClick={createWithAi}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1.5 text-xs text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1.5 text-xs text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
         >
           <Plus size={14} />
           {t('cmp.skills.createWithAi')}
