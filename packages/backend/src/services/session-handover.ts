@@ -14,9 +14,11 @@ import type { UiLocale } from '@pinloom/shared';
 
 const MODEL = 'claude-sonnet-4-6';
 const TIMEOUT_MS = 5 * 60_000;
-// Per-day transcript cap. Generous so a day's reasoning survives; days are
-// processed separately so one long day can't starve the others.
-const DAY_CHAR_BUDGET = 80_000;
+// SMALL per-request transcript window. Each distill call gets at most this many
+// chars so the model reliably finishes in-budget — stuffing a whole busy day
+// into one prompt is what made the model run past maxTurns and 500. A long day
+// is split into several of these windows and distilled separately.
+const CHUNK_CHARS = 22_000;
 // Backstop: a session spanning a huge number of days would fan out into that
 // many LLM calls. Cap and report what was dropped (oldest days first).
 const MAX_DAYS = 21;
@@ -37,7 +39,9 @@ async function run(system: string, prompt: string): Promise<string> {
     options: {
       systemPrompt: system,
       model: MODEL,
-      maxTurns: 1,
+      // Headroom: a single text distill is normally 1 turn, but a stray
+      // thinking/format step shouldn't trip "max turns (1)" → 500.
+      maxTurns: 6,
       permissionMode: 'bypassPermissions',
       allowedTools: [],
       abortController,
@@ -81,6 +85,8 @@ function daySystem(locale: UiLocale): string {
     'Be detailed and faithful. Do NOT over-summarize — losing the "why" defeats the',
     'purpose. Reference concrete files, commands, identifiers, and errors when they',
     'appear. Output GitHub-flavored markdown (no top-level H1; start at "###").',
+    'You have NO tools — do not try to read files or run commands; work ONLY from',
+    'the transcript text given. Respond with the markdown directly.',
     langLine(locale),
   ].join(' ');
 }
@@ -93,6 +99,8 @@ function summarySystem(locale: UiLocale): string {
     '"남은 일 · 다음 스텝 / Open items & next steps", "함정 · 주의 / Gotchas",',
     '"핵심 파일 · 명령 / Key files & commands". Be specific and actionable; prefer',
     'concrete references over generalities. Omit a section only if truly empty.',
+    'You have NO tools — synthesize ONLY from the notes given. Respond with the',
+    'markdown directly.',
     langLine(locale),
   ].join(' ');
 }
@@ -111,6 +119,27 @@ function renderTranscript(msgs: MsgRow[], budget: number): string {
     used += block.length;
   }
   return parts.join('\n\n');
+}
+
+// Split a day's messages into windows each <= budget chars, so a long day is
+// distilled in several small requests instead of one oversized prompt. A single
+// message bigger than the budget gets its own (truncated) window.
+function chunkMessages(msgs: MsgRow[], budget: number): MsgRow[][] {
+  const chunks: MsgRow[][] = [];
+  let cur: MsgRow[] = [];
+  let used = 0;
+  for (const m of msgs) {
+    const len = (m.content?.length ?? 0) + 16;
+    if (used + len > budget && cur.length > 0) {
+      chunks.push(cur);
+      cur = [];
+      used = 0;
+    }
+    cur.push(m);
+    used += len;
+  }
+  if (cur.length > 0) chunks.push(cur);
+  return chunks;
 }
 
 export interface HandoverResult {
@@ -184,22 +213,39 @@ export async function generateSessionHandover(
 
   const locale = getUiConfig().locale;
 
-  // Per-day detailed distill (sequential — independent claude calls; a session
-  // usually spans a handful of days).
+  // Per-day detailed distill — each day split into small windows so no single
+  // request is oversized (the cause of the maxTurns/500 failure). Sequential:
+  // independent claude calls, kept small + reliable.
+  const sys = daySystem(locale);
   const dayOutputs: { date: string; md: string }[] = [];
   for (const date of dates) {
-    const transcript = renderTranscript(byDay.get(date)!, DAY_CHAR_BUDGET);
-    const md = await runText(
-      daySystem(locale),
-      `Date: ${date}\nSession: "${title}"\n\nProduce a detailed account of what was done on this day and the thinking behind it.\n\n--- TRANSCRIPT ---\n${transcript}`,
-    );
-    if (md) dayOutputs.push({ date, md });
+    const chunks = chunkMessages(byDay.get(date)!, CHUNK_CHARS);
+    const partNotes: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const transcript = renderTranscript(chunks[i], CHUNK_CHARS);
+      const part = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
+      const md = await runText(
+        sys,
+        `Date: ${date}${part}\nSession: "${title}"\n\nProduce a detailed account of what was done in this slice and the thinking behind it.\n\n--- TRANSCRIPT ---\n${transcript}`,
+      );
+      if (md) partNotes.push(md);
+    }
+    if (partNotes.length > 0) dayOutputs.push({ date, md: partNotes.join('\n\n') });
   }
 
-  // Summary synthesized from the day notes.
+  // Summary synthesized from the day notes. Cap the input so a long session's
+  // concatenated notes don't oversize this one call either (keep the most
+  // recent days, where the current state lives).
+  let notesBlock = '';
+  for (let i = dayOutputs.length - 1; i >= 0; i--) {
+    const d = dayOutputs[i];
+    const block = `## ${d.date}\n${d.md}\n\n`;
+    if (notesBlock.length + block.length > CHUNK_CHARS * 2) break;
+    notesBlock = block + notesBlock; // prepend → keep chronological, drop oldest
+  }
   const summary = await runText(
     summarySystem(locale),
-    `Session: "${title}"\n\n--- PER-DAY NOTES ---\n${dayOutputs.map((d) => `## ${d.date}\n${d.md}`).join('\n\n')}`,
+    `Session: "${title}"\n\n--- PER-DAY NOTES ---\n${notesBlock}`,
   );
 
   const parts: string[] = [`# Handover — ${title}`, ''];

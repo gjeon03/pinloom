@@ -177,7 +177,7 @@ export const STRINGS: Record<string, { en: string; ko: string }> = {
   "cmp.termPanel.tab.pins": { "en": "Pins", "ko": "Pins" },
   "cmp.termPanel.tab.pinsCount": { "en": "Pins {n}", "ko": "Pins {n}" },
   "cmp.termPanel.tab.wiki": { "en": "Wiki", "ko": "Wiki" },
-  "cmp.termPanel.tab.timeline": { "en": "Timeline", "ko": "타임라인" },
+  "cmp.termPanel.tab.timeline": { "en": "Timeline", "ko": "Timeline" },
   "cmp.handover.generate": { "en": "Generate", "ko": "생성" },
   "cmp.handover.regenerate": { "en": "Regenerate", "ko": "다시 생성" },
   "cmp.handover.generating": { "en": "Generating…", "ko": "생성 중…" },
