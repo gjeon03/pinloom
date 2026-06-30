@@ -238,13 +238,23 @@ export function SkillsPage() {
               >
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-xs font-medium text-[var(--color-ink)]">{s.name}</span>
-                  {s.scope === 'global' && (
-                    <span className="ml-auto flex shrink-0 items-center gap-1">
-                      {originTag(s.origin)}
-                      {agentTag(s, 'claude')}
-                      {agentTag(s, 'codex')}
-                    </span>
-                  )}
+                  <span className="ml-auto flex shrink-0 items-center gap-1">
+                    {!!s.useCount && (
+                      <span
+                        className="rounded px-1 text-[10px] text-[var(--color-ink-muted)]"
+                        title={t('cmp.skills.usedTimes', { n: String(s.useCount) })}
+                      >
+                        🔥 {s.useCount}
+                      </span>
+                    )}
+                    {s.scope === 'global' && (
+                      <>
+                        {originTag(s.origin)}
+                        {agentTag(s, 'claude')}
+                        {agentTag(s, 'codex')}
+                      </>
+                    )}
+                  </span>
                 </div>
                 <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--color-ink-muted)]">{s.description}</p>
               </button>
@@ -260,6 +270,11 @@ export function SkillsPage() {
             <div className="flex flex-col gap-3 px-6 py-4">
               <div className="flex items-center gap-2">
                 <h2 className="font-mono text-sm font-semibold text-[var(--color-ink)]">{detail.name}</h2>
+                {!!detail.useCount && (
+                  <span className="rounded px-1.5 py-0.5 text-[11px] text-[var(--color-ink-muted)]">
+                    🔥 {t('cmp.skills.usedTimes', { n: String(detail.useCount) })}
+                  </span>
+                )}
                 {!readOnly && scope === 'global' && (detail.linkedClaude === false || detail.linkedCodex === false) && (
                   <button
                     type="button"

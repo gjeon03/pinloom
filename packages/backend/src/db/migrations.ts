@@ -672,6 +672,20 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 39,
+    // Fun stat: how many times each skill the AI invoked (via the `Skill` tool)
+    // through pinloom. Keyed by the skill name from the tool_use input; counted
+    // forward as turns are captured (terminal + SDK both flow through
+    // persistMessage). Surfaced as a badge on the Skills page.
+    sql: `
+      CREATE TABLE IF NOT EXISTS skill_usage (
+        name         TEXT PRIMARY KEY,
+        count        INTEGER NOT NULL DEFAULT 0,
+        last_used_at TEXT
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {

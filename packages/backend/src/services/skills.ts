@@ -225,6 +225,9 @@ export interface SkillSummary {
   editable?: boolean;
   /** external only: the symlink target (for display). */
   target?: string;
+  /** Fun stat: how many times the AI invoked this skill through pinloom. */
+  useCount?: number;
+  lastUsedAt?: string | null;
 }
 
 function readDescription(skillMd: string): string {

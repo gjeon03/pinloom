@@ -5,6 +5,7 @@ import { WS_RUNS_CHANNEL } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { broadcast } from '../ws/hub.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
+import { recordSkillUse } from './skill-usage.js';
 import { getUiConfig } from './ui-config.js';
 import { buildUserProfileContext } from './user-profile.js';
 import { getAgentAdapter } from './agents/index.js';
@@ -249,6 +250,17 @@ export function persistMessage(args: PersistArgs): Message {
       transcriptUuid,
       now,
     );
+
+  // Fun stat (#skills): count a skill invocation once, on the genuinely new
+  // insert (info.changes > 0 — never on a dedupe re-scan). The AI calls a skill
+  // via tool_use { name: 'Skill', input: { skill } }.
+  if (info.changes > 0 && args.toolUse && typeof args.toolUse === 'object') {
+    const tu = args.toolUse as { name?: unknown; input?: unknown };
+    if (tu.name === 'Skill') {
+      const skill = (tu.input as { skill?: unknown } | undefined)?.skill;
+      if (typeof skill === 'string' && skill) recordSkillUse(skill);
+    }
+  }
 
   // Dedupe hit: this transcript line was already folded (e.g. a capture
   // re-scan after resume re-reads a turn past the cursor). The UNIQUE

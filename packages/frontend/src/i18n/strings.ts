@@ -95,6 +95,7 @@ export const STRINGS: Record<string, { en: string; ko: string }> = {
   "cmp.skills.origin.local": { "en": "local", "ko": "로컬" },
   "cmp.skills.readonly.external": { "en": "Managed in another project (symlink) — read-only here.", "ko": "다른 프로젝트에서 관리(심볼릭) — 여기선 읽기전용." },
   "cmp.skills.readonly.local": { "en": "Created directly in the agent's skills folder — read-only here.", "ko": "에이전트 스킬 폴더에 직접 생성됨 — 여기선 읽기전용." },
+  "cmp.skills.usedTimes": { "en": "used {n}×", "ko": "{n}회 사용" },
   "cmp.appShell.nav.settings": { "en": "Settings", "ko": "설정" },
   "cmp.appShell.expand": { "en": "Expand", "ko": "펼치기" },
   "cmp.appShell.collapse": { "en": "Collapse", "ko": "접기" },

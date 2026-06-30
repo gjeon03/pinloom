@@ -115,6 +115,9 @@ export interface SkillSummary {
   editable?: boolean;
   /** external only: where the symlink points (for display). */
   target?: string;
+  /** Fun stat: times the AI invoked this skill through pinloom. */
+  useCount?: number;
+  lastUsedAt?: string | null;
 }
 export interface SkillDetail extends SkillSummary {
   /** Editable SKILL.md body (everything after the frontmatter). */

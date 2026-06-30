@@ -14,7 +14,18 @@ import {
   relinkGlobalSkill,
   SkillError,
   type SkillScope,
+  type SkillSummary,
 } from '../services/skills.js';
+import { getSkillUsage } from '../services/skill-usage.js';
+
+// Merge fun usage stats (count / lastUsedAt) into a skill or skill list.
+function withUsage<T extends SkillSummary>(skills: T[]): T[] {
+  const usage = getSkillUsage();
+  return skills.map((s) => {
+    const u = usage.get(s.name);
+    return { ...s, useCount: u?.count ?? 0, lastUsedAt: u?.lastUsedAt ?? null };
+  });
+}
 
 function asScope(v: unknown): SkillScope {
   return v === 'project' ? 'project' : 'global';
@@ -49,9 +60,9 @@ export async function skillRoutes(app: FastifyInstance) {
             reply.code(400);
             return { error: 'project scope requires a valid ?project=<id>' };
           }
-          return listSkills('project', { projectCwd: cwd });
+          return withUsage(listSkills('project', { projectCwd: cwd }));
         }
-        return listSkills('global');
+        return withUsage(listSkills('global'));
       } catch (err) {
         return fail(reply, err);
       }
@@ -72,7 +83,7 @@ export async function skillRoutes(app: FastifyInstance) {
           reply.code(400);
           return { error: 'project scope requires a valid ?project=<id>' };
         }
-        return readSkill(scope, req.params.name, { projectCwd });
+        return withUsage([readSkill(scope, req.params.name, { projectCwd })])[0];
       } catch (err) {
         return fail(reply, err);
       }
