@@ -36,7 +36,9 @@ import {
 } from './wiki-indexer.js';
 
 const BATCH = 32;
-const INTERVAL_MS = 5000;
+const INTERVAL_MS = 15_000; // sweep every 15s — new messages are searchable within
+// that; more often just burns CPU (the per-sweep change-detection keeps the
+// machine from idling). The mtime short-circuits make each sweep cheap regardless.
 const nextTick = () => new Promise<void>((r) => setImmediate(r));
 
 // Plain indexed mirror of which message ids are embedded (migration 40). The

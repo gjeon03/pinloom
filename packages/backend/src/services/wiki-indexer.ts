@@ -10,7 +10,7 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import type { Database } from 'better-sqlite3';
 import type { EmbeddingProvider } from './embeddings/types.js';
 import {
@@ -72,6 +72,13 @@ export function wikiContentHash(content: string): string {
 
 let schemaReady = false;
 
+// mtime short-circuit: reading + SHA-256 hashing every page every sweep is the
+// steady-state cost that pins the CPU (and blocks the event loop) even when
+// nothing changed. Cache each page's last-seen mtime; if it's unchanged we skip
+// the read/hash/DB-lookup entirely. In-memory (no migration): a restart just
+// re-hashes once, then the cache makes subsequent sweeps ~free (stat only).
+const wikiMtimeCache = new Map<string, number>();
+
 function ensureSchema(db: Database, provider: EmbeddingProvider): void {
   const meta = getVectorMeta(db, WIKI_VECTORS);
   if (!meta) {
@@ -117,17 +124,29 @@ export async function runWikiIndexPass(
   }
 
   const validDocIds = new Set<string>();
-  const changed: { slug: string; content: string; hash: string }[] = [];
+  const changed: { slug: string; content: string; hash: string; mtime: number }[] = [];
   for (const slug of slugs) {
     validDocIds.add(slug);
+    // Cheap change probe first: if the file's mtime matches what we last
+    // indexed, skip the (expensive) read + hash + DB lookup entirely.
+    let mtime = 0;
+    try {
+      mtime = statSync(path.join(pagesDir(home), `${slug}.md`)).mtimeMs;
+    } catch {
+      continue; // gone between listing and stat — GC will drop it
+    }
+    if (wikiMtimeCache.get(slug) === mtime) continue;
     const content = readWikiPage(slug, home);
     if (!content || content.trim() === '') continue;
     const hash = wikiContentHash(content);
     const prev = db
       .prepare('SELECT content_hash AS h FROM wiki_index_state WHERE doc_id = ?')
       .get(slug) as { h: string } | undefined;
-    if (prev && prev.h === hash) continue;
-    changed.push({ slug, content, hash });
+    if (prev && prev.h === hash) {
+      wikiMtimeCache.set(slug, mtime); // content already indexed — remember mtime so we don't re-hash
+      continue;
+    }
+    changed.push({ slug, content, hash, mtime });
   }
 
   const stateStmt = db.prepare(
@@ -142,6 +161,7 @@ export async function runWikiIndexPass(
     for (let j = 0; j < batch.length; j++) {
       upsertVector(db, WIKI_VECTORS, batch[j].slug, vecs[j]);
       stateStmt.run(batch[j].slug, batch[j].hash, now);
+      wikiMtimeCache.set(batch[j].slug, batch[j].mtime); // remember mtime for the short-circuit
     }
     processed += batch.length;
     if (i + BATCH < changed.length) await nextTick();
