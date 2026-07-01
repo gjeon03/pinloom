@@ -9,19 +9,25 @@ export function gotoSessionTab(
   navigate: NavigateFunction,
   projectId: string,
   sessionId: string,
+  // Optional: a specific message to scroll to + highlight once the session's
+  // chat mounts (search "jump to that message"). Delivered via the event (for
+  // the already-mounted same-session case) AND a localStorage marker (fresh
+  // navigate — ChatView reads it on mount).
+  messageId?: string,
 ): void {
   try {
     localStorage.setItem(`pinloom:lastSession:${projectId}`, sessionId);
     localStorage.removeItem(`pinloom:lastCanvas:${projectId}`);
     localStorage.removeItem(`pinloom:lastNotepad:${projectId}`);
     localStorage.removeItem(`pinloom:planActive:${projectId}`);
+    if (messageId) localStorage.setItem(`pinloom:focusMessage:${sessionId}`, messageId);
   } catch {
     // localStorage unavailable — the goto-session event still covers the
     // same-project case below.
   }
   window.dispatchEvent(
     new CustomEvent('pinloom:goto-session', {
-      detail: { projectId, sessionId },
+      detail: { projectId, sessionId, messageId },
     }),
   );
   navigate(`/projects/${projectId}`);
