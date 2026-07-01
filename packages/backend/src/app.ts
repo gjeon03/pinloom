@@ -50,6 +50,10 @@ import { initEmbeddings } from './services/embeddings/index.js';
 import { startMessageIndexer, stopMessageIndexer } from './services/message-indexer.js';
 import { startTimelineCapture, stopTimelineCapture } from './services/timeline/capture.js';
 import { startWikiAuto, stopWikiAuto } from './services/wiki-auto.js';
+import {
+  startWikiSessionSyncAuto,
+  stopWikiSessionSyncAuto,
+} from './services/wiki-session-sync-auto.js';
 import { registerStaticFrontend, shouldServeStatic } from './static-frontend.js';
 
 // Guard the WebSocket routes against cross-site hijacking. The terminal
@@ -96,6 +100,7 @@ export async function createApp() {
     stopMessageIndexer();
     stopTimelineCapture();
     stopWikiAuto();
+    stopWikiSessionSyncAuto();
     stopAgentTerminalReaper();
     await killAllTerminals();
     await killAllAgentTerminals();
@@ -136,6 +141,10 @@ export async function createApp() {
     // conventions and stage them as proposals for review. Conservative gates +
     // human accept keep it from polluting the always-injected wiki.
     startWikiAuto();
+    // The conversation half of the flywheel: distill idle sessions' new
+    // messages into wiki proposals (domain/product knowledge that never lives
+    // in code). Same gates + human accept.
+    startWikiSessionSyncAuto();
     // Reap detached + idle agent-terminal claude TUIs (~80MB each) after a
     // generous idle window. Safe: reopening relaunches with `--resume`, so the
     // session restores; this just bounds lingering processes.

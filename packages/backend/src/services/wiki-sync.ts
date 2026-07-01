@@ -569,6 +569,33 @@ sessions regardless of project."
    - Each entry format:
      \`- [<filename>](./pages/<filename>) \\\`[applies_to]\\\` \\\`topic1, topic2\\\` — summary\`
 
+## What to capture
+
+Capture durable, reusable knowledge of BOTH kinds — technical AND domain.
+Don't default to only technical facts.
+
+- **Technical** — conventions, architecture, patterns, gotchas, build/test/
+  deploy facts, config, dependencies, integration wiring.
+- **Domain & product knowledge** — the highest-value and easiest-to-lose kind,
+  because it lives ONLY in conversation, never in the code:
+  - **Glossary / terminology** — domain terms, entities, acronyms, and what
+    they mean in this project.
+  - **Business rules & constraints** — invariants, validation rules, edge
+    cases, "must / must never" facts, why a limit exists.
+  - **Product / user concepts** — who the users are, what the product does,
+    the key workflows and the reasoning behind them.
+  - **Domain decisions & rationale** — a choice made for a business/domain
+    (not purely technical) reason, and WHY.
+  - **External systems & integrations** — third-party services, upstream/
+    downstream systems, their contracts and quirks.
+  - **Assumptions & open questions** — stated assumptions and known unknowns.
+
+If the conversation explains a domain fact — a term, a rule, why the business
+works a certain way — CAPTURE IT. That is precisely the knowledge lost
+otherwise. Prefer domain-oriented filenames when apt (e.g.
+\`domain-glossary-${active.slug}.md\`, \`billing-rules-${active.slug}.md\`,
+\`${active.slug}-product-concepts.md\`).
+
 ## What to skip
 
 - Transient working state (a bug being actively debugged but not solved)
