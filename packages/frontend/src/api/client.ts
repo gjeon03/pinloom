@@ -238,6 +238,9 @@ export const api = {
         }[];
       };
     }>('/api/wiki/activity'),
+  // Abort every in-flight conventions analysis (stampede escape hatch).
+  cancelAllAnalyses: () =>
+    request<{ cancelled: number }>('/api/wiki/analyses/cancel-all', { method: 'POST' }),
 
   // Wiki similarity graph (nodes = pages, edges = nearest neighbours by embedding).
   getWikiGraph: () =>

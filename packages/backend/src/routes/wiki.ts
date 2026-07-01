@@ -10,6 +10,7 @@ import {
 } from '../services/wiki-reader.js';
 import {
   getAnalysisStatus,
+  cancelAllAnalyses,
   runConventionsAnalysis,
 } from '../services/wiki-analyzer.js';
 import {
@@ -239,10 +240,20 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
       });
       return result;
     } catch (err) {
+      // Concurrency cap hit → 429 so the UI can say "busy" instead of a 500.
+      if ((err as { code?: string }).code === 'ANALYSIS_BUSY') {
+        reply.code(429);
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
       reply.code(500);
       return { error: err instanceof Error ? err.message : String(err) };
     }
   });
+
+  // Abort every in-flight analysis — a stampede escape hatch surfaced in the UI.
+  app.post('/api/wiki/analyses/cancel-all', async () => ({
+    cancelled: cancelAllAnalyses(),
+  }));
 
   // Status of wiki analyses — used by the frontend to rehydrate notifications
   // after a page reload, and to poll until in-flight analyses finish.

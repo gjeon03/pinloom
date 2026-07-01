@@ -109,6 +109,7 @@ export const STRINGS: Record<string, { en: string; ko: string; zh: string }> = {
   "cmp.wikiAnalyze.idleHint": { "en": "Idle — nothing running. Auto kicks in on idle sessions once enough new messages accrue; or run it now below (or a session's “Sync to wiki”).", "ko": "대기 중 — 진행 중인 작업 없음. 유휴 세션에 새 대화가 충분히 쌓이면 자동 실행됩니다. 또는 아래에서 지금 실행(또는 세션의 “Sync to wiki”).", "zh": "空闲 — 无运行任务。空闲会话积累足够新消息后会自动运行；或在下方立即运行（或会话的 “Sync to wiki”）。" },
   "cmp.wikiAnalyze.analyzingLabel": { "en": "Analyzing conventions", "ko": "컨벤션 분석", "zh": "分析规范" },
   "cmp.wikiAnalyze.syncingLabel": { "en": "Syncing conversation", "ko": "대화 sync", "zh": "同步对话" },
+  "cmp.wikiAnalyze.cancelAll": { "en": "Cancel all", "ko": "모두 취소", "zh": "全部取消" },
   "cmp.appShell.nav.settings": { "en": "Settings", "ko": "설정", "zh": "设置" },
   "cmp.appShell.expand": { "en": "Expand", "ko": "펼치기", "zh": "展开" },
   "cmp.appShell.collapse": { "en": "Collapse", "ko": "접기", "zh": "收起" },

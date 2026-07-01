@@ -40,6 +40,18 @@ export function WikiAnalyzePicker({
   const analyzing = activity?.analyzing.running ?? [];
   const syncing = activity?.syncing.running ?? [];
   const anyRunning = analyzing.length + syncing.length > 0;
+  const [cancelling, setCancelling] = useState(false);
+  async function cancelAll() {
+    setCancelling(true);
+    try {
+      await api.cancelAllAnalyses();
+      setActivity(await api.getWikiActivity());
+    } catch {
+      /* ignore */
+    } finally {
+      setCancelling(false);
+    }
+  }
   return (
     <div
       onClick={onClose}
@@ -79,6 +91,16 @@ export function WikiAnalyzePicker({
               <Activity size={11} />
             )}
             {anyRunning ? t('cmp.wikiAnalyze.inProgress') : t('cmp.wikiAnalyze.activity')}
+            {analyzing.length > 0 && (
+              <button
+                type="button"
+                onClick={cancelAll}
+                disabled={cancelling}
+                className="ml-auto rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-normal text-red-400 hover:border-red-400 disabled:opacity-50"
+              >
+                {t('cmp.wikiAnalyze.cancelAll')}
+              </button>
+            )}
           </div>
           {!anyRunning ? (
             <div className="text-[11px] text-[var(--color-ink-muted)]">
