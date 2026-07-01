@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react';
 import { Loader2, Sparkles, X } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
+import { api } from '../api/client.js';
 import { useT } from '../i18n/t.js';
 
 interface Props {
@@ -18,6 +20,26 @@ export function WikiAnalyzePicker({
   onClose,
 }: Props) {
   const t = useT();
+  const [activity, setActivity] = useState<Awaited<
+    ReturnType<typeof api.getWikiActivity>
+  > | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .getWikiActivity()
+        .then((a) => alive && setActivity(a))
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 3000); // background work is invisible otherwise
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+  const analyzing = activity?.analyzing.running ?? [];
+  const syncing = activity?.syncing.running ?? [];
+  const anyRunning = analyzing.length + syncing.length > 0;
   return (
     <div
       onClick={onClose}
@@ -47,6 +69,38 @@ export function WikiAnalyzePicker({
           >
             <X size={14} />
           </button>
+        </div>
+
+        <div className="border-b border-[var(--color-border)] px-4 py-2.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-ink-muted)]">
+            <Loader2 size={11} className={anyRunning ? 'animate-spin' : ''} />
+            {t('cmp.wikiAnalyze.inProgress')}
+          </div>
+          {!anyRunning ? (
+            <div className="text-[11px] text-[var(--color-ink-muted)]">
+              {t('cmp.wikiAnalyze.idle')}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {analyzing.map((e) => (
+                <div key={`a-${e.projectId}`} className="truncate text-[11px] text-[var(--color-ink)]">
+                  <span className="text-[var(--color-accent)]">
+                    {t('cmp.wikiAnalyze.analyzingLabel')}
+                  </span>{' '}
+                  · {e.projectName}
+                </div>
+              ))}
+              {syncing.map((e) => (
+                <div key={`s-${e.sessionId}`} className="truncate text-[11px] text-[var(--color-ink)]">
+                  <span className="text-[var(--color-accent)]">
+                    {t('cmp.wikiAnalyze.syncingLabel')}
+                  </span>{' '}
+                  · {e.projectName}
+                  {e.sessionTitle ? ` — ${e.sessionTitle}` : ''}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-auto">

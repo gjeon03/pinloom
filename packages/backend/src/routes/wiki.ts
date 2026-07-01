@@ -19,6 +19,7 @@ import {
 } from '../services/wiki-archive.js';
 import { writeWikiPage, WikiWriteError } from '../services/wiki-writer.js';
 import { buildWikiGraph } from '../services/wiki-graph.js';
+import { getSessionSyncStatus } from '../services/wiki-session-sync-auto.js';
 
 interface SessionRow {
   id: string;
@@ -246,6 +247,14 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
   // Status of wiki analyses — used by the frontend to rehydrate notifications
   // after a page reload, and to poll until in-flight analyses finish.
   app.get('/api/wiki/analyses/status', async () => getAnalysisStatus());
+
+  // Combined "what's the wiki flywheel doing right now" — conventions analyses
+  // (code) + session distills (conversations). Polled by the analyze picker so
+  // the background work is visible instead of a mystery.
+  app.get('/api/wiki/activity', async () => ({
+    analyzing: getAnalysisStatus(),
+    syncing: getSessionSyncStatus(),
+  }));
 
   // Stream the entire wiki tree as a zip download.
   app.get('/api/wiki/export', async (_req, reply) => {
