@@ -2,7 +2,7 @@ import type { UiLocale } from '@pinloom/shared';
 import { useUiLocale } from '../stores/uiConfig.js';
 import { STRINGS } from './strings.js';
 
-// Lightweight i18n. STRINGS (strings.ts) is the single source: key → {en, ko}.
+// Lightweight i18n. STRINGS (strings.ts) is the single source: key → {en, ko, zh}.
 // English is the fallback for a locale missing a value, and the key itself is
 // the last-resort fallback so a missing string is visible, never blank. Proper
 // nouns (Wiki, Teams, Recap…) read the same in every locale by design.
