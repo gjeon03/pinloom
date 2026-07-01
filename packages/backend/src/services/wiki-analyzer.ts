@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { getDb } from '../db/connection.js';
 import { getProjectWikiSlugByProjectId, runOnWikiChain } from './wiki-sync.js';
@@ -223,6 +226,70 @@ export function getAnalysisStatus(): {
   };
 }
 
+const pexec = promisify(execFile);
+
+interface AnalysisCwd {
+  cwd: string;
+  cleanup: () => Promise<void>;
+}
+
+/**
+ * Resolve the directory to analyze for conventions. Conventions describe the
+ * STABLE, shared codebase — so we analyze a detached git worktree of the
+ * project's DEFAULT branch (main/master), not the currently checked-out branch
+ * or uncommitted changes. Otherwise a mid-refactor feature branch (which may
+ * never merge) would be captured as "the convention". Falls back to the project
+ * cwd for non-git repos, a missing default branch, or any git failure — the
+ * worktree is a correctness upgrade, never a hard requirement.
+ */
+export async function resolveAnalysisCwd(projectCwd: string): Promise<AnalysisCwd> {
+  const asIs: AnalysisCwd = { cwd: projectCwd, cleanup: async () => {} };
+  let tmp: string | null = null;
+  try {
+    await pexec('git', ['-C', projectCwd, 'rev-parse', '--is-inside-work-tree']);
+    // Default branch: prefer the remote's HEAD, else a local main/master.
+    let ref: string | null = null;
+    try {
+      const { stdout } = await pexec('git', [
+        '-C', projectCwd, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD',
+      ]);
+      ref = stdout.trim() || null; // e.g. "origin/main"
+    } catch {
+      /* no origin/HEAD */
+    }
+    if (!ref) {
+      for (const b of ['main', 'master']) {
+        try {
+          await pexec('git', ['-C', projectCwd, 'rev-parse', '--verify', b]);
+          ref = b;
+          break;
+        } catch {
+          /* branch absent */
+        }
+      }
+    }
+    if (!ref) return asIs; // no standard default branch → analyze cwd as-is
+    tmp = await mkdtemp(path.join(os.tmpdir(), 'pinloom-conv-'));
+    // --detach avoids "branch already checked out" when main is also the live worktree.
+    await pexec('git', ['-C', projectCwd, 'worktree', 'add', '--detach', tmp, ref]);
+    const worktree = tmp;
+    return {
+      cwd: worktree,
+      cleanup: async () => {
+        try {
+          await pexec('git', ['-C', projectCwd, 'worktree', 'remove', '--force', worktree]);
+        } catch {
+          /* best-effort */
+        }
+        await rm(worktree, { recursive: true, force: true }).catch(() => {});
+      },
+    };
+  } catch {
+    if (tmp) await rm(tmp, { recursive: true, force: true }).catch(() => {});
+    return asIs; // not a git repo / git unavailable
+  }
+}
+
 export async function runConventionsAnalysis(
   projectId: string,
   options?: { model?: string; startedAt?: string; stageProposal?: boolean },
@@ -241,6 +308,10 @@ export async function runConventionsAnalysis(
     throw new Error(`project cwd does not exist: ${project.cwd}`);
   }
 
+  // Analyze the default-branch worktree (stable/merged code), not the live cwd.
+  const analysis = await resolveAnalysisCwd(project.cwd);
+  const analyzeCwd = analysis.cwd;
+
   const slug = getProjectWikiSlugByProjectId(projectId);
   const pagesDir = getPagesDir();
   await mkdir(pagesDir, { recursive: true });
@@ -256,12 +327,12 @@ export async function runConventionsAnalysis(
 
   const systemPrompt = buildConventionsSystemPrompt({
     projectName: project.name,
-    projectCwd: project.cwd,
+    projectCwd: analyzeCwd,
     projectSlug: slug,
     existingPageContent,
   });
 
-  const initialPrompt = `Analyze the project at \`${project.cwd}\` for conventions. Return the markdown body of the wiki page only.`;
+  const initialPrompt = `Analyze the project at \`${analyzeCwd}\` for conventions. Return the markdown body of the wiki page only.`;
 
   const abortController = new AbortController();
   activeAnalyses.set(projectId, abortController);
@@ -282,7 +353,7 @@ export async function runConventionsAnalysis(
     const q = query({
       prompt: initialPrompt,
       options: {
-        cwd: project.cwd,
+        cwd: analyzeCwd,
         systemPrompt,
         model: options?.model ?? DEFAULT_ANALYZE_MODEL,
         maxTurns: 30,
@@ -401,6 +472,7 @@ export async function runConventionsAnalysis(
     throw err;
   } finally {
     clearTimeout(analyzeTimeout);
+    await analysis.cleanup(); // remove the temp default-branch worktree (no-op if cwd)
     if (activeAnalyses.get(projectId) === abortController) {
       activeAnalyses.delete(projectId);
     }
