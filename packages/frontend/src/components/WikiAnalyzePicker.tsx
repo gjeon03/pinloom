@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Sparkles, X } from 'lucide-react';
+import { Activity, Loader2, Sparkles, X } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
 import { api } from '../api/client.js';
 import { useT } from '../i18n/t.js';
@@ -73,12 +73,16 @@ export function WikiAnalyzePicker({
 
         <div className="border-b border-[var(--color-border)] px-4 py-2.5">
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-ink-muted)]">
-            <Loader2 size={11} className={anyRunning ? 'animate-spin' : ''} />
-            {t('cmp.wikiAnalyze.inProgress')}
+            {anyRunning ? (
+              <Loader2 size={11} className="animate-spin text-[var(--color-accent)]" />
+            ) : (
+              <Activity size={11} />
+            )}
+            {anyRunning ? t('cmp.wikiAnalyze.inProgress') : t('cmp.wikiAnalyze.activity')}
           </div>
           {!anyRunning ? (
             <div className="text-[11px] text-[var(--color-ink-muted)]">
-              {t('cmp.wikiAnalyze.idle')}
+              {t('cmp.wikiAnalyze.idleHint')}
             </div>
           ) : (
             <div className="space-y-1">
