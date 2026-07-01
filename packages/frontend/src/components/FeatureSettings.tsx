@@ -212,7 +212,7 @@ export function FeatureSettings() {
           {t('settings.language')}
         </h3>
         <div className="flex gap-2">
-          {(['en', 'ko'] as const).map((l) => (
+          {(['en', 'ko', 'zh'] as const).map((l) => (
             <button
               key={l}
               type="button"
@@ -223,7 +223,7 @@ export function FeatureSettings() {
                   : 'border-[var(--color-border)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
               }`}
             >
-              {l === 'en' ? 'English' : '한국어'}
+              {{ en: 'English', ko: '한국어', zh: '中文' }[l]}
             </button>
           ))}
         </div>

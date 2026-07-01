@@ -1,5 +1,7 @@
 # pinloom
 
+[English](README.md) · [한국어](README.ko.md) · [中文](README.zh.md)
+
 Local Claude Code workspace. Persistent history, pinned answers, project Wiki, Teams orchestration, GitHub-backed backup.
 
 ![pinloom workspace](docs/screenshots/05-project-workspace.png)

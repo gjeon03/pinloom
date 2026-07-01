@@ -1261,7 +1261,21 @@ function BackupSection() {
               </p>
               <ul className="text-[var(--color-ink-muted)] text-xs list-disc pl-5 space-y-1">
                 <li>
-                  <strong>{t('cmp.settings.backup.classic')}</strong> (<code>ghp_…</code>){t('cmp.settings.backup.classicBefore')}{' '}
+                  <strong>{t('cmp.settings.backup.fineGrained')}</strong> (<code>github_pat_…</code>) —{' '}
+                  <strong>{t('cmp.settings.backup.recommended')}</strong>. {t('cmp.settings.backup.fgDesc')}{' '}
+                  <em>{t('cmp.settings.backup.contentsWrite')}</em>.{' '}
+                  <a
+                    href="https://github.com/settings/personal-access-tokens/new"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[var(--color-accent)] underline"
+                  >
+                    {t('cmp.settings.backup.fgLink')}
+                  </a>
+                </li>
+                <li>
+                  <strong>{t('cmp.settings.backup.classic')}</strong> (<code>ghp_…</code>) —{' '}
+                  {t('cmp.settings.backup.classicDesc')}{' '}
                   <a
                     href="https://github.com/settings/tokens/new?scopes=repo&description=pinloom-wiki"
                     target="_blank"
@@ -1269,14 +1283,7 @@ function BackupSection() {
                     className="text-[var(--color-accent)] underline"
                   >
                     {t('cmp.settings.backup.classicLink')}
-                  </a>{' '}
-                  {t('cmp.settings.backup.classicAfter')}
-                </li>
-                <li>
-                  <strong>{t('cmp.settings.backup.fineGrained')}</strong> (<code>github_pat_…</code>){t('cmp.settings.backup.fineGrained1')}{' '}
-                  <em>{t('cmp.settings.backup.adminWrite')}</em>{t('cmp.settings.backup.fineGrained2')}{' '}
-                  <em>{t('cmp.settings.backup.allRepos')}</em>{t('cmp.settings.backup.fineGrained3')}{' '}
-                  <em>{t('cmp.settings.backup.contentsWrite')}</em>{t('cmp.settings.backup.fineGrained4')}
+                  </a>
                 </li>
               </ul>
               <p className="text-[var(--color-ink-muted)] text-xs">
@@ -1287,7 +1294,7 @@ function BackupSection() {
                   type="password"
                   value={tokenDraft}
                   onChange={(e) => setTokenDraft(e.target.value)}
-                  placeholder="ghp_… or github_pat_…"
+                  placeholder="github_pat_… or ghp_…"
                   className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm font-mono"
                 />
                 <button

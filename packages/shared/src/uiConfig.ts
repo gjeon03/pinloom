@@ -45,7 +45,7 @@ export interface PickerSettings {
   transport: PickerSetting<'sdk' | 'terminal'>;
 }
 
-export type UiLocale = 'en' | 'ko';
+export type UiLocale = 'en' | 'ko' | 'zh';
 export type UiPreset = 'simple' | 'full' | 'custom';
 
 export interface UiConfig {
@@ -147,7 +147,8 @@ export function mergeUiConfig(stored: unknown): UiConfig {
     preset: s.preset === 'simple' || s.preset === 'full' || s.preset === 'custom' ? s.preset : 'full',
     features,
     pickers,
-    locale: s.locale === 'ko' || s.locale === 'en' ? s.locale : 'en',
+    locale:
+      s.locale === 'ko' || s.locale === 'en' || s.locale === 'zh' ? s.locale : 'en',
   };
 }
 
