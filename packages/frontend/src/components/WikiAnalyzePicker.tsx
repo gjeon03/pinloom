@@ -1,5 +1,6 @@
 import { Loader2, Sparkles, X } from 'lucide-react';
 import type { Project } from '@pinloom/shared';
+import { useT } from '../i18n/t.js';
 
 interface Props {
   projects: Project[];
@@ -16,6 +17,7 @@ export function WikiAnalyzePicker({
   onToggleAuto,
   onClose,
 }: Props) {
+  const t = useT();
   return (
     <div
       onClick={onClose}
@@ -24,7 +26,7 @@ export function WikiAnalyzePicker({
       <div
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label="Analyze project for conventions"
+        aria-label={t('cmp.wikiAnalyze.title')}
         className="w-full max-w-lg rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col cursor-default"
         style={{ maxHeight: 'min(640px, 85vh)' }}
       >
@@ -32,18 +34,15 @@ export function WikiAnalyzePicker({
           <div>
             <h2 className="text-sm font-semibold flex items-center gap-1.5">
               <Sparkles size={13} className="text-[var(--color-accent)]" />
-              Analyze project for conventions
+              {t('cmp.wikiAnalyze.title')}
             </h2>
             <p className="mt-0.5 text-[11px] text-[var(--color-ink-muted)]">
-              An AI agent reads the project read-only and writes
-              <span className="font-mono"> conventions-&lt;slug&gt;.md</span>. “Auto”
-              re-analyzes in the background as work accrues and stages the result
-              as a proposal you review under Proposals.
+              {t('cmp.wikiAnalyze.desc')}
             </p>
           </div>
           <button
             onClick={onClose}
-            aria-label="Close analyze picker"
+            aria-label={t('cmp.wikiAnalyze.close')}
             className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] p-1 rounded hover:bg-[var(--color-surface-3)]"
           >
             <X size={14} />
@@ -53,7 +52,7 @@ export function WikiAnalyzePicker({
         <div className="flex-1 overflow-auto">
           {projects.length === 0 && (
             <div className="px-4 py-6 text-xs text-[var(--color-ink-muted)] text-center">
-              No projects registered.
+              {t('cmp.wikiAnalyze.noProjects')}
             </div>
           )}
           {projects.map((p) => {
@@ -71,14 +70,14 @@ export function WikiAnalyzePicker({
                 </div>
                 <label
                   className="flex shrink-0 cursor-pointer items-center gap-1 text-[11px] text-[var(--color-ink-muted)]"
-                  title="Auto-analyze this project in the background (stages a proposal to review)"
+                  title={t('cmp.wikiAnalyze.autoTooltip')}
                 >
                   <input
                     type="checkbox"
                     checked={p.wikiAuto}
                     onChange={(e) => onToggleAuto(p, e.target.checked)}
                   />
-                  Auto
+                  {t('cmp.wikiAnalyze.auto')}
                 </label>
                 <button
                   onClick={() => {
@@ -91,11 +90,11 @@ export function WikiAnalyzePicker({
                 >
                   {running ? (
                     <>
-                      <Loader2 size={12} className="animate-spin" /> Analyzing…
+                      <Loader2 size={12} className="animate-spin" /> {t('cmp.wikiAnalyze.analyzing')}
                     </>
                   ) : (
                     <>
-                      <Sparkles size={12} /> Analyze now
+                      <Sparkles size={12} /> {t('cmp.wikiAnalyze.analyzeNow')}
                     </>
                   )}
                 </button>
