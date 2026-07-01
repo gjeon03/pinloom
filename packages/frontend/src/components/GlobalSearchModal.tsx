@@ -105,7 +105,7 @@ export function GlobalSearchModal({ onClose }: { onClose: () => void }) {
   }, [selected]);
 
   function open(result: MessageSearchResult) {
-    gotoSessionTab(navigate, result.projectId, result.sessionId);
+    gotoSessionTab(navigate, result.projectId, result.sessionId, result.messageId);
     onClose();
   }
 

@@ -215,6 +215,10 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   // row. Memoizing here means only adds/updates trigger a re-group, and
   // identical messages keep their row instances.
   const renderItems = useMemo(() => groupConsecutiveTools(messages), [messages]);
+  // Search "jump to message": focusMessageId scrolls the target row to center.
+  const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
+  const pendingFocusRef = useRef(false);
+  const handledFocusRef = useRef<string | null>(null); // dedupe: scroll once per target
   const [input, setInput] = useState(() => loadPersistedInput(session.id));
   const [runKind, setRunKind] = useState<AiRunState>(null);
   const [shellRunning, setShellRunning] = useState(false);
@@ -773,7 +777,9 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     }
   }, []);
   const followOutput = useCallback(
-    (isAtBottom: boolean) => (isAtBottom ? ('smooth' as const) : false),
+    (isAtBottom: boolean) =>
+      // While jumping to a searched message, don't let bottom-follow yank us back.
+      pendingFocusRef.current ? false : isAtBottom ? ('smooth' as const) : false,
     [],
   );
 
@@ -785,10 +791,15 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   useEffect(() => {
     didInitialScroll.current = false;
     setInitialScrollSettled(false);
+    handledFocusRef.current = null;
   }, [session.id]);
   useEffect(() => {
     if (didInitialScroll.current) return;
     if (renderItems.length === 0) return;
+    if (pendingFocusRef.current) {
+      didInitialScroll.current = true; // focusing a searched message, not the bottom
+      return;
+    }
     didInitialScroll.current = true;
     // Defer to after the list has measured its rows; otherwise Virtuoso
     // scrolls to an estimated position and stops short of the real bottom.
@@ -812,6 +823,7 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     renderItemsCountRef.current = renderItems.length;
   }, [renderItems.length]);
   const handleTotalListHeightChanged = useCallback(() => {
+    if (pendingFocusRef.current) return; // don't re-anchor to bottom mid-jump
     if (!atBottomRef.current) return;
     const count = renderItemsCountRef.current;
     if (count === 0) return;
@@ -821,6 +833,80 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
       behavior: 'auto',
     });
   }, []);
+
+  // ── Search "jump to message" ───────────────────────────────────────────────
+  // On mount for this session, pick up a focus marker left by gotoSessionTab
+  // (fresh navigate). The already-mounted same-session case is handled by the
+  // goto-session event listener below.
+  useEffect(() => {
+    try {
+      // Read WITHOUT removing: ChatView can mount twice (StrictMode / a brief
+      // remount on load), and consuming the marker on the first, discarded mount
+      // would leave the live mount with nothing. Removal is deferred until the
+      // focus is actually handled (in the scroll effect below).
+      const key = `pinloom:focusMessage:${session.id}`;
+      const m = localStorage.getItem(key);
+      if (m) {
+        pendingFocusRef.current = true;
+        setFocusMessageId(m);
+        // Remove after a grace period, cancelled on unmount — so a discarded
+        // first mount doesn't strip the marker before the live mount reads it.
+        // The final (live) mount's timer is the one that actually clears it.
+        const t = setTimeout(() => {
+          try {
+            localStorage.removeItem(key);
+          } catch {
+            /* ignore */
+          }
+        }, 4000);
+        return () => clearTimeout(t);
+      }
+    } catch {
+      /* localStorage unavailable */
+    }
+  }, [session.id]);
+
+  useEffect(() => {
+    const onGoto = (e: Event) => {
+      const d = (e as CustomEvent<{ sessionId?: string; messageId?: string }>).detail;
+      if (d?.sessionId === session.id && d?.messageId) {
+        pendingFocusRef.current = true;
+        setFocusMessageId(d.messageId);
+      }
+    };
+    window.addEventListener('pinloom:goto-session', onGoto as EventListener);
+    return () => window.removeEventListener('pinloom:goto-session', onGoto as EventListener);
+  }, [session.id]);
+
+  // Once the target message is in the rendered list, scroll it to center.
+  // Retries as renderItems grows (message may not be loaded yet).
+  useEffect(() => {
+    if (!focusMessageId || renderItems.length === 0) return;
+    if (handledFocusRef.current === focusMessageId) return; // already handled
+    const idx = renderItems.findIndex(
+      (it) => it.kind !== 'tool-group' && it.message.id === focusMessageId,
+    );
+    if (idx < 0) return; // message not loaded yet — retry when renderItems grows
+    handledFocusRef.current = focusMessageId;
+    const target = focusMessageId;
+    // Instant jump, retried a few times: Virtuoso first lands at its initial
+    // (bottom) position, and a variable-height list estimates far indices then
+    // corrects after measuring — so one call lands short. pendingFocusRef
+    // suppresses followOutput / height-change re-anchoring meanwhile.
+    const jump = () =>
+      virtuosoRef.current?.scrollToIndex({ index: idx, align: 'center', behavior: 'auto' });
+    setTimeout(jump, 150);
+    setTimeout(jump, 450);
+    setTimeout(jump, 800);
+    setTimeout(() => {
+      pendingFocusRef.current = false;
+    }, 1400);
+    // Clear focusMessageId afterwards, allowing a future re-focus of the same id.
+    setTimeout(() => {
+      handledFocusRef.current = null;
+      setFocusMessageId((f) => (f === target ? null : f));
+    }, 2600);
+  }, [focusMessageId, renderItems]);
 
   // Textarea auto-grow.
   // When the input is empty we DON'T compute height from scrollHeight, because
@@ -1265,7 +1351,12 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
           // flips atBottom to false and breaks followOutput's tracking.
           atBottomThreshold={60}
           totalListHeightChanged={handleTotalListHeightChanged}
-          increaseViewportBy={{ top: 600, bottom: 600 }}
+          // Bigger top buffer + a height estimate for unmeasured rows → far less
+          // "jump/jitter" when scrolling up fast (Virtuoso otherwise estimates a
+          // default height, mounts, then corrects the scroll position). bottom
+          // stays small (followOutput keeps the latest anchored).
+          increaseViewportBy={{ top: 1400, bottom: 600 }}
+          defaultItemHeight={140}
           initialTopMostItemIndex={Math.max(0, renderItems.length - 1)}
         />
 
