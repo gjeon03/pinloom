@@ -16,9 +16,9 @@
 import crypto from 'node:crypto';
 import type { Database } from 'better-sqlite3';
 import type { EmbeddingProvider } from '../embeddings/types.js';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { getProjectWikiSlugByProjectId } from '../wiki-sync.js';
-import { getTimelineRoot, listDates, readEntry } from './store.js';
+import { entryPath, getTimelineRoot, listDates, readEntry } from './store.js';
 import {
   ensureVectorTable,
   getVectorMeta,
@@ -39,6 +39,12 @@ export function contentHash(content: string): string {
 }
 
 let schemaReady = false;
+
+// mtime short-circuit (same rationale as the wiki indexer): past days are
+// immutable, so re-reading + hashing every day-file every sweep is wasted CPU
+// that keeps the machine from idling. Cache each entry's mtime; skip read+hash
+// when unchanged. In-memory — a restart re-hashes once, then sweeps are ~free.
+const timelineMtimeCache = new Map<string, number>();
 
 /** Create the timeline vec table on first run; rebuild + re-embed on a model/dim
  *  change (mirrors message-indexer.ensureSchema). */
@@ -64,6 +70,7 @@ interface Changed {
   docId: string;
   content: string;
   hash: string;
+  mtime: number;
 }
 
 export interface TimelinePassResult {
@@ -118,6 +125,14 @@ export async function runTimelineIndexPass(
     for (const date of dates) {
       const docId = `${p.id}:${date}`;
       validDocIds.add(docId);
+      // Cheap change probe first — skip read+hash+lookup when mtime is unchanged.
+      let mtime = 0;
+      try {
+        mtime = statSync(entryPath(slug, date, home)).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (timelineMtimeCache.get(docId) === mtime) continue;
       let content: string | null;
       try {
         content = readEntry(slug, date, home);
@@ -130,8 +145,11 @@ export async function runTimelineIndexPass(
       const prev = db
         .prepare('SELECT content_hash AS h FROM timeline_index_state WHERE doc_id = ?')
         .get(docId) as { h: string } | undefined;
-      if (prev && prev.h === hash) continue;
-      changed.push({ docId, content, hash });
+      if (prev && prev.h === hash) {
+        timelineMtimeCache.set(docId, mtime);
+        continue;
+      }
+      changed.push({ docId, content, hash, mtime });
     }
   }
 
@@ -150,6 +168,7 @@ export async function runTimelineIndexPass(
       // the two just re-embeds next pass (idempotent); both no-op without vec.
       upsertVector(db, TIMELINE_VECTORS, batch[j].docId, vecs[j]);
       stateStmt.run(batch[j].docId, batch[j].hash, now);
+      timelineMtimeCache.set(batch[j].docId, batch[j].mtime);
     }
     processed += batch.length;
     if (i + BATCH < changed.length) await nextTick();
