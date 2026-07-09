@@ -23,6 +23,7 @@ import { api } from '../api/client.js';
 import { SettingsModal } from './SettingsModal.js';
 import { useFeatures } from '../stores/uiConfig.js';
 import { DirectoryPicker } from './DirectoryPicker.js';
+import { TextPromptModal } from './TextPromptModal.js';
 import { Tooltip } from './Tooltip.js';
 import { useTheme } from '../hooks/useTheme.js';
 import { useT } from '../i18n/t.js';
@@ -128,6 +129,7 @@ export function AppShell({ children }: Props) {
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
   const [pickerTarget, setPickerTarget] = useState<{ groupId: string | null } | null>(null);
+  const [addingGroup, setAddingGroup] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const features = useFeatures();
   // Let any component (e.g. the composer's template popup) open Settings.
@@ -208,10 +210,8 @@ export function AppShell({ children }: Props) {
     }
   }
 
-  async function handleCreateGroup() {
+  async function handleCreateGroup(name: string) {
     setError(null);
-    const name = prompt(t('cmp.appShell.newGroupPrompt'))?.trim();
-    if (!name) return;
     try {
       const created = await api.createProjectGroup(name);
       setGroups((prev) => [...prev, created]);
@@ -424,7 +424,7 @@ export function AppShell({ children }: Props) {
             <Tooltip label={t('cmp.appShell.newGroup')} side="bottom">
               <button
                 aria-label={t('cmp.appShell.newGroup')}
-                onClick={handleCreateGroup}
+                onClick={() => setAddingGroup(true)}
                 className="text-[var(--color-ink-muted)] hover:text-[var(--color-accent)] p-1 rounded hover:bg-[var(--color-surface-3)]"
               >
                 <FolderPlus size={14} />
@@ -720,6 +720,19 @@ export function AppShell({ children }: Props) {
       </main>
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {addingGroup && (
+        <TextPromptModal
+          title={t('cmp.appShell.newGroupPrompt')}
+          placeholder={t('cmp.appShell.newGroupPrompt')}
+          submitLabel={t('cmp.appShell.newGroupCreate')}
+          cancelLabel={t('cmp.appShell.newGroupCancel')}
+          onCancel={() => setAddingGroup(false)}
+          onSubmit={(name) => {
+            setAddingGroup(false);
+            void handleCreateGroup(name);
+          }}
+        />
+      )}
       {pickerTarget && (
         <DirectoryPicker
           onSelect={handleDirectoryChosen}

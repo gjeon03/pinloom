@@ -62,6 +62,8 @@ export const STRINGS: Record<string, { en: string; ko: string; zh: string }> = {
   // ── Components (cmp.*) ──
   "cmp.appShell.newGroup": { "en": "New group", "ko": "새 그룹", "zh": "新建分组" },
   "cmp.appShell.newGroupPrompt": { "en": "New group name", "ko": "새 그룹 이름", "zh": "新分组名称" },
+  "cmp.appShell.newGroupCreate": { "en": "Create", "ko": "만들기", "zh": "创建" },
+  "cmp.appShell.newGroupCancel": { "en": "Cancel", "ko": "취소", "zh": "取消" },
   "cmp.appShell.newProject": { "en": "New project — pick a directory", "ko": "새 프로젝트 — 디렉터리 선택", "zh": "新建项目 — 选择目录" },
   "cmp.appShell.newProjectUngrouped": { "en": "New project (Ungrouped) — pick a directory", "ko": "새 프로젝트 (Ungrouped) — 디렉터리 선택", "zh": "新建项目（Ungrouped）— 选择目录" },
   "cmp.appShell.hideSidebar": { "en": "Hide sidebar", "ko": "사이드바 숨기기", "zh": "隐藏侧边栏" },

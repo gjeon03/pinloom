@@ -13,7 +13,15 @@ module.exports = {
     output: 'dist-app',
     buildResources: 'build',
   },
-  files: ['main.cjs', 'preload.cjs', 'loading.html', 'package.json', 'tray-icon.png', 'tray-icon@2x.png'],
+  files: [
+    'main.cjs',
+    'preload.cjs',
+    'loading.html',
+    'package.json',
+    // Menu-bar (Tray) template icon + its @2x retina representation.
+    'tray-iconTemplate.png',
+    'tray-iconTemplate@2x.png',
+  ],
   extraResources: [
     { from: STAGED_BACKEND, to: 'app-backend' },
     { from: STAGED_FRONTEND, to: 'app-frontend' },

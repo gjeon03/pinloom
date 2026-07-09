@@ -416,9 +416,17 @@ function showWindow() {
 
 // ── tray (menu-bar resident) ─────────────────────────────────────────────────
 function trayImage() {
-  const img = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.png'));
+  // Menu-bar (status bar) icons must be TEMPLATE images: a black-on-transparent
+  // silhouette macOS tints itself to match the light/dark menu bar. The old
+  // full-color teal PNG rendered as-is, standing out against the system's
+  // monochrome icons. `tray-iconTemplate.png` (+ @2x) is the silhouette; the
+  // "Template" filename suffix makes Electron auto-flag it, and createFromPath
+  // auto-adds the @2x representation — so we neither resize (which would drop
+  // the retina rep) nor lose crispness.
+  const img = nativeImage.createFromPath(path.join(__dirname, 'tray-iconTemplate.png'));
   if (img.isEmpty()) return img; // Electron renders a default placeholder
-  return img.resize({ width: 18, height: 18 });
+  img.setTemplateImage(true);
+  return img;
 }
 
 function buildTrayMenu() {

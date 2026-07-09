@@ -34,6 +34,7 @@ import { ToolGroup } from './ToolGroup.js';
 import { Tooltip } from './Tooltip.js';
 import { ModelPicker, findModelLabel } from './ModelPicker.js';
 import { EffortPicker } from './EffortPicker.js';
+import { TextPromptModal } from './TextPromptModal.js';
 import { AgentBadge } from './AgentBadge.js';
 import { MentionPopup, type MentionWorker } from './MentionPopup.js';
 import { TemplatePopup } from './TemplatePopup.js';
@@ -367,6 +368,7 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   } | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const { data: promptTemplates = [] } = useSWR(
     cacheKeys.promptTemplates(),
     () => api.listPromptTemplates(),
@@ -549,15 +551,20 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     }
   }
 
-  async function saveDraftAsTemplate() {
+  function saveDraftAsTemplate() {
     if (input.length > 8000) {
       setError('Draft is too long to save as a template (max 8000 chars).');
       return;
     }
-    const title = window.prompt('Save current draft as a template — title:');
-    if (!title || !title.trim()) return;
+    // Electron doesn't implement window.prompt() (it returns null), so use an
+    // in-app modal for the title instead of a native prompt.
+    setSavingTemplate(true);
+  }
+
+  async function commitSaveTemplate(title: string) {
+    setSavingTemplate(false);
     try {
-      await api.createPromptTemplate({ title: title.trim(), body: input });
+      await api.createPromptTemplate({ title, body: input });
       await mutate(cacheKeys.promptTemplates());
       setTemplatesOpen(false);
     } catch (e) {
@@ -1765,6 +1772,14 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
           </div>
         )}
       </form>
+      {savingTemplate && (
+        <TextPromptModal
+          title="Save current draft as a template — title:"
+          submitLabel="Save"
+          onCancel={() => setSavingTemplate(false)}
+          onSubmit={commitSaveTemplate}
+        />
+      )}
     </div>
   );
 }
