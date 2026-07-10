@@ -201,6 +201,10 @@ export async function createApp() {
 
   app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket, request) => {
+      // A ws with no 'error' listener crashes the WHOLE process when its socket
+      // errors (EPIPE/ECONNRESET when a subscriber vanishes mid-broadcast). Log
+      // and swallow; the 'close' below still runs teardown.
+      socket.on('error', (err) => fastify.log.warn({ err: String(err) }, 'ws socket error (ignored)'));
       if (!isAllowedWsOrigin(request.headers.origin)) {
         socket.close(4403, 'forbidden origin');
         return;
@@ -219,6 +223,7 @@ export async function createApp() {
     //   client→server: {t:'i',d} input · {t:'r',c,r} resize
     //   server→client: {t:'o',d} output · {t:'x',code} shell exited
     fastify.get('/ws/terminal', { websocket: true }, (socket, request) => {
+      socket.on('error', (err) => fastify.log.warn({ err: String(err) }, 'ws socket error (ignored)'));
       if (!isAllowedWsOrigin(request.headers.origin)) {
         socket.close(4403, 'forbidden origin');
         return;
@@ -281,6 +286,7 @@ export async function createApp() {
     // Per-session agent terminal — runs the real `claude` TUI for one session
     // (terminal-chat mode). Same wire protocol as /ws/terminal; keyed by session.
     fastify.get('/ws/agent-terminal', { websocket: true }, async (socket, request) => {
+      socket.on('error', (err) => fastify.log.warn({ err: String(err) }, 'ws socket error (ignored)'));
       if (!isAllowedWsOrigin(request.headers.origin)) {
         socket.close(4403, 'forbidden origin');
         return;
