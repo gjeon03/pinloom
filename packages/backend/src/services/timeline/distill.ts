@@ -144,7 +144,12 @@ const defaultRunDistill: RunDistill = async (prompt, model) => {
     options: {
       systemPrompt: DISTILL_SYSTEM_PROMPT,
       model,
-      maxTurns: 1,
+      // 2, not 1: a single-turn cap fails with "reached maximum number of turns
+      // (1)" whenever the model spends its only turn on a thinking block or a
+      // (denied) tool attempt before emitting the summary text. allowedTools is
+      // empty so there is no tool loop to run away — the extra turn just lets the
+      // model finalize. Still bounded by DISTILL_TIMEOUT_MS.
+      maxTurns: 2,
       permissionMode: 'bypassPermissions',
       allowedTools: [],
       abortController,
