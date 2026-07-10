@@ -33,3 +33,18 @@ async function shutdown(signal: NodeJS.Signals) {
 
 process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
+// Benign network errors (EPIPE/ECONNRESET when a client disconnects mid-write —
+// a broadcast to a dead ws subscriber, or a reply to a request whose client
+// already left) surface as an unhandled 'error' on a raw Socket and, without a
+// guard, take the WHOLE backend down (the 5-min-dispatch + EPIPE crash that
+// killed both backend and frontend via concurrently --kill-others). Swallow ONLY
+// those codes; any other uncaughtException is a real bug and must still fail loud.
+process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
+  if (err && (err.code === 'EPIPE' || err.code === 'ECONNRESET')) {
+    app.log.warn({ code: err.code, err: err.message }, 'ignored benign socket error');
+    return;
+  }
+  app.log.error(err, 'uncaughtException — exiting');
+  process.exit(1);
+});
