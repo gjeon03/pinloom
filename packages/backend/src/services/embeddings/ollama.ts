@@ -31,20 +31,6 @@ function maxInputChars(): number {
   return Number.isFinite(n) && n > 0 ? n : 4000;
 }
 
-// Context window Ollama runs the embedding model at. THE GOTCHA: bge-m3's
-// architecture supports 8192 tokens, but Ollama loads a model at its default
-// `num_ctx` (2048) unless we ask for more — so a 4000-char input (≈4-8k tokens
-// for dense Korean) HARD-400s with "input length exceeds the context length"
-// every sweep, starving the timeline/wiki corpora. We pass num_ctx explicitly to
-// use bge-m3's real window, and `truncate: true` (below) as a belt-and-braces
-// net so an over-window input is clipped by Ollama instead of erroring. Default
-// 8192 covers the 4000-char cap even at ~2 tokens/char; env-tunable for other
-// models (e.g. nomic-embed-text tops out at 2048 → set this lower).
-function numCtx(): number {
-  const n = Number(process.env.PINLOOM_OLLAMA_NUM_CTX);
-  return Number.isFinite(n) && n > 0 ? n : 8192;
-}
-
 // How long Ollama keeps the model resident after a request (its `keep_alive`).
 // Without it Ollama defaults to 5 min, and because the background indexer
 // re-embeds within that window it keeps resetting the timer — so bge-m3 (~600MB)
@@ -111,12 +97,17 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
     const res = await this.doFetch(`${this.baseUrl}/api/embed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // `truncate: true` (Ollama's default, but pinned explicitly): if an input
+      // still exceeds the model's context window, Ollama clips it to fit instead
+      // of hard-400ing the whole pass. Do NOT set options.num_ctx here — pinning
+      // a LARGER window (e.g. 8192) paradoxically DEFEATS truncation for very
+      // long inputs and reintroduces the 400 (verified against bge-m3); the
+      // default window + truncate handles every input size correctly.
       body: JSON.stringify({
         model: this.model,
         input: clipped,
         keep_alive: keepAlive,
         truncate: true,
-        options: { num_ctx: numCtx() },
       }),
     });
     if (!res.ok) {
