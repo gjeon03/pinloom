@@ -1238,6 +1238,8 @@ export interface SessionLaunchInput {
   /** Resume token (prior agent session id), or null for a fresh session. */
   resume: string | null;
   mcpServers?: Record<string, McpStdioServerConfig>;
+  /** Team workers launch with `--strict-mcp-config` (no inherited global MCP). */
+  strictMcp?: boolean;
 }
 
 /**
@@ -1290,6 +1292,9 @@ export function buildSessionLaunchInput(sessionId: string): SessionLaunchInput |
     reasoningEffort: ctx.reasoningEffort,
     resume: ctx.claudeSessionId,
     mcpServers: buildOrchestratorMcpConfig(ctx.id),
+    // Team workers are headless task runners — strip the human's global MCP
+    // (getMemberBySessionId is null for orchestrators and free sessions).
+    strictMcp: getMemberBySessionId(ctx.id) !== null,
   };
 }
 
