@@ -6,6 +6,7 @@ import { Minus, Plus, RotateCw } from 'lucide-react';
 import type { WsEvent } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { currentXtermTheme, watchXtermTheme } from './xtermTheme.js';
+import { installUnicodeCopy } from '../utils/xtermClipboard.js';
 
 // Terminal-chat mode: a session's real `claude` TUI rendered live in xterm.js,
 // wired to the backend /ws/agent-terminal pty socket. The human types directly
@@ -93,6 +94,7 @@ export function AgentTerminal({
     term.loadAddon(fit);
     term.open(container);
 
+    const disposeCopy = installUnicodeCopy(container, term);
     const disposeTheme = watchXtermTheme(term);
     const safeFit = () => {
       try {
@@ -228,6 +230,7 @@ export function AgentTerminal({
       if (resizeTimer) clearTimeout(resizeTimer);
       clearTimeout(lateFitTimer);
       ro.disconnect();
+      disposeCopy();
       disposeTheme();
       dataSub.dispose();
       ws.close();

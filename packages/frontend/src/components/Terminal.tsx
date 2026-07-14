@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { currentXtermTheme, watchXtermTheme } from './xtermTheme.js';
+import { installUnicodeCopy } from '../utils/xtermClipboard.js';
 
 // Interactive shell terminal wired to the backend /ws/terminal pty socket.
 // The backend keeps the pty alive across disconnects, so reconnecting (page
@@ -46,6 +47,7 @@ export function Terminal({
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
+    const disposeCopy = installUnicodeCopy(container, term);
     const disposeTheme = watchXtermTheme(term);
     const safeFit = () => {
       try {
@@ -165,6 +167,7 @@ export function Terminal({
       if (replayTimer) clearTimeout(replayTimer);
       clearTimeout(lateFitTimer);
       ro.disconnect();
+      disposeCopy();
       disposeTheme();
       dataSub.dispose();
       ws.close();
