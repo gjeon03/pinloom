@@ -145,6 +145,7 @@ async function spawnAgentTerminal(
       reasoningEffort: launchInput.reasoningEffort ?? undefined,
       resume: launchInput.resume,
       mcpServers: launchInput.mcpServers,
+      strictMcp: launchInput.strictMcp,
       initialText: seedText,
     },
     server.url(),
@@ -389,11 +390,14 @@ export function killAgentTerminal(sessionId: string): void {
 // ones that are detached (no attached client), NOT running a turn, and idle past
 // the threshold. Safe because pinloom stores the claude session id and reopening
 // relaunches with `--resume` — the full session restores; the only cost is a
-// ~1-2s respawn on return, so we keep the threshold generous (90 min default).
+// ~1-2s respawn on return. Default 30 min: with team mode a single dispatch can
+// fan out N worker TUIs (each ~80MB + its MCP children), and workers sit idle
+// between dispatches, so reclaiming them promptly keeps memory pressure down;
+// the next dispatch cold-starts them via `--resume` transparently. Env-tunable.
 const REAP_SWEEP_MS = 10 * 60_000;
 function reapIdleMs(): number {
   const n = Number(process.env.PINLOOM_AGENT_TERMINAL_REAP_MS);
-  return Number.isFinite(n) && n > 0 ? n : 90 * 60_000; // 90 min
+  return Number.isFinite(n) && n > 0 ? n : 30 * 60_000; // 30 min
 }
 
 /** Pure reap predicate (exported for tests): detached + no turn + idle. */

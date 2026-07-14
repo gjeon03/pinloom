@@ -80,6 +80,16 @@ export interface ClaudeLaunchInput {
   resume?: string | null;
   mcpServers?: Record<string, McpStdioServerConfig>;
   /**
+   * Pass `--strict-mcp-config` so claude uses ONLY the servers from our
+   * `--mcp-config` (or none, if we pass none) and ignores the user/project MCP
+   * from `--setting-sources`. Set for team WORKERS: they are headless task
+   * runners that don't need the human's global MCP (playwright/omc/…), and each
+   * inherited server is an extra child process per worker — which fans out hard
+   * under team mode. Only affects MCP resolution; CLAUDE.md / permissions / hooks
+   * from the setting-sources still load. Left off for interactive sessions.
+   */
+  strictMcp?: boolean;
+  /**
    * Positional [prompt] to seed the first turn (works for fresh AND `--resume`).
    * Null/undefined = no positional (e.g. terminal mode where the human types).
    */
@@ -180,6 +190,10 @@ export function buildClaudeLaunch(
   // claude's --effort accepts the same low/medium/high/xhigh/max tokens.
   if (input.reasoningEffort) args.push('--effort', input.reasoningEffort);
   if (mcpPath) args.push('--mcp-config', mcpPath);
+  // Workers: ignore user/project MCP entirely (only --mcp-config servers, if any,
+  // survive). Must come alongside --mcp-config so the orchestrator's pinloom
+  // server isn't stripped too, but workers pass no mcpPath → zero MCP servers.
+  if (input.strictMcp) args.push('--strict-mcp-config');
   if (input.resume) args.push('--resume', input.resume);
   // Positional [prompt]: seeds the first turn so the (fresh OR resumed) session
   // auto-runs it instead of us typing into the freshly-launched TUI.

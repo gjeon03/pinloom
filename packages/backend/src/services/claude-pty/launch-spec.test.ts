@@ -94,4 +94,14 @@ describe('buildClaudeLaunch', () => {
     expect(b.args.at(-1)).not.toBe('sys');
     b.cleanup();
   });
+
+  it('adds --strict-mcp-config only when strictMcp is set (worker sessions)', () => {
+    const off = buildClaudeLaunch({ systemPrompt: 'sys' }, URL);
+    expect(off.args).not.toContain('--strict-mcp-config');
+    off.cleanup();
+
+    const on = buildClaudeLaunch({ systemPrompt: 'sys', strictMcp: true }, URL);
+    expect(on.args).toContain('--strict-mcp-config');
+    on.cleanup();
+  });
 });
