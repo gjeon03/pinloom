@@ -30,6 +30,33 @@ export interface SessionSyncCandidate {
   unsynced: number;
 }
 
+// A small in-memory activity log so the UI can show what the wiki flywheel is
+// doing right now (which project/session it's distilling) — the background sweep
+// is otherwise invisible.
+export interface SessionSyncLogEntry {
+  sessionId: string;
+  projectId: string | null;
+  projectName: string;
+  sessionTitle: string | null;
+  startedAt: string;
+  finishedAt?: string;
+  status: 'running' | 'success' | 'error';
+  staged?: number;
+}
+
+const SYNC_LOG_LIMIT = 30;
+const syncLog: SessionSyncLogEntry[] = [];
+
+export function getSessionSyncStatus(): {
+  running: SessionSyncLogEntry[];
+  recent: SessionSyncLogEntry[];
+} {
+  return {
+    running: syncLog.filter((e) => e.status === 'running'),
+    recent: syncLog.slice(),
+  };
+}
+
 /**
  * Run the sandboxed distill for one session and STAGE each change as a
  * reviewable proposal (identical to the manual `/wiki-sync` route). Shared by
@@ -47,45 +74,64 @@ export async function stageSessionSync(
   syncedThroughMessageId: string | null;
 }> {
   const db = getDb();
-  const { changeset, syncedThroughMessageId, messageCount } = await runSandboxedSync({
+  // Log the activity so the UI can show what's running (which project/session).
+  const meta = db
+    .prepare(
+      'SELECT s.title AS title, p.id AS projectId, p.name AS projectName FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?',
+    )
+    .get(sessionId) as { title: string | null; projectId: string; projectName: string } | undefined;
+  const entry: SessionSyncLogEntry = {
     sessionId,
-    model,
-  });
-  if (changeset.length === 0) {
-    return { staged: 0, skipped: 0, batchId: null, messageCount, syncedThroughMessageId };
-  }
+    projectId: meta?.projectId ?? null,
+    projectName: meta?.projectName ?? '(unknown)',
+    sessionTitle: meta?.title ?? null,
+    startedAt: new Date().toISOString(),
+    status: 'running',
+  };
+  syncLog.unshift(entry);
+  if (syncLog.length > SYNC_LOG_LIMIT) syncLog.length = SYNC_LOG_LIMIT;
 
-  const sessionTitle =
-    (db.prepare('SELECT title FROM sessions WHERE id = ?').get(sessionId) as
-      | { title: string | null }
-      | undefined)?.title ?? null;
-  const pendingByPath = db.prepare(
-    "SELECT 1 FROM wiki_proposals WHERE status = 'pending' AND rel_path = ? LIMIT 1",
-  );
-
-  const batchId = nanoid();
-  let staged = 0;
-  let skipped = 0;
-  for (const item of changeset) {
-    // Don't stack a second proposal on a page that already has one pending.
-    if (pendingByPath.get(item.relPath)) {
-      skipped += 1;
-      continue;
-    }
-    await createProposal({
-      kind: item.op === 'archive' ? 'archive_page' : 'replace_page',
-      title: `Sync: ${sessionTitle ?? 'session'} → ${item.relPath}`,
-      relPath: item.relPath,
-      payload: {
-        markdown: item.after ?? '',
-        sessionId,
-        syncedThroughMessageId,
-        batchId,
-      },
+  try {
+    const { changeset, syncedThroughMessageId, messageCount } = await runSandboxedSync({
+      sessionId,
+      model,
     });
-    staged += 1;
+    if (changeset.length === 0) {
+      entry.status = 'success';
+      entry.finishedAt = new Date().toISOString();
+      entry.staged = 0;
+      return { staged: 0, skipped: 0, batchId: null, messageCount, syncedThroughMessageId };
+    }
+
+    const pendingByPath = db.prepare(
+      "SELECT 1 FROM wiki_proposals WHERE status = 'pending' AND rel_path = ? LIMIT 1",
+    );
+    const batchId = nanoid();
+    let staged = 0;
+    let skipped = 0;
+    for (const item of changeset) {
+      // Don't stack a second proposal on a page that already has one pending.
+      if (pendingByPath.get(item.relPath)) {
+        skipped += 1;
+        continue;
+      }
+      await createProposal({
+        kind: item.op === 'archive' ? 'archive_page' : 'replace_page',
+        title: `Sync: ${entry.sessionTitle ?? 'session'} → ${item.relPath}`,
+        relPath: item.relPath,
+        payload: { markdown: item.after ?? '', sessionId, syncedThroughMessageId, batchId },
+      });
+      staged += 1;
+    }
+    entry.status = 'success';
+    entry.finishedAt = new Date().toISOString();
+    entry.staged = staged;
+    return { staged, skipped, batchId, messageCount, syncedThroughMessageId };
+  } catch (err) {
+    entry.status = 'error';
+    entry.finishedAt = new Date().toISOString();
+    throw err;
   }
-  return { staged, skipped, batchId, messageCount, syncedThroughMessageId };
 }
 
 /**

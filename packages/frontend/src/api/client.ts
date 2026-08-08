@@ -222,6 +222,26 @@ export const api = {
       body: JSON.stringify({ ids }),
     }),
 
+  // What the wiki flywheel is doing right now (conventions analyses + session
+  // conversation distills) — polled by the analyze picker.
+  getWikiActivity: () =>
+    request<{
+      analyzing: {
+        running: { projectId: string; projectName: string; startedAt: string }[];
+      };
+      syncing: {
+        running: {
+          sessionId: string;
+          projectName: string;
+          sessionTitle: string | null;
+          startedAt: string;
+        }[];
+      };
+    }>('/api/wiki/activity'),
+  // Abort every in-flight conventions analysis (stampede escape hatch).
+  cancelAllAnalyses: () =>
+    request<{ cancelled: number }>('/api/wiki/analyses/cancel-all', { method: 'POST' }),
+
   // Wiki similarity graph (nodes = pages, edges = nearest neighbours by embedding).
   getWikiGraph: () =>
     request<{
