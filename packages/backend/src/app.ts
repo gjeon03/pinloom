@@ -42,6 +42,10 @@ import {
   attachCodexTerminal,
   killAllCodexTerminals,
 } from './services/codex-pty/agent-terminal.js';
+import {
+  createReplayFirstOutput,
+  parseAgentTerminalGrid,
+} from './services/agent-terminal-protocol.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
 import { sweepStrandedDispatchesOnBoot } from './services/dispatches.js';
@@ -291,7 +295,7 @@ export async function createApp() {
         socket.close(4403, 'forbidden origin');
         return;
       }
-      const q = request.query as { session?: string };
+      const q = request.query as { session?: string; cols?: unknown; rows?: unknown };
       const sessionId = q.session;
       if (!sessionId) {
         socket.close(4000, 'session query parameter required');
@@ -300,6 +304,15 @@ export async function createApp() {
       const send = (msg: unknown) => {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
       };
+      const output = createReplayFirstOutput(send);
+      const grid = parseAgentTerminalGrid(q);
+      let detach: (() => void) | null = null;
+      let socketClosed = false;
+      socket.on('close', () => {
+        socketClosed = true;
+        output.close();
+        detach?.();
+      });
       // Route to the codex or claude terminal lifecycle by the session's agent.
       const agentRow = getDb()
         .prepare('SELECT agent FROM sessions WHERE id = ?')
@@ -310,12 +323,13 @@ export async function createApp() {
       try {
         result = await attach(
           sessionId,
-          120,
-          40,
-          (data) => send({ t: 'o', d: data }),
+          grid.cols,
+          grid.rows,
+          output.onData,
           (code) => send({ t: 'x', code }),
         );
       } catch (err) {
+        output.close();
         // The CLI binary isn't on PATH (or pty.spawn otherwise failed). Without
         // this the rejection escapes the handler, the socket just drops with no
         // reason, and the client reconnect-loops forever. Surface it instead.
@@ -330,6 +344,7 @@ export async function createApp() {
         return;
       }
       if (!result.ok) {
+        output.close();
         if (result.reason === 'capped') {
           socket.close(4002, `agent terminal limit reached — close another and retry`);
         } else {
@@ -338,7 +353,12 @@ export async function createApp() {
         return;
       }
       const handle = result.handle;
-      if (handle.buffer) send({ t: 'o', d: handle.buffer, replay: true });
+      detach = handle.detach;
+      if (socketClosed) {
+        handle.detach();
+        return;
+      }
+      output.deliverReplay(handle.buffer);
       socket.on('message', (raw: Buffer) => {
         let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown };
         try {
@@ -352,7 +372,6 @@ export async function createApp() {
           handle.resize(msg.c, msg.r);
         }
       });
-      socket.on('close', () => handle.detach());
     });
   });
 

@@ -15,13 +15,10 @@ import type { IPty } from 'node-pty';
 import { cleanChildEnv } from '../child-env.js';
 import { buildSessionLaunchInput, emitRunStatus, emitWorkerStatusIfMember } from '../runner.js';
 import { broadcast } from '../../ws/hub.js';
+import { createScrollback, type Scrollback } from '../scrollback.js';
 
-// Emit `started` so a codex terminal session shows as running (tab dot + bell
-// In progress); the rollout poller's `finished` (transcript-capture) clears it
-// per turn. Unlike claude, codex has no Stop hook, so turnInFlight is never
-// reset — guarding on it would emit `started` only ONCE per session. It's not
-// read for gating anyway (codex dispatch waits on awaitCodexTurn), so we emit
-// unconditionally; a duplicate `started` is a frontend no-op (idempotent).
+// Emit `started` so a codex terminal session shows as running. The rollout
+// capture callback clears turnInFlight at normal and stalled turn boundaries.
 function beginCodexTurn(session: { turnInFlight: boolean }, sessionId: string): void {
   session.turnInFlight = true;
   emitRunStatus(sessionId, 'started');
@@ -37,7 +34,7 @@ const MAX_CODEX_TERMINALS = 30;
 interface CodexTerminalSession {
   pty: IPty;
   launch: BuiltCodexLaunch;
-  buffer: string;
+  scrollback: Scrollback;
   onData: ((data: string) => void) | null;
   onExit: ((code: number) => void) | null;
   attachId: number;
@@ -106,7 +103,7 @@ export async function spawnCodexTerminal(
   const created: CodexTerminalSession = {
     pty: child,
     launch,
-    buffer: '',
+    scrollback: createScrollback(SCROLLBACK_BYTES),
     onData: null,
     onExit: null,
     attachId: 0,
@@ -115,7 +112,7 @@ export async function spawnCodexTerminal(
     lockedBy: null,
   };
   child.onData((d) => {
-    created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
+    created.scrollback.push(d);
     created.lastDataAt = Date.now();
     created.onData?.(d);
   });
@@ -127,7 +124,9 @@ export async function spawnCodexTerminal(
   sessions.set(sessionId, created);
   // Persist this session's turns to the messages table in the background by
   // polling the rollout file (history / pins / notifications / teams).
-  startCodexCapture(sessionId, launch.codexHome, launchInput.resume);
+  startCodexCapture(sessionId, launch.codexHome, launchInput.resume, () => {
+    created.turnInFlight = false;
+  });
   return created;
 }
 
@@ -170,7 +169,7 @@ export async function attachCodexTerminal(
   }
 
   const bound = session;
-  const snapshot = bound.buffer;
+  const snapshot = bound.scrollback.snapshot();
   bound.onData = onData;
   bound.onExit = onExit;
   const myAttachId = (bound.attachId = ++attachSeq);
@@ -233,7 +232,15 @@ export function removeCodexHome(sessionId: string): void {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-export type CodexDispatchResult = { ok: true; reply: string } | { ok: false; error: string };
+export type CodexDispatchFailureKind =
+  | 'missing'
+  | 'busy'
+  | 'timeout'
+  | 'aborted'
+  | 'failure';
+export type CodexDispatchResult =
+  | { ok: true; reply: string }
+  | { ok: false; error: string; kind?: CodexDispatchFailureKind };
 
 // Serialize dispatches per worker so two asks can't interleave on one TUI.
 const dispatchChains = new Map<string, Promise<unknown>>();
@@ -254,16 +261,26 @@ function setCodexLock(
   driver: 'human' | 'dispatch' | null,
 ): void {
   session.lockedBy = driver;
-  broadcast(`session:${sessionId}`, {
-    type: 'terminal_lock',
-    sessionId,
-    locked: driver === 'dispatch',
-  });
+  try {
+    broadcast(`session:${sessionId}`, {
+      type: 'terminal_lock',
+      sessionId,
+      locked: driver === 'dispatch',
+    });
+  } catch {
+    // Lock ownership is authoritative; websocket delivery is best effort.
+  }
 }
 
 /** Whether a session has a live codex terminal lock owner (for the UI overlay). */
 export function codexTerminalLock(sessionId: string): 'human' | 'dispatch' | null {
   return sessions.get(sessionId)?.lockedBy ?? null;
+}
+
+/** Whether a live Codex terminal has a human turn or exclusive driver active. */
+export function isCodexTerminalBusy(sessionId: string): boolean {
+  const session = sessions.get(sessionId);
+  return !!session && (session.turnInFlight || session.lockedBy !== null);
 }
 
 // Wait for the codex TUI output to go quiet before injecting, so keystrokes land
@@ -329,6 +346,70 @@ export function dispatchToCodexWorker(
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     } finally {
       emitWorkerStatusIfMember(sessionId, false);
+    }
+  });
+}
+
+/**
+ * Generate a checkpoint from an already-running Codex terminal. Unlike worker
+ * dispatch, this path never queues and never starts a missing terminal.
+ */
+export async function requestCodexTerminalCheckpoint(
+  sessionId: string,
+  prompt: string,
+  signal: AbortSignal,
+  timeoutMs = 5 * 60_000,
+): Promise<CodexDispatchResult> {
+  const initial = sessions.get(sessionId);
+  if (!initial) return { ok: false, kind: 'missing', error: 'codex terminal not found' };
+  if (signal.aborted) return { ok: false, kind: 'aborted', error: 'aborted' };
+  if (isCodexTerminalBusy(sessionId) || dispatchChains.has(sessionId)) {
+    return { ok: false, kind: 'busy', error: 'codex terminal busy' };
+  }
+
+  return withCodexDispatchLock(sessionId, async () => {
+    const existing = sessions.get(sessionId);
+    if (!existing) return { ok: false, kind: 'missing', error: 'codex terminal not found' };
+    if (existing.turnInFlight || existing.lockedBy !== null) {
+      return { ok: false, kind: 'busy', error: 'codex terminal busy' };
+    }
+
+    setCodexLock(existing, sessionId, 'dispatch');
+    const waiterController = new AbortController();
+    const abortWaiter = () => waiterController.abort();
+    signal.addEventListener('abort', abortWaiter, { once: true });
+    let turnStarted = false;
+    let submitted = false;
+    try {
+      await waitCodexQuiescent(existing, signal);
+      if (signal.aborted) return { ok: false, kind: 'aborted', error: 'aborted' };
+      const turn = awaitCodexTurn(sessionId, waiterController.signal, timeoutMs);
+      void turn.catch(() => {});
+      beginCodexTurn(existing, sessionId);
+      turnStarted = true;
+      await submitToTui(existing.pty, prompt);
+      submitted = true;
+      return { ok: true, reply: await turn };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      const kind: CodexDispatchFailureKind =
+        error.includes('timed out') ? 'timeout' :
+          error === 'aborted' ? 'aborted' : 'failure';
+      if (turnStarted && !submitted) {
+        try {
+          emitRunStatus(sessionId, 'error', error);
+        } catch {
+          // The terminal state is repaired below even if lifecycle delivery fails.
+        }
+      }
+      return { ok: false, kind, error };
+    } finally {
+      signal.removeEventListener('abort', abortWaiter);
+      waiterController.abort();
+      if (sessions.get(sessionId) === existing) {
+        if (!submitted) existing.turnInFlight = false;
+        setCodexLock(existing, sessionId, null);
+      }
     }
   });
 }

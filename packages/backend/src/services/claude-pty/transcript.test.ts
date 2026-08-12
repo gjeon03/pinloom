@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -61,15 +61,49 @@ describe('transcript fs helpers', () => {
     expect(readLines(file).map((l) => l.uuid)).toEqual(['u1', 'a1']);
   });
 
-  it('readCheckpoint returns the last uuid, null for missing/empty', () => {
+  it('readCheckpoint returns the last UUID, complete EOF, identity, and meaningful type', () => {
     const file = writeSession('s2', [
       { type: 'user', uuid: 'u1' },
-      { type: 'file-history-snapshot' }, // no uuid → skipped
       { type: 'assistant', uuid: 'a9' },
-      { type: 'ai-title' }, // trailing, no uuid → skipped
+      { type: 'user', uuid: 'sidechain', isSidechain: true },
+      { type: 'user', uuid: 'synthetic', message: { model: '<synthetic>' } },
     ]);
-    expect(readCheckpoint(file)).toBe('a9');
+    appendFileSync(file, '\n{incomplete');
+    expect(readCheckpoint(file)).toEqual({
+      uuid: 'synthetic',
+      completeOffset: Buffer.byteLength(readFileSync(file, 'utf8')) - Buffer.byteLength('{incomplete'),
+      transcriptIdentity: expect.stringMatching(/^\d+:\d+$/),
+      lastConversationType: 'assistant',
+    });
     expect(readCheckpoint(path.join(dir, 'missing.jsonl'))).toBeNull();
+  });
+
+  it('readCheckpoint returns a zero checkpoint for a readable empty transcript', () => {
+    const file = path.join(dir, 'empty.jsonl');
+    writeFileSync(file, '');
+
+    expect(readCheckpoint(file)).toEqual({
+      uuid: null,
+      completeOffset: 0,
+      transcriptIdentity: expect.stringMatching(/^\d+:\d+$/),
+      lastConversationType: null,
+    });
+  });
+
+  it('readCheckpoint scans complete records from the end across a one MiB boundary', () => {
+    const straddled = JSON.stringify({
+      type: 'assistant',
+      uuid: 'a1',
+      message: { content: 'x'.repeat(1 << 20) },
+    });
+    const largeFile = path.join(dir, 'large.jsonl');
+    writeFileSync(largeFile, `${straddled}\n{partial`);
+
+    expect(readCheckpoint(largeFile)).toMatchObject({
+      uuid: 'a1',
+      completeOffset: Buffer.byteLength(`${straddled}\n`),
+      lastConversationType: 'assistant',
+    });
   });
 
   it('discoverNewSessionFile finds the file not present before', async () => {

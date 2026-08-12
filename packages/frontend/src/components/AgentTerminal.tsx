@@ -2,11 +2,25 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { Minus, Plus, RotateCw } from 'lucide-react';
+import { ArrowDown, Minus, Plus, RotateCw } from 'lucide-react';
 import type { WsEvent } from '@pinloom/shared';
 import { useWebSocket } from '../hooks/useWebSocket.js';
+import { useT } from '../i18n/t.js';
 import { currentXtermTheme, watchXtermTheme } from './xtermTheme.js';
 import { installUnicodeCopy } from '../utils/xtermClipboard.js';
+import {
+  beginTerminalReplay,
+  completeTerminalReplay,
+  createTerminalScrollState,
+  observeTerminalViewport,
+  releaseTerminalReplayInput,
+  requestTerminalJump,
+  shouldRestoreTerminalBottomAfterFit,
+  shouldShowTerminalJump,
+  shouldSuppressTerminalInput,
+  type TerminalScrollState,
+  type TerminalViewportSnapshot,
+} from './agent-terminal-scroll.js';
 
 // Terminal-chat mode: a session's real `claude` TUI rendered live in xterm.js,
 // wired to the backend /ws/agent-terminal pty socket. The human types directly
@@ -30,10 +44,12 @@ export function AgentTerminal({
    */
   onCleanExit?: () => void;
 }) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   // True briefly while a relaunch is in flight, so the kill's exit event doesn't
   // flash the "agent exited" overlay before the auto-reconnect lands.
   const relaunchingRef = useRef(false);
+  const relaunchGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Per-terminal font zoom, independent of browser/app zoom. Persisted globally
   // (a font-size preference, not per-session). Refs let the +/- handlers reach
   // the live term/fit/ws without re-running the create effect (which would drop
@@ -45,12 +61,18 @@ export function AgentTerminal({
   });
   const fontSizeRef = useRef(fontSize);
   const termRef = useRef<XTerm | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const fitAndResizeRef = useRef<(() => boolean) | null>(null);
+  const scrollStateRef = useRef<TerminalScrollState>(createTerminalScrollState());
   const [status, setStatus] = useState<Status>('open');
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [blockedMsg, setBlockedMsg] = useState<string | null>(null);
   const [connKey, setConnKey] = useState(0);
+  const connectionKey = `${sessionId}:${connKey}`;
+  const [jumpState, setJumpState] = useState({
+    connectionKey: '',
+    visible: false,
+  });
   // True while an orchestrator dispatch is driving this worker's TUI — the
   // backend locks out human keystrokes, so we show an overlay explaining why.
   const [dispatchLocked, setDispatchLocked] = useState(false);
@@ -64,18 +86,33 @@ export function AgentTerminal({
         // changed (it just became a team orchestrator → needs the MCP server).
         // Re-attach: the terminal is gone, so this respawns with the new config.
         relaunchingRef.current = true;
-        setTimeout(() => {
+        if (relaunchGuardTimerRef.current) {
+          clearTimeout(relaunchGuardTimerRef.current);
+        }
+        relaunchGuardTimerRef.current = setTimeout(() => {
           relaunchingRef.current = false;
+          relaunchGuardTimerRef.current = null;
         }, 3000);
         setStatus('open');
         setExitCode(null);
         setBlockedMsg(null);
+        setJumpState({ connectionKey: '', visible: false });
         setConnKey((k) => k + 1);
       }
     },
     [sessionId],
   );
   useWebSocket(`session:${sessionId}`, onWsEvent);
+
+  useEffect(
+    () => () => {
+      if (relaunchGuardTimerRef.current) {
+        clearTimeout(relaunchGuardTimerRef.current);
+        relaunchGuardTimerRef.current = null;
+      }
+    },
+    [sessionId],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -90,7 +127,6 @@ export function AgentTerminal({
     });
     termRef.current = term;
     const fit = new FitAddon();
-    fitRef.current = fit;
     term.loadAddon(fit);
     term.open(container);
 
@@ -98,20 +134,74 @@ export function AgentTerminal({
     const disposeTheme = watchXtermTheme(term);
     const safeFit = () => {
       try {
+        const dimensions = fit.proposeDimensions();
+        if (!dimensions || dimensions.cols <= 0 || dimensions.rows <= 0) {
+          return false;
+        }
         fit.fit();
+        return true;
       } catch {
-        // container not measurable yet
+        return false;
       }
     };
-    safeFit();
-    const rafId = requestAnimationFrame(safeFit);
+
+    const initialFitSucceeded = safeFit();
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(
-      `${proto}://${location.host}/ws/agent-terminal?session=${encodeURIComponent(sessionId)}`,
-    );
+    const query = new URLSearchParams({ session: sessionId });
+    if (initialFitSucceeded) {
+      query.set('cols', String(term.cols));
+      query.set('rows', String(term.rows));
+    }
+    const ws = new WebSocket(`${proto}://${location.host}/ws/agent-terminal?${query}`);
     wsRef.current = ws;
     let exited = false;
+    let socketOpen = false;
+    let disposed = false;
+    scrollStateRef.current = createTerminalScrollState();
+    setJumpState({ connectionKey, visible: false });
+
+    const readViewport = (): TerminalViewportSnapshot => {
+      const buffer = term.buffer.active;
+      return {
+        bufferType: buffer.type,
+        viewportY: buffer.viewportY,
+        baseY: buffer.baseY,
+      };
+    };
+
+    const publishScrollState = (next: TerminalScrollState) => {
+      if (disposed) return;
+      scrollStateRef.current = next;
+      const visible = shouldShowTerminalJump(next, socketOpen);
+      setJumpState((current) =>
+        current.connectionKey === connectionKey && current.visible === visible
+          ? current
+          : { connectionKey, visible },
+      );
+    };
+
+    // The backend cannot receive input until attach completes and the mandatory
+    // replay frame is sent. Start the safety timer only after that frame arrives;
+    // otherwise a slow cold attach could release input into a socket with no
+    // server-side message listener yet and silently drop keystrokes.
+    let replayTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const recomputeViewport = () => {
+      publishScrollState(
+        observeTerminalViewport(scrollStateRef.current, readViewport()),
+      );
+    };
+
+    const fitPreservingBottom = () => {
+      const restoreBottom = shouldRestoreTerminalBottomAfterFit(
+        scrollStateRef.current,
+      );
+      if (!safeFit()) return false;
+      if (restoreBottom) term.scrollToBottom();
+      recomputeViewport();
+      return true;
+    };
 
     // Shift+Enter → newline (not submit). Plain xterm encodes Shift+Enter the
     // same as Enter (\r = submit), so the TUI can't tell them apart. Send a
@@ -133,6 +223,7 @@ export function AgentTerminal({
         // for Enter, which xterm turns into \r (submit). Cancel the native
         // sequence and send a bare LF ourselves.
         e.preventDefault();
+        if (shouldSuppressTerminalInput(scrollStateRef.current)) return false;
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ t: 'i', d: '\n' }));
         }
@@ -142,18 +233,15 @@ export function AgentTerminal({
     });
     // Drop xterm→pty data while replaying scrollback (xterm auto-replies to
     // DA/DSR queries embedded in the replay; forwarding those to the TUI echoes junk).
-    let replaying = false;
-
     const sendResize = () => {
-      try {
-        fit.fit();
-      } catch {
-        return;
-      }
+      if (disposed || !fitPreservingBottom()) return false;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows }));
       }
+      return true;
     };
+    fitAndResizeRef.current = sendResize;
+    const initialFitRafId = requestAnimationFrame(sendResize);
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const debouncedResize = () => {
@@ -161,14 +249,23 @@ export function AgentTerminal({
       resizeTimer = setTimeout(sendResize, 80);
     };
 
+    let openFitRafId: number | null = null;
     ws.onopen = () => {
+      if (disposed) return;
+      socketOpen = true;
       setStatus('open');
       setBlockedMsg(null);
       relaunchingRef.current = false; // reconnect landed — drop the relaunch guard
-      requestAnimationFrame(sendResize);
+      if (relaunchGuardTimerRef.current) {
+        clearTimeout(relaunchGuardTimerRef.current);
+        relaunchGuardTimerRef.current = null;
+      }
+      publishScrollState(scrollStateRef.current);
+      openFitRafId = requestAnimationFrame(sendResize);
       term.focus();
     };
     ws.onmessage = (ev) => {
+      if (disposed) return;
       let msg: { t?: string; d?: unknown; code?: unknown; replay?: unknown };
       try {
         msg = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
@@ -177,12 +274,30 @@ export function AgentTerminal({
       }
       if (msg.t === 'o' && typeof msg.d === 'string') {
         if (msg.replay) {
-          replaying = true;
+          publishScrollState(beginTerminalReplay(scrollStateRef.current));
+          if (replayTimer) clearTimeout(replayTimer);
+          replayTimer = setTimeout(() => {
+            replayTimer = null;
+            publishScrollState(
+              releaseTerminalReplayInput(scrollStateRef.current),
+            );
+          }, 1500);
           term.write(msg.d, () => {
-            replaying = false;
+            if (disposed) return;
+            if (replayTimer) {
+              clearTimeout(replayTimer);
+              replayTimer = null;
+            }
+            const completion = completeTerminalReplay(scrollStateRef.current);
+            scrollStateRef.current = completion.state;
+            if (completion.scrollToBottom) term.scrollToBottom();
+            // Font/open fits may have happened while the backend was still
+            // attaching and before its input/resize listener existed. Replay
+            // marks that boundary complete, so resend the authoritative grid.
+            if (!sendResize()) recomputeViewport();
           });
         } else {
-          term.write(msg.d);
+          term.write(msg.d, recomputeViewport);
         }
       } else if (msg.t === 'x') {
         exited = true;
@@ -194,6 +309,9 @@ export function AgentTerminal({
       }
     };
     ws.onclose = (ev) => {
+      if (disposed) return;
+      socketOpen = false;
+      publishScrollState(scrollStateRef.current);
       if (exited) return;
       // 4001 no-session/no-cwd · 4002 capped · 4003 spawn failed (CLI not on
       // PATH etc.) — all are terminal conditions the user must act on, so show
@@ -205,11 +323,18 @@ export function AgentTerminal({
     };
 
     const dataSub = term.onData((d) => {
-      if (replaying) return;
+      if (shouldSuppressTerminalInput(scrollStateRef.current)) return;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ t: 'i', d }));
       }
     });
+    const scrollSub = term.onScroll(recomputeViewport);
+    // xterm suppresses its public onScroll event for native viewport scrolling,
+    // so mouse-wheel and trackpad movement must also be observed on the DOM
+    // viewport. xterm's own listener is registered first and updates buffer
+    // viewportY synchronously before this listener reads it.
+    const viewportElement = container.querySelector('.xterm-viewport');
+    viewportElement?.addEventListener('scroll', recomputeViewport);
 
     const ro = new ResizeObserver(debouncedResize);
     ro.observe(container);
@@ -226,20 +351,25 @@ export function AgentTerminal({
     const lateFitTimer = setTimeout(sendResize, 300);
 
     return () => {
-      cancelAnimationFrame(rafId);
+      disposed = true;
+      cancelAnimationFrame(initialFitRafId);
+      if (openFitRafId !== null) cancelAnimationFrame(openFitRafId);
       if (resizeTimer) clearTimeout(resizeTimer);
+      if (replayTimer) clearTimeout(replayTimer);
       clearTimeout(lateFitTimer);
       ro.disconnect();
       disposeCopy();
       disposeTheme();
       dataSub.dispose();
+      scrollSub.dispose();
+      viewportElement?.removeEventListener('scroll', recomputeViewport);
       ws.close();
       term.dispose();
       if (termRef.current === term) termRef.current = null;
-      if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
+      if (fitAndResizeRef.current === sendResize) fitAndResizeRef.current = null;
     };
-  }, [sessionId, connKey]);
+  }, [sessionId, connKey, connectionKey]);
 
   // +/- font zoom for this terminal only (independent of app/browser zoom).
   // Mutates the live term in place + refits so cols/rows + the pty resize stay
@@ -257,15 +387,7 @@ export function AgentTerminal({
     const term = termRef.current;
     if (term) {
       term.options.fontSize = next;
-      try {
-        fitRef.current?.fit();
-      } catch {
-        // container not measurable; next ResizeObserver tick refits
-      }
-      const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows }));
-      }
+      fitAndResizeRef.current?.();
     }
   }
 
@@ -273,7 +395,24 @@ export function AgentTerminal({
     setStatus('open');
     setExitCode(null);
     setBlockedMsg(null);
+    setJumpState({ connectionKey: '', visible: false });
     setConnKey((k) => k + 1);
+  };
+
+  const jumpToLatest = () => {
+    const term = termRef.current;
+    const ws = wsRef.current;
+    if (!term || !ws || ws.readyState !== WebSocket.OPEN) return;
+    scrollStateRef.current = requestTerminalJump(scrollStateRef.current);
+    term.scrollToBottom();
+    const buffer = term.buffer.active;
+    scrollStateRef.current = observeTerminalViewport(scrollStateRef.current, {
+      bufferType: buffer.type,
+      viewportY: buffer.viewportY,
+      baseY: buffer.baseY,
+    });
+    setJumpState({ connectionKey, visible: false });
+    term.focus();
   };
 
   // Auto-reconnect when the window regains focus/visibility and the socket had
@@ -301,6 +440,20 @@ export function AgentTerminal({
   return (
     <div className="group relative h-full w-full overflow-hidden bg-[var(--terminal-bg)]">
       <div ref={containerRef} className="h-full w-full" />
+      {status === 'open' &&
+        jumpState.connectionKey === connectionKey &&
+        jumpState.visible && (
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            aria-label={t('cmp.agentTerminal.jumpToLatest')}
+            title={t('cmp.agentTerminal.jumpToLatest')}
+            className="absolute bottom-12 left-1/2 z-20 flex min-h-8 -translate-x-1/2 items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 text-xs font-medium text-[var(--color-ink)] shadow-md hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--terminal-bg)]"
+          >
+            <ArrowDown size={14} aria-hidden />
+            {t('cmp.agentTerminal.jumpToLatest')}
+          </button>
+        )}
       {/* Per-terminal font zoom — appears on hover, top-right. Independent of
           the app/browser zoom so you can size the TUI on its own. */}
       {status === 'open' && (

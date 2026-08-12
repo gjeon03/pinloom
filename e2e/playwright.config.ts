@@ -31,24 +31,33 @@ export default defineConfig({
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
   },
-  webServer: {
-    command: 'pnpm dev',
-    cwd: '..',
-    url: 'http://localhost:4747',
-    timeout: 120_000,
-    // Always start a fresh backend+frontend. A previously-running dev
-    // server (using the real DB) must NEVER be reused — that's how the
-    // beforeEach DELETE in tests can wipe real data.
-    // If the port is already in use, fail loudly: stop your dev server,
-    // then re-run.
-    reuseExistingServer: false,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: {
-      PINLOOM_DB_PATH: tempDb,
-      // Backend (db/connection.ts) refuses to start if this is set but
-      // PINLOOM_DB_PATH points at the default production path.
-      PINLOOM_TEST_MODE: '1',
+  webServer: [
+    {
+      command: 'pnpm predev && pnpm --filter @pinloom/backend dev',
+      cwd: '..',
+      url: 'http://127.0.0.1:4748/api/projects',
+      timeout: 120_000,
+      // Always start a fresh backend. A previously-running server using the
+      // real DB must never be reused by a destructive isolated E2E fixture.
+      reuseExistingServer: false,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: {
+        PORT: '4748',
+        PINLOOM_DB_PATH: tempDb,
+        // db/connection.ts rejects test mode with the production DB path.
+        PINLOOM_TEST_MODE: '1',
+      },
     },
-  },
+    {
+      command: 'pnpm --filter @pinloom/frontend exec vite --port 4747 --strictPort --host 127.0.0.1',
+      cwd: '..',
+      url: 'http://127.0.0.1:4747',
+      timeout: 120_000,
+      reuseExistingServer: false,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { PORT: '4748' },
+    },
+  ],
 });

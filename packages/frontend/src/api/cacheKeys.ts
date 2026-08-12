@@ -5,9 +5,12 @@
 export const cacheKeys = {
   sessionMessages: (sessionId: string) =>
     ['session-messages', sessionId] as const,
+  sessionMessagePage: (sessionId: string) =>
+    ['session-message-page', sessionId] as const,
   sessionQueue: (sessionId: string) =>
     ['session-queue', sessionId] as const,
   sessionPins: (sessionId: string) => ['session-pins', sessionId] as const,
+  codexContext: (sessionId: string) => ['codex-context', sessionId] as const,
   runStatus: (sessionId: string) => ['run-status', sessionId] as const,
   // Cross-page lookups. Centralized so any component fetching them shares
   // SWR's deduped inflight + window-focus revalidation, instead of each

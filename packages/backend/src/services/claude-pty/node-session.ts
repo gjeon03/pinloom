@@ -10,12 +10,12 @@
 // covered by scripts/billing-gates/integration-real-claude.mjs, which the user
 // runs in a real terminal. See docs/billing/dual-bucket-plan.md.
 
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, type readSync } from 'node:fs';
 import path from 'node:path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { cleanChildEnv } from '../child-env.js';
-import { collectUuids, selectTurnLines, type JsonlLine } from '../claude-jsonl/index.js';
+import { selectTurnLines, type JsonlLine } from '../claude-jsonl/index.js';
 import type { ImageInput } from '../runner-types.js';
 import type { UserPrompt } from '../agents/message-stream.js';
 import { buildClaudeLaunch } from './launch-spec.js';
@@ -24,15 +24,86 @@ import type { ClaudeSession, ClaudeSessionFactory, ClaudeSessionSpec } from './s
 import {
   discoverNewSessionFile,
   listSessionFiles,
-  readLines,
+  readCheckpoint,
   sessionFilePath,
   sessionIdOf,
 } from './transcript.js';
+import {
+  createClaudeTranscriptTailState,
+  readClaudeTranscriptDelta,
+} from './transcript-tail.js';
 import { getStopHookServer, shutdownStopHookServer } from './shared-server.js';
 
 const CLAUDE_BIN = process.env.PINLOOM_CLAUDE_BIN ?? 'claude';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export interface ClaudeTurnTranscriptReader {
+  readTurnSettled(file: string): Promise<JsonlLine[]>;
+  discardPending(file: string): void;
+}
+
+interface ClaudeTurnTranscriptReaderDependencies {
+  readChunk?: typeof readSync;
+  wait?: (ms: number) => Promise<void>;
+  settleAttempts?: number;
+  settleIntervalMs?: number;
+}
+
+export function createClaudeTurnTranscriptReader(
+  checkpoint: {
+    completeOffset: number;
+    transcriptIdentity: string;
+  } | null,
+  dependencies: ClaudeTurnTranscriptReaderDependencies = {},
+): ClaudeTurnTranscriptReader {
+  const state = createClaudeTranscriptTailState(checkpoint?.completeOffset ?? 0, {
+    readChunk: dependencies.readChunk,
+    transcriptIdentity: checkpoint?.transcriptIdentity ?? null,
+  });
+  const wait = dependencies.wait ?? sleep;
+  const settleAttempts = dependencies.settleAttempts ?? 25;
+  const settleIntervalMs = dependencies.settleIntervalMs ?? 120;
+
+  return {
+    discardPending(file: string): void {
+      readClaudeTranscriptDelta(file, state);
+    },
+    async readTurnSettled(file: string): Promise<JsonlLine[]> {
+      let appended: JsonlLine[] = [];
+      let turn: JsonlLine[] = [];
+      let settled = false;
+
+      for (let attempt = 0; attempt < settleAttempts; attempt++) {
+        const delta = readClaudeTranscriptDelta(file, state);
+        if (delta.reset) {
+          appended = [];
+          console.warn('[claude-pty] transcript replaced or truncated; restarting turn read');
+        } else if (delta.lines.length > 0) {
+          appended.push(...delta.lines);
+        }
+
+        turn = selectTurnLines(appended, new Set<string>());
+        settled = turn.some(
+          (line) =>
+            line.type === 'assistant' &&
+            Array.isArray(line.message?.content) &&
+            (line.message.content as unknown[]).length > 0,
+        );
+        if (settled) break;
+        await wait(settleIntervalMs);
+      }
+
+      if (!settled) {
+        console.warn('[claude-pty] turn produced no assistant content after settle window');
+      }
+      if (process.env.PINLOOM_PTY_DEBUG) {
+        console.error('[pty] turn settled: %d lines extracted', turn.length);
+      }
+      return turn;
+    },
+  };
+}
 
 // Strip ANSI/cursor escapes and reduce to lowercase letters so we can match TUI
 // prompts whose words the terminal lays out with cursor-move codes instead of
@@ -119,17 +190,20 @@ export function createNodeClaudeSessionFactory(
       // resumed sessions (`claude --resume <id> "prompt"` auto-runs the prompt on
       // the resumed session; verified). This avoids typing into a freshly-launched
       // TUI, which is unreliable. Materialize turn-1 images up front and reference
-      // them by @path. For a resumed session, snapshot the transcript's existing
-      // uuids now so the seeded turn's new lines can be diffed out after.
+      // them by @path. A resumed session checkpoints the transcript's complete
+      // byte tail before launch so the seeded turn reads only appended records.
       const seedImages = materializeImages(spec.initialPrompt.images, tmp, 0);
       const initialText =
         seedImages.length > 0
           ? `${spec.initialPrompt.text} ${seedImages.map((p) => `@${p}`).join(' ')}`
           : spec.initialPrompt.text;
       if (initialText && initialText.length > 0) launch.args.push(initialText);
-      const seedSeen: ReadonlySet<string> = spec.resume
-        ? collectUuids(readLines(sessionFilePath(spec.cwd, spec.resume, home)))
-        : new Set<string>();
+      const resumedSessionFile = spec.resume
+        ? sessionFilePath(spec.cwd, spec.resume, home)
+        : null;
+      let transcriptReader = resumedSessionFile
+        ? createClaudeTurnTranscriptReader(readCheckpoint(resumedSessionFile))
+        : null;
 
       // When a home override is set (tests), point the child at it too so it
       // writes transcripts where we read them. In production `home` is undefined
@@ -159,9 +233,7 @@ export function createNodeClaudeSessionFactory(
       // so for a fresh session we submit first, then discover (see runTurn). A
       // resumed session already has a known transcript file.
       let sessionId: string | null = spec.resume ?? null;
-      let sessionFile: string | null = spec.resume
-        ? sessionFilePath(spec.cwd, spec.resume, home)
-        : null;
+      let sessionFile: string | null = resumedSessionFile;
       let disposeP: Promise<void> | null = null;
       // Turn 1's images (if any) used index 0 via the seed; injected turns start at 1.
       let turnSeq = spec.resume ? 0 : 1;
@@ -232,29 +304,10 @@ export function createNodeClaudeSessionFactory(
       // The Stop hook can fire a beat before claude flushes the final assistant
       // message to the transcript file — poll briefly until the selected turn
       // actually carries assistant content before returning it.
-      async function readTurnSettled(seen: ReadonlySet<string>): Promise<JsonlLine[]> {
-        let turn: JsonlLine[] = [];
-        let settled = false;
-        for (let i = 0; i < 25; i++) {
-          turn = selectTurnLines(readLines(sessionFile!), seen);
-          settled = turn.some(
-            (l) =>
-              l.type === 'assistant' &&
-              Array.isArray(l.message?.content) &&
-              (l.message?.content as unknown[]).length > 0,
-          );
-          if (settled) break;
-          await sleep(120);
-        }
-        if (!settled) {
-          // Exhausted the retry window without assistant content — the turn ends
-          // up empty (transcript flush stalled, claude crashed post-Stop-hook, or
-          // a schema change). Surface it rather than silently emitting a blank turn.
-          console.warn('[claude-pty] turn produced no assistant content after settle window');
-        }
-        if (process.env.PINLOOM_PTY_DEBUG)
-          console.error('[pty] turn settled: %d lines extracted', turn.length);
-        return turn;
+      async function readTurnSettled(): Promise<JsonlLine[]> {
+        if (!sessionFile) return [];
+        transcriptReader ??= createClaudeTurnTranscriptReader(null);
+        return transcriptReader.readTurnSettled(sessionFile);
       }
 
       async function discover(signal: AbortSignal): Promise<void> {
@@ -271,6 +324,7 @@ export function createNodeClaudeSessionFactory(
           throw new Error(`${msg}\nlast TUI output:\n${tail.slice(-500)}`);
         }
         sessionFile = sessionFilePath(spec.cwd, sessionId, home);
+        transcriptReader = createClaudeTurnTranscriptReader(null);
       }
 
       return {
@@ -293,7 +347,7 @@ export function createNodeClaudeSessionFactory(
             if (process.env.PINLOOM_PTY_DEBUG)
               console.error('[pty] seeded turn sid=%s resume=%s', sessionId, !!spec.resume);
             await server.awaitStop(sessionId!, signal);
-            return readTurnSettled(seedSeen);
+            return readTurnSettled();
           }
 
           const imagePaths = materializeImages(prompt.images, tmp, turnSeq++);
@@ -317,17 +371,21 @@ export function createNodeClaudeSessionFactory(
             await submitToTui(child, text);
             await discover(signal);
             await server.awaitStop(sessionId!, signal);
-            return readTurnSettled(new Set<string>());
+            return readTurnSettled();
           }
 
-          // Subsequent / resumed turn: snapshot the existing uuids and arm BEFORE
-          // injecting so a fast turn can't beat us to the Stop hook; the new
-          // lines that appear are this turn.
-          const seen = collectUuids(readLines(sessionFile));
+          // If the previous turn timed out before a late assistant flush, drain
+          // that completed suffix before submitting the next prompt so it can
+          // never be attributed to the new turn.
+          transcriptReader?.discardPending(sessionFile);
+
+          // Arm BEFORE injecting so a fast turn cannot beat us to the Stop hook.
+          // The process-lifetime transcript reader already sits at the previous
+          // complete boundary, so only this turn's appended bytes are consumed.
           const stopped = server.awaitStop(sessionId!, signal);
           await submitToTui(child, text);
           await stopped;
-          return readTurnSettled(seen);
+          return readTurnSettled();
         },
 
         dispose(): Promise<void> {

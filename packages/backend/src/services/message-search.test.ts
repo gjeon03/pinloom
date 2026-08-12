@@ -39,10 +39,13 @@ function addMsg(
   role: string,
   content: string,
   createdAt = id,
+  sourceMessageId: string | null = null,
 ) {
   db.prepare(
-    'INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?,?,?,?,?)',
-  ).run(id, sessionId, role, content, createdAt);
+    `INSERT INTO messages (
+       id, session_id, role, content, source_message_id, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, sessionId, role, content, sourceMessageId, createdAt);
 }
 
 describe('tokenizeQuery', () => {
@@ -124,6 +127,17 @@ describe('searchMessages', () => {
     addMsg('m4', 's1', 'tool', 'deploy noise');
     addMsg('m5', 's1', 'user', 'deploy real');
     expect(searchMessages(db, 'deploy').map((x) => x.messageId)).toEqual(['m5']);
+  });
+
+  it('never surfaces mirror messages that paginated chat history excludes', () => {
+    addMsg('source', 's1', 'assistant', 'deploy source');
+    addMsg('mirror', 's1', 'assistant', 'deploy mirror', 'mirror', 'source');
+    expect(searchMessages(db, 'deploy').map((x) => x.messageId)).toEqual(['source']);
+    expect(searchMessages(db, '배포')).toEqual([]);
+
+    addMsg('source-ko', 's1', 'assistant', '배포 source');
+    addMsg('mirror-ko', 's1', 'assistant', '배포 mirror', 'mirror-ko', 'source-ko');
+    expect(searchMessages(db, '배포').map((x) => x.messageId)).toEqual(['source-ko']);
   });
 
   it('ANDs a >=3-char MATCH token with a 1-2-char LIKE token', () => {

@@ -32,6 +32,13 @@ test.describe('smoke', () => {
     // 2. Open the app on the catchall route — sidebar renders unconditionally.
     await page.goto('/');
 
+    // A fresh isolated database shows the one-time feature preset chooser.
+    // Select Full so the group controls exercised below are enabled.
+    const fullPreset = page.getByRole('button', { name: /^Full\b/ });
+    await expect(fullPreset).toBeVisible();
+    await fullPreset.click();
+    await expect(fullPreset).toHaveCount(0);
+
     // Scope all sidebar assertions to <aside> so ProjectPage's own copy of
     // the project name (when a project is active) doesn't trip strict-mode.
     const sidebar = page.locator('aside');
@@ -44,13 +51,11 @@ test.describe('smoke', () => {
     await sidebar.getByText('Alpha', { exact: true }).click();
     await expect(page).toHaveURL(/\/projects\//);
 
-    // 5. Create a group via the global FolderPlus button. handleCreateGroup
-    //    uses window.prompt; intercept it.
-    page.once('dialog', (dialog) => {
-      expect(dialog.type()).toBe('prompt');
-      void dialog.accept('Work');
-    });
+    // 5. Create a group through the app's Electron-safe text prompt modal.
     await page.getByRole('button', { name: 'New group' }).click();
+    const groupDialog = page.getByRole('dialog', { name: 'New group name' });
+    await groupDialog.getByRole('textbox', { name: 'New group name' }).fill('Work');
+    await groupDialog.getByRole('button', { name: 'Create' }).click();
     await expect(sidebar.getByText('Work', { exact: true })).toBeVisible();
 
     // 6. Reload — group persists (server-backed, not just client state).

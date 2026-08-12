@@ -8,15 +8,30 @@ function backoffMs(attempt: number): number {
   return base + Math.floor(Math.random() * 250);
 }
 
+export interface WebSocketLifecycleOptions {
+  onOpen?: () => void;
+  onReconnect?: () => void;
+}
+
+export function notifyWebSocketOpen(
+  wasConnected: boolean,
+  options: WebSocketLifecycleOptions,
+): void {
+  options.onOpen?.();
+  if (wasConnected) options.onReconnect?.();
+}
+
 export function useWebSocket(
   channel: string | null,
   onEvent: (ev: WsEvent) => void,
-  options?: { onReconnect?: () => void },
+  options: WebSocketLifecycleOptions = {},
 ) {
   const handlerRef = useRef(onEvent);
   handlerRef.current = onEvent;
   const reconnectRef = useRef(options?.onReconnect);
   reconnectRef.current = options?.onReconnect;
+  const openRef = useRef(options.onOpen);
+  openRef.current = options.onOpen;
 
   useEffect(() => {
     if (!channel) return;
@@ -37,11 +52,10 @@ export function useWebSocket(
         const wasReconnect = everConnected;
         everConnected = true;
         attempt = 0;
-        if (wasReconnect) {
-          // Caller can use this to revalidate caches that may have drifted
-          // while we were disconnected.
-          reconnectRef.current?.();
-        }
+        notifyWebSocketOpen(wasReconnect, {
+          onOpen: openRef.current,
+          onReconnect: reconnectRef.current,
+        });
       });
 
       ws.addEventListener('message', (msg) => {

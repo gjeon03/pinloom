@@ -163,6 +163,7 @@ export function TerminalPanel(props: IDockviewPanelProps) {
       onHandoff={ctx.onHandoff}
       onSendPin={(pin) => ctx.onSendPin(session.id, pin)}
       position={position}
+      showCodexContext={session.agent === 'codex' && session.transport === 'terminal'}
     />
   );
   return <SessionRailLayout content={content} rail={rail} position={position} />;

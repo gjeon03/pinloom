@@ -18,6 +18,7 @@ import { cleanChildEnv } from './child-env.js';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { getDb } from '../db/connection.js';
+import { createScrollback, type Scrollback } from './scrollback.js';
 
 const SCROLLBACK_BYTES = 200 * 1024;
 // Ceiling on concurrent live terminals across all projects — each is a real
@@ -28,7 +29,7 @@ export const MAX_TERMINALS = 50;
 
 interface TerminalSession {
   pty: IPty;
-  buffer: string;
+  scrollback: Scrollback;
   onData: ((data: string) => void) | null;
   onExit: ((code: number) => void) | null;
   // Bumped on every attach so a superseded consumer's detach() is a no-op
@@ -117,13 +118,14 @@ export function attachTerminal(
     });
     const created: TerminalSession = {
       pty: child,
-      buffer: notice,
+      scrollback: createScrollback(SCROLLBACK_BYTES),
       onData: null,
       onExit: null,
       attachId: 0,
     };
+    created.scrollback.push(notice);
     child.onData((d) => {
-      created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
+      created.scrollback.push(d);
       created.onData?.(d);
     });
     child.onExit(({ exitCode }) => {
@@ -141,7 +143,7 @@ export function attachTerminal(
   }
 
   const bound = session;
-  const snapshot = bound.buffer;
+  const snapshot = bound.scrollback.snapshot();
   bound.onData = onData;
   bound.onExit = onExit;
   const myAttachId = (bound.attachId = ++attachSeq);

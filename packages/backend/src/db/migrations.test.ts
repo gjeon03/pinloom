@@ -383,6 +383,85 @@ describe('migration 12 — project groups', () => {
 });
 
 describe('schema integrity', () => {
+  it('creates durable Claude transcript state and cascades it with its session', () => {
+    const db = freshDb();
+    runMigrations(db);
+
+    expect(tableInfo(db, 'claude_transcript_state')).toEqual([
+      'session_id',
+      'transcript_identity',
+      'complete_offset',
+      'last_transcript_uuid',
+      'last_conversation_type',
+      'updated_at',
+    ]);
+
+    const now = '2026-08-12T00:00:00Z';
+    db.prepare(
+      'INSERT INTO projects (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('claude-state-project', 'Claude state project', '/claude-state', now, now);
+    db.prepare(
+      'INSERT INTO sessions (id, project_id, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    ).run('claude-state-session', 'claude-state-project', now, now);
+    db.prepare(
+      `INSERT INTO claude_transcript_state (
+        session_id, transcript_identity, complete_offset,
+        last_transcript_uuid, last_conversation_type, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('claude-state-session', '1:2', 42, 'uuid-1', 'assistant', now);
+
+    expect(() => db.prepare(
+      `UPDATE claude_transcript_state
+       SET last_conversation_type = 'system'
+       WHERE session_id = ?`,
+    ).run('claude-state-session')).toThrow();
+
+    db.prepare('DELETE FROM sessions WHERE id = ?').run('claude-state-session');
+
+    expect(
+      db.prepare('SELECT COUNT(*) AS count FROM claude_transcript_state').get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it('creates codex context telemetry and cascades it when its session is deleted', () => {
+    const db = freshDb();
+    runMigrations(db);
+
+    expect(tableInfo(db, 'codex_context_state')).toEqual(expect.arrayContaining([
+      'session_id',
+      'input_tokens',
+      'cached_input_tokens',
+      'context_window_tokens',
+      'observed_compactions',
+      'post_compaction_input_tokens',
+      'rollout_bytes',
+      'awaiting_post_compaction',
+      'rollout_identity',
+      'observed_complete_offset',
+      'observation_generation',
+      'updated_at',
+    ]));
+
+    const now = '2026-08-11T00:00:00Z';
+    db.prepare(
+      'INSERT INTO projects (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('context-project', 'Context project', '/context-project', now, now);
+    db.prepare(
+      'INSERT INTO sessions (id, project_id, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    ).run('context-session', 'context-project', now, now);
+    db.prepare(
+      `INSERT INTO codex_context_state (
+        session_id, observed_compactions, awaiting_post_compaction, updated_at
+      ) VALUES (?, ?, ?, ?)`,
+    ).run('context-session', 0, 0, now);
+
+    db.prepare('DELETE FROM sessions WHERE id = ?').run('context-session');
+
+    expect(
+      db.prepare('SELECT COUNT(*) AS count FROM codex_context_state').get(),
+    ).toEqual({ count: 0 });
+  });
+
   it('foreign keys cascade plan_items when a plan is deleted', () => {
     const db = freshDb();
     runMigrations(db);

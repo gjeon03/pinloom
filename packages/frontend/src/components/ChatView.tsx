@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import type { CSSProperties } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { useNavigate } from 'react-router-dom';
@@ -22,6 +30,7 @@ import {
 import type {
   AgentKind,
   Message,
+  MessagePage,
   PromptTemplate,
   QueueItem,
   Session,
@@ -47,6 +56,11 @@ import {
   PinToggleButton,
   RawViewToggle,
 } from './MessageActions.js';
+import {
+  createChatHistoryState,
+  groupChatMessages,
+  reduceChatHistory,
+} from './chat-history.js';
 
 type AiRunState = 'ai' | null;
 
@@ -162,33 +176,22 @@ async function imageToPayload(
   }
 }
 
-type RenderItem =
-  | { kind: 'message'; message: Message }
-  | { kind: 'tool-group'; key: string; messages: Message[] };
-
-function groupConsecutiveTools(messages: Message[]): RenderItem[] {
-  const out: RenderItem[] = [];
-  let buffer: Message[] = [];
-  const flush = () => {
-    if (buffer.length === 0) return;
-    out.push({ kind: 'tool-group', key: `tools-${buffer[0].id}`, messages: buffer });
-    buffer = [];
-  };
-  for (const m of messages) {
-    if (m.role === 'tool') buffer.push(m);
-    else {
-      flush();
-      out.push({ kind: 'message', message: m });
-    }
-  }
-  flush();
-  return out;
-}
-
 interface Props {
   session: Session;
   onPinChange: (message: Message) => void;
   onSessionUpdate?: (session: Session) => void;
+}
+
+function createInitialChatHistoryState(generation: string) {
+  const state = createChatHistoryState(generation);
+  try {
+    const messageId = localStorage.getItem(`pinloom:focusMessage:${generation}`);
+    return messageId
+      ? reduceChatHistory(state, { type: 'focus_requested', generation, messageId })
+      : state;
+  } catch {
+    return state;
+  }
 }
 
 const BOTTOM_STICKY_PX = 60; // within this distance from bottom → auto-scroll
@@ -208,18 +211,30 @@ function loadPersistedInput(sessionId: string): string {
 }
 
 export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [history, dispatchHistory] = useReducer(
+    reduceChatHistory,
+    session.id,
+    createInitialChatHistoryState,
+  );
+  const historyRef = useRef(history);
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+  const messages = history.messages;
   // groupConsecutiveTools is O(N) over the whole message list. Without
   // memoization every `stream_chunk` event (~10/sec while a turn is
   // streaming) re-runs it and produces a new array, which combined with
   // an un-memoized MessageBubble forces a full reconciliation of every
   // row. Memoizing here means only adds/updates trigger a re-group, and
   // identical messages keep their row instances.
-  const renderItems = useMemo(() => groupConsecutiveTools(messages), [messages]);
+  const renderItems = useMemo(() => groupChatMessages(messages), [messages]);
   // Search "jump to message": focusMessageId scrolls the target row to center.
-  const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
-  const pendingFocusRef = useRef(false);
+  const [focusMessageId, setFocusMessageId] = useState<string | null>(
+    history.focus.messageId,
+  );
+  const pendingFocusRef = useRef(history.focus.messageId !== null);
   const handledFocusRef = useRef<string | null>(null); // dedupe: scroll once per target
+  const focusTimerIdsRef = useRef<number[]>([]);
   const [input, setInput] = useState(() => loadPersistedInput(session.id));
   const [runKind, setRunKind] = useState<AiRunState>(null);
   const [shellRunning, setShellRunning] = useState(false);
@@ -605,7 +620,6 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   // prop changes (a nextImageNumber bump from sending an image used to
   // clobber a just-saved pick).
   useEffect(() => {
-    setMessages([]);
     setQueue([]);
     setRunKind(null);
     setShellRunning(false);
@@ -632,14 +646,180 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     nextAttachmentNumberRef.current = session.nextImageNumber;
   }, [session.nextImageNumber]);
 
-  // SWR caches per-session payloads so tab switches render from cache
-  // instantly. WS handlers keep `messages`/`queue` live during a streaming
-  // turn — SWR's role here is the "snap-to-fresh" safety net on focus and
-  // network reconnect, not a per-event mirror.
-  const { data: messagesData, error: messagesError, mutate: mutateMessages } =
-    useSWR(cacheKeys.sessionMessages(session.id), () =>
-      api.listMessages(session.id),
-    );
+  // The newest chat page is a local request controller because the request
+  // must capture this mounted reducer's live revision. A shared SWR response
+  // cannot safely compare revisions across two mounts of the same session.
+  const latestRequestRef = useRef(0);
+  const latestRequestPromiseRef = useRef<Promise<void> | null>(null);
+  const olderRequestRef = useRef<Promise<void> | null>(null);
+  const olderLoadRafRef = useRef<number | null>(null);
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const prependAnchorRef = useRef<{
+    requestId: number;
+    key: string;
+    offsetTop: number;
+    settleRafId: number | null;
+  } | null>(null);
+  const olderRequestIdRef = useRef(0);
+  const restorePrependAnchor = useCallback((requestId: number) => {
+    const anchorState = prependAnchorRef.current;
+    if (!anchorState || anchorState.requestId !== requestId) {
+      return false;
+    }
+    const scroller = scrollerRef.current;
+    if (!scroller) return true;
+    const anchor = [...scroller.querySelectorAll<HTMLElement>('[data-chat-item-key]')]
+      .find((element) => element.dataset.chatItemKey === anchorState.key);
+    if (!anchor) return true;
+    const visualAnchor = anchor.firstElementChild instanceof HTMLElement
+      ? anchor.firstElementChild
+      : anchor;
+    const offsetTop = visualAnchor.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top;
+    const delta = offsetTop - anchorState.offsetTop;
+    if (Math.abs(delta) > 0.05) scroller.scrollTop += delta;
+    return Math.abs(delta) <= 0.05;
+  }, []);
+  const { data: cachedNewestPage, mutate: cacheNewestPage } = useSWR<MessagePage>(
+    cacheKeys.sessionMessagePage(session.id),
+    null,
+  );
+  const cachedPageGenerationRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!cachedNewestPage || cachedPageGenerationRef.current === session.id) return;
+    cachedPageGenerationRef.current = session.id;
+    dispatchHistory({
+      type: 'page_resolved',
+      generation: session.id,
+      mode: 'latest',
+      page: cachedNewestPage,
+      requestRevision: 0,
+    });
+  }, [cachedNewestPage, session.id]);
+  const loadLatestPage = useCallback(async () => {
+    if (latestRequestPromiseRef.current) return latestRequestPromiseRef.current;
+    const generation = session.id;
+    const requestId = ++latestRequestRef.current;
+    const requestRevision = historyRef.current.generation === generation
+      ? historyRef.current.liveRevision
+      : 0;
+    dispatchHistory({ type: 'page_loading', generation });
+    const request = api
+      .listMessagePage(generation)
+      .then((page) => {
+        if (latestRequestRef.current !== requestId) return;
+        void cacheNewestPage(page, { revalidate: false });
+        dispatchHistory({
+          type: 'page_resolved',
+          generation,
+          mode: 'latest',
+          page,
+          requestRevision,
+        });
+      })
+      .catch((loadError: unknown) => {
+        if (latestRequestRef.current !== requestId) return;
+        dispatchHistory({
+          type: 'page_failed',
+          generation,
+          error: loadError instanceof Error ? loadError.message : String(loadError),
+          mode: 'latest',
+        });
+      })
+      .finally(() => {
+        if (latestRequestPromiseRef.current === request) {
+          latestRequestPromiseRef.current = null;
+        }
+      });
+    latestRequestPromiseRef.current = request;
+    return request;
+  }, [cacheNewestPage, session.id]);
+
+  const loadOlderPage = useCallback(
+    (limit = 100): Promise<void> => {
+      if (olderRequestRef.current) return olderRequestRef.current;
+      const snapshot = historyRef.current;
+      if (snapshot.generation !== session.id || !snapshot.nextCursor) {
+        return Promise.resolve();
+      }
+      const generation = session.id;
+      const before = snapshot.nextCursor;
+      const requestRevision = snapshot.liveRevision;
+      const requestId = ++olderRequestIdRef.current;
+      const scroller = scrollerRef.current;
+      if (!pendingFocusRef.current && scroller) {
+        const scrollerTop = scroller.getBoundingClientRect().top;
+        const anchor = [...scroller.querySelectorAll<HTMLElement>('[data-chat-item-key]')]
+          .find((element) => element.getBoundingClientRect().bottom > scrollerTop);
+        const key = anchor?.dataset.chatItemKey;
+        const previous = prependAnchorRef.current;
+        if (previous?.settleRafId != null) {
+          window.cancelAnimationFrame(previous.settleRafId);
+        }
+        prependAnchorRef.current = anchor && key
+          ? {
+            requestId,
+            key,
+            offsetTop: (
+              anchor.firstElementChild instanceof HTMLElement
+                ? anchor.firstElementChild
+                : anchor
+            ).getBoundingClientRect().top - scrollerTop,
+            settleRafId: null,
+          }
+          : null;
+      }
+      dispatchHistory({ type: 'page_loading', generation });
+      const request = api
+        .listMessagePage(generation, { before, limit })
+        .then((page) => {
+          dispatchHistory({
+            type: 'page_resolved',
+            generation,
+            mode: 'older',
+            page,
+            requestRevision,
+          });
+        })
+        .catch((loadError: unknown) => {
+          if (historyRef.current.focus.status === 'loading') {
+            pendingFocusRef.current = false;
+            dispatchHistory({
+              type: 'focus_failed',
+              generation,
+              error: loadError instanceof Error ? loadError.message : String(loadError),
+            });
+          }
+          dispatchHistory({
+            type: 'page_failed',
+            generation,
+            error: loadError instanceof Error ? loadError.message : String(loadError),
+            mode: 'older',
+          });
+        })
+        .finally(() => {
+          if (olderRequestRef.current === request) olderRequestRef.current = null;
+        });
+      olderRequestRef.current = request;
+      return request;
+    },
+    [restorePrependAnchor, session.id],
+  );
+
+  useEffect(() => {
+    void loadLatestPage();
+  }, [loadLatestPage]);
+  useEffect(() => {
+    const refreshOnFocus = () => {
+      if (document.visibilityState === 'visible') void loadLatestPage();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnFocus);
+    return () => {
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnFocus);
+    };
+  }, [loadLatestPage]);
   const { data: queueData } = useSWR(cacheKeys.sessionQueue(session.id), () =>
     api.listQueue(session.id),
   );
@@ -650,16 +830,17 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   // "Refresh" re-fetches the conversation from the backend — recovers from a
   // dropped WebSocket / out-of-sync local copy without reloading the whole app.
   const refreshConversation = useCallback(() => {
-    void mutateMessages();
-  }, [mutateMessages]);
-
-  // When SWR delivers a payload (initial or revalidate), replace the local
-  // working copy. Mid-turn WS streams continue mutating from there.
-  // Comparing identity is enough: SWR returns the same reference unless
-  // the underlying fetch returned new data.
-  useEffect(() => {
-    if (messagesData) setMessages(messagesData);
-  }, [messagesData]);
+    const focus = historyRef.current.focus;
+    if (focus.status === 'error' && focus.messageId) {
+      pendingFocusRef.current = true;
+      dispatchHistory({
+        type: 'focus_requested',
+        generation: session.id,
+        messageId: focus.messageId,
+      });
+    }
+    void loadLatestPage();
+  }, [loadLatestPage, session.id]);
   useEffect(() => {
     if (queueData) setQueue(queueData);
   }, [queueData]);
@@ -668,15 +849,8 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     setRunKind(runStatusData.ai ? 'ai' : null);
     setShellRunning(runStatusData.exec);
   }, [runStatusData]);
-  useEffect(() => {
-    if (messagesError) setError(String(messagesError));
-  }, [messagesError]);
-
-  // When the WS reconnects (e.g. tab woke up after browser throttling
-  // killed the socket), pull fresh state for this session. SWR's focus
-  // revalidate covers most cases, but a long backgrounded tab may have a
-  // dead socket without losing focus, so the reconnect-specific signal
-  // matters as a separate trigger.
+  // Focus/visibility refresh covers a backgrounded window while reconnect
+  // refresh covers a socket that wakes independently of browser focus.
   useWebSocket(
     `session:${session.id}`,
     (ev) => {
@@ -685,9 +859,11 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
         onPinChange(ev.message);
         return;
       }
-      setMessages((prev) =>
-        prev.some((m) => m.id === ev.message.id) ? prev : [...prev, ev.message],
-      );
+      dispatchHistory({
+        type: 'live_append',
+        generation: session.id,
+        message: ev.message,
+      });
       // Empty assistant messages coming in during a run are streaming placeholders
       if (ev.message.role === 'assistant' && ev.message.content === '') {
         setStreamingIds((prev) => {
@@ -698,16 +874,21 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
       }
       if (!atBottom) setUnseenCount((c) => c + 1);
     } else if (ev.type === 'message_updated' && ev.sessionId === session.id) {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === ev.message.id ? ev.message : m)),
-      );
+      if (!ev.message.sourceMessageId) {
+        dispatchHistory({
+          type: 'live_update',
+          generation: session.id,
+          message: ev.message,
+        });
+      }
       onPinChange(ev.message);
     } else if (ev.type === 'stream_chunk' && ev.sessionId === session.id) {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === ev.messageId ? { ...m, content: m.content + ev.chunk } : m,
-        ),
-      );
+      dispatchHistory({
+        type: 'live_chunk',
+        generation: session.id,
+        messageId: ev.messageId,
+        chunk: ev.chunk,
+      });
       setStreamingIds((prev) => {
         if (prev.has(ev.messageId)) return prev;
         const next = new Set(prev);
@@ -752,7 +933,7 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     },
     {
       onReconnect: () => {
-        void mutateMessages();
+        void loadLatestPage();
       },
     },
   );
@@ -772,7 +953,10 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   // and only let the pill render once that has happened for this session.
   const didInitialScroll = useRef(false);
   const [initialScrollSettled, setInitialScrollSettled] = useState(false);
+  const atBottomRef = useRef(atBottom);
+  const isScrollingRef = useRef(false);
   const handleAtBottomChange = useCallback((next: boolean) => {
+    atBottomRef.current = next;
     setAtBottom(next);
     if (next) {
       setUnseenCount(0);
@@ -800,6 +984,19 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     setInitialScrollSettled(false);
     handledFocusRef.current = null;
   }, [session.id]);
+  useEffect(() => () => {
+    focusTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    focusTimerIdsRef.current = [];
+    const prependAnchor = prependAnchorRef.current;
+    if (prependAnchor?.settleRafId != null) {
+      window.cancelAnimationFrame(prependAnchor.settleRafId);
+    }
+    prependAnchorRef.current = null;
+    if (olderLoadRafRef.current !== null) {
+      window.cancelAnimationFrame(olderLoadRafRef.current);
+      olderLoadRafRef.current = null;
+    }
+  }, [session.id]);
   useEffect(() => {
     if (didInitialScroll.current) return;
     if (renderItems.length === 0) return;
@@ -817,11 +1014,39 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
       });
     });
   }, [renderItems.length]);
+  useEffect(() => {
+    const anchorState = prependAnchorRef.current;
+    if (!anchorState) return;
+    let attempts = 0;
+    let stableFrames = 0;
+    let observedCorrection = false;
+    const startedAt = performance.now();
+    const settle = () => {
+      if (prependAnchorRef.current?.requestId !== anchorState.requestId) return;
+      const stable = restorePrependAnchor(anchorState.requestId);
+      if (!stable) observedCorrection = true;
+      stableFrames = stable ? stableFrames + 1 : 0;
+      attempts += 1;
+      if (
+        (observedCorrection && stableFrames >= 8 && performance.now() - startedAt >= 1_000) ||
+        attempts >= 180
+      ) {
+        prependAnchorRef.current = null;
+        return;
+      }
+      anchorState.settleRafId = window.requestAnimationFrame(settle);
+    };
+    anchorState.settleRafId = window.requestAnimationFrame(settle);
+    return () => {
+      if (prependAnchorRef.current?.requestId === anchorState.requestId) {
+        window.cancelAnimationFrame(anchorState.settleRafId ?? 0);
+      }
+    };
+  }, [history.firstItemIndex, restorePrependAnchor]);
 
   // Re-align to bottom on any list height change (markdown commit,
   // image load, footer reflow) when the user was already at bottom.
   // followOutput alone aligns to *estimated* heights and falls short.
-  const atBottomRef = useRef(atBottom);
   useEffect(() => {
     atBottomRef.current = atBottom;
   }, [atBottom]);
@@ -831,6 +1056,8 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
   }, [renderItems.length]);
   const handleTotalListHeightChanged = useCallback(() => {
     if (pendingFocusRef.current) return; // don't re-anchor to bottom mid-jump
+    if (prependAnchorRef.current) return;
+    if (isScrollingRef.current) return;
     if (!atBottomRef.current) return;
     const count = renderItemsCountRef.current;
     if (count === 0) return;
@@ -856,17 +1083,11 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
       if (m) {
         pendingFocusRef.current = true;
         setFocusMessageId(m);
-        // Remove after a grace period, cancelled on unmount — so a discarded
-        // first mount doesn't strip the marker before the live mount reads it.
-        // The final (live) mount's timer is the one that actually clears it.
-        const t = setTimeout(() => {
-          try {
-            localStorage.removeItem(key);
-          } catch {
-            /* ignore */
-          }
-        }, 4000);
-        return () => clearTimeout(t);
+        dispatchHistory({
+          type: 'focus_requested',
+          generation: session.id,
+          messageId: m,
+        });
       }
     } catch {
       /* localStorage unavailable */
@@ -877,13 +1098,73 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     const onGoto = (e: Event) => {
       const d = (e as CustomEvent<{ sessionId?: string; messageId?: string }>).detail;
       if (d?.sessionId === session.id && d?.messageId) {
+        focusTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId));
+        focusTimerIdsRef.current = [];
+        handledFocusRef.current = null;
         pendingFocusRef.current = true;
         setFocusMessageId(d.messageId);
+        dispatchHistory({
+          type: 'focus_requested',
+          generation: session.id,
+          messageId: d.messageId,
+        });
       }
     };
     window.addEventListener('pinloom:goto-session', onGoto as EventListener);
     return () => window.removeEventListener('pinloom:goto-session', onGoto as EventListener);
   }, [session.id]);
+
+  useEffect(() => {
+    const target = history.focus.messageId;
+    if (
+      !target ||
+      history.focus.status === 'idle' ||
+      history.focus.status === 'ready' ||
+      history.focus.status === 'exhausted' ||
+      history.focus.status === 'error'
+    ) {
+      return;
+    }
+    if (messages.some((message) => message.id === target)) {
+      dispatchHistory({ type: 'focus_ready', generation: session.id });
+      return;
+    }
+    if (history.pageLoading) return;
+    if (!history.nextCursor) {
+      if (!history.initialized) {
+        if (history.pageError) {
+          pendingFocusRef.current = false;
+          dispatchHistory({
+            type: 'focus_failed',
+            generation: session.id,
+            error: history.pageError,
+          });
+        }
+        return;
+      }
+      pendingFocusRef.current = false;
+      setFocusMessageId(null);
+      dispatchHistory({ type: 'focus_exhausted', generation: session.id });
+      try {
+        localStorage.removeItem(`pinloom:focusMessage:${session.id}`);
+      } catch {
+        // localStorage is optional.
+      }
+      return;
+    }
+    dispatchHistory({ type: 'focus_loading', generation: session.id });
+    void loadOlderPage(500);
+  }, [
+    history.focus.messageId,
+    history.focus.status,
+    history.nextCursor,
+    history.pageLoading,
+    history.pageError,
+    history.initialized,
+    loadOlderPage,
+    messages,
+    session.id,
+  ]);
 
   // Once the target message is in the rendered list, scroll it to center.
   // Retries as renderItems grows (message may not be loaded yet).
@@ -891,7 +1172,10 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     if (!focusMessageId || renderItems.length === 0) return;
     if (handledFocusRef.current === focusMessageId) return; // already handled
     const idx = renderItems.findIndex(
-      (it) => it.kind !== 'tool-group' && it.message.id === focusMessageId,
+      (item) => {
+        if (item.kind === 'message') return item.message.id === focusMessageId;
+        return item.messages.some((message) => message.id === focusMessageId);
+      },
     );
     if (idx < 0) return; // message not loaded yet — retry when renderItems grows
     handledFocusRef.current = focusMessageId;
@@ -901,19 +1185,36 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     // corrects after measuring — so one call lands short. pendingFocusRef
     // suppresses followOutput / height-change re-anchoring meanwhile.
     const jump = () =>
-      virtuosoRef.current?.scrollToIndex({ index: idx, align: 'center', behavior: 'auto' });
-    setTimeout(jump, 150);
-    setTimeout(jump, 450);
-    setTimeout(jump, 800);
-    setTimeout(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: idx,
+        align: 'center',
+        behavior: 'auto',
+      });
+    focusTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    const timerIds = [
+      window.setTimeout(jump, 150),
+      window.setTimeout(jump, 450),
+      window.setTimeout(jump, 800),
+    ];
+    timerIds.push(window.setTimeout(() => {
+      if (historyRef.current.focus.messageId !== target) return;
       pendingFocusRef.current = false;
-    }, 1400);
+      dispatchHistory({ type: 'focus_cleared', generation: session.id });
+      try {
+        const key = `pinloom:focusMessage:${session.id}`;
+        if (localStorage.getItem(key) === target) localStorage.removeItem(key);
+      } catch {
+        // localStorage is optional.
+      }
+    }, 1400));
     // Clear focusMessageId afterwards, allowing a future re-focus of the same id.
-    setTimeout(() => {
+    timerIds.push(window.setTimeout(() => {
       handledFocusRef.current = null;
       setFocusMessageId((f) => (f === target ? null : f));
-    }, 2600);
-  }, [focusMessageId, renderItems]);
+      focusTimerIdsRef.current = [];
+    }, 2600));
+    focusTimerIdsRef.current = timerIds;
+  }, [focusMessageId, renderItems, session.id]);
 
   // Textarea auto-grow.
   // When the input is empty we DON'T compute height from scrollHeight, because
@@ -1195,21 +1496,23 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
     }
   }
 
-  // useCallback so MessageBubble (now memoized below) doesn't re-render
-  // every row on every parent render just because togglePin gets a new
-  // identity. setMessages takes a functional updater so we don't need
-  // messages in the deps.
+  // useCallback so MessageBubble does not re-render every row just because
+  // togglePin gets a new identity.
   const togglePin = useCallback(
     async (message: Message) => {
       try {
         const updated = await api.updateMessage(message.id, { pinned: !message.pinned });
-        setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+        dispatchHistory({
+          type: 'live_update',
+          generation: session.id,
+          message: updated,
+        });
         onPinChange(updated);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [onPinChange],
+    [onPinChange, session.id],
   );
 
   function scrollToBottom() {
@@ -1273,11 +1576,36 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
           ref={virtuosoRef}
           className="flex-1 text-sm"
           data={renderItems}
+          scrollerRef={(element) => {
+            scrollerRef.current = element instanceof HTMLElement ? element : null;
+          }}
+          firstItemIndex={history.firstItemIndex}
+          startReached={() => {
+            if (
+              history.initialized &&
+              history.nextCursor &&
+              !history.pageLoading &&
+              !history.pageError &&
+              didInitialScroll.current &&
+              !pendingFocusRef.current
+            ) {
+              if (olderLoadRafRef.current !== null) return;
+              olderLoadRafRef.current = window.requestAnimationFrame(() => {
+                olderLoadRafRef.current = null;
+                void loadOlderPage();
+              });
+            }
+          }}
           computeItemKey={(_, item) =>
             item.kind === 'tool-group' ? item.key : item.message.id
           }
           itemContent={(_, item) => (
-            <div className="px-4 pb-3">
+            <div
+              className="px-4 pb-3"
+              data-chat-item-key={
+                item.kind === 'tool-group' ? item.key : item.message.id
+              }
+            >
               {item.kind === 'tool-group' ? (
                 <ToolGroup messages={item.messages} />
               ) : (
@@ -1291,7 +1619,32 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
             </div>
           )}
           components={{
-            Header: () => <div className="h-4" aria-hidden />,
+            Header: () => (
+              <div className="h-5 px-4 text-center text-[11px] leading-5 text-[var(--color-ink-muted)]">
+                {history.pageLoading ? 'Loading messages…' : null}
+                {history.pageError ? (
+                  <button
+                    type="button"
+                    className="text-red-400 hover:underline"
+                    onClick={() => {
+                      if (history.focus.status === 'error' && history.focus.messageId) {
+                        pendingFocusRef.current = true;
+                        dispatchHistory({
+                          type: 'focus_requested',
+                          generation: session.id,
+                          messageId: history.focus.messageId,
+                        });
+                        return;
+                      }
+                      if (history.pageErrorMode === 'older') void loadOlderPage();
+                      else void loadLatestPage();
+                    }}
+                  >
+                    {history.pageError} Retry
+                  </button>
+                ) : null}
+              </div>
+            ),
             Footer: () => (
               <div className="px-4 pb-4 space-y-3">
                 {aiRunning && streamingIds.size === 0 && (
@@ -1353,6 +1706,9 @@ export function ChatView({ session, onPinChange, onSessionUpdate }: Props) {
             ),
           }}
           followOutput={followOutput}
+          isScrolling={(next) => {
+            isScrollingRef.current = next;
+          }}
           atBottomStateChange={handleAtBottomChange}
           // Default 0 is too strict — 1-2px jitter from Footer reflow
           // flips atBottom to false and breaks followOutput's tracking.

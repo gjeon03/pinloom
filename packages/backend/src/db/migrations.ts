@@ -700,6 +700,38 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 41,
+    sql: `
+      CREATE TABLE IF NOT EXISTS codex_context_state (
+        session_id                    TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        input_tokens                  INTEGER,
+        cached_input_tokens           INTEGER,
+        context_window_tokens         INTEGER,
+        observed_compactions          INTEGER NOT NULL DEFAULT 0,
+        post_compaction_input_tokens  INTEGER,
+        rollout_bytes                 INTEGER,
+        awaiting_post_compaction      INTEGER NOT NULL DEFAULT 0,
+        rollout_identity              TEXT,
+        observed_complete_offset      INTEGER NOT NULL DEFAULT 0,
+        observation_generation        TEXT,
+        updated_at                    TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    id: 42,
+    sql: `
+      CREATE TABLE claude_transcript_state (
+        session_id             TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        transcript_identity    TEXT NOT NULL,
+        complete_offset        INTEGER NOT NULL,
+        last_transcript_uuid   TEXT,
+        last_conversation_type TEXT CHECK(last_conversation_type IN ('user', 'assistant') OR last_conversation_type IS NULL),
+        updated_at             TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
