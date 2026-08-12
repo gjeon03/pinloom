@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -31,6 +38,12 @@ import { ActionIconButton, CopyMarkdownButton, PinToggleButton } from './Message
 import { PinnedPanel } from './PinnedPanel.js';
 import { Markdown } from './Markdown.js';
 import { SessionTimelineTab } from './SessionTimelineTab.js';
+import { CodexContextRow } from './CodexContextRow.js';
+import {
+  createCodexContextPanelState,
+  getCodexCollapsedIndicator,
+  reduceCodexContextPanelState,
+} from './codex-context.js';
 import { useT } from '../i18n/t.js';
 
 // Right rail for a session, shared by terminal AND structured (SDK) sessions:
@@ -81,6 +94,11 @@ const MIN_H = 140;
 const MAX_H = 560;
 const DEFAULT_H = 240;
 
+const COLLAPSED_CONTEXT_DOT_CLASS = {
+  elevated: 'bg-[var(--color-tool-ink)]',
+  critical: 'bg-[var(--color-error-ink)]',
+} as const;
+
 function preview(content: string, max = 600): string {
   const t = content.trim();
   return t.length > max ? `${t.slice(0, max)}…` : t;
@@ -102,6 +120,8 @@ interface Props {
   tabs?: Tab[];
   /** Which edge the rail docks to (global preference from the parent). */
   position?: SidePanelPosition;
+  /** Show live Codex context telemetry for an interactive Codex terminal. */
+  showCodexContext?: boolean;
 }
 
 export function TerminalSidePanel({
@@ -114,8 +134,11 @@ export function TerminalSidePanel({
   onSendPin,
   tabs: tabsProp = ALL_TABS,
   position = 'left',
+  showCodexContext = false,
 }: Props) {
   const t = useT();
+  const translationRef = useRef(t);
+  translationRef.current = t;
   // Hide tabs whose feature is disabled (history / pins / session Wiki tab).
   const features = useFeatures();
   const tabs = tabsProp.filter((t) =>
@@ -130,6 +153,12 @@ export function TerminalSidePanel({
   const hasHistory = tabs.includes('history');
   const vertical = isVerticalRail(position);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [codexPanelState, dispatchCodexPanel] = useReducer(
+    reduceCodexContextPanelState,
+    sessionId,
+    createCodexContextPanelState,
+  );
+  const codexContextRequestRef = useRef(0);
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem(tabKey(sessionId));
     return isTab(saved) && tabs.includes(saved) ? saved : tabs[0];
@@ -194,8 +223,52 @@ export function TerminalSidePanel({
     };
   }, [sessionId, hasHistory]);
 
+  const hydrateCodexContext = useCallback(async () => {
+    if (!showCodexContext) return;
+    const requestId = ++codexContextRequestRef.current;
+    try {
+      const next = await api.getCodexContext(sessionId);
+      if (
+        requestId === codexContextRequestRef.current &&
+        next.sessionId === sessionId
+      ) {
+        dispatchCodexPanel({ type: 'context_received', context: next });
+      }
+    } catch (cause) {
+      if (requestId === codexContextRequestRef.current) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        dispatchCodexPanel({
+          type: 'load_failed',
+          message: translationRef.current('cmp.codexContext.loadError', {
+            error: message,
+          }),
+        });
+      }
+    }
+  }, [sessionId, showCodexContext]);
+
+  useEffect(() => {
+    if (!showCodexContext) {
+      codexContextRequestRef.current += 1;
+      return;
+    }
+    dispatchCodexPanel({ type: 'reset', sessionId });
+    void hydrateCodexContext();
+    return () => {
+      codexContextRequestRef.current += 1;
+    };
+  }, [hydrateCodexContext, sessionId, showCodexContext]);
+
   const onWsEvent = useCallback(
     (ev: WsEvent) => {
+      if (
+        showCodexContext &&
+        ev.type === 'codex_context_updated' &&
+        ev.sessionId === sessionId
+      ) {
+        codexContextRequestRef.current += 1;
+        dispatchCodexPanel({ type: 'context_received', context: ev.context });
+      }
       if (!hasHistory) return; // history not shown — nothing to keep in sync
       if (ev.type === 'message' && ev.sessionId === sessionId) {
         setMessages((prev) =>
@@ -205,9 +278,13 @@ export function TerminalSidePanel({
         setMessages((prev) => prev.map((m) => (m.id === ev.message.id ? ev.message : m)));
       }
     },
-    [sessionId, hasHistory],
+    [sessionId, hasHistory, showCodexContext],
   );
-  useWebSocket(`session:${sessionId}`, onWsEvent);
+  useWebSocket(`session:${sessionId}`, onWsEvent, {
+    onOpen: () => {
+      void hydrateCodexContext();
+    },
+  });
 
   // Drag-to-resize. The size is the distance from the cursor to the panel's
   // (drag-fixed) anchor edge — the edge opposite the drag handle. Mirrors
@@ -296,6 +373,11 @@ export function TerminalSidePanel({
   const focusedMessage = focusedMessageId
     ? rows.find((m) => m.id === focusedMessageId) ?? null
     : null;
+  const panelErrors = [
+    error,
+    codexPanelState.loadError,
+    codexPanelState.actionError,
+  ].filter((message): message is string => message !== null);
 
   // Stick to the bottom on open and on new live turns — unless the user has
   // scrolled up to read history. Runs after the windowed list paints. No-ops
@@ -353,6 +435,22 @@ export function TerminalSidePanel({
   const collapsedTitle = hasHistory
     ? t('cmp.termPanel.showHistoryPinsWiki')
     : t('cmp.termPanel.showPinsWiki');
+  const collapsedIndicator = getCodexCollapsedIndicator(
+    codexPanelState.context,
+    showCodexContext,
+  );
+  const collapsedContextStatus =
+    collapsedIndicator === 'critical'
+      ? t('cmp.codexContext.collapsedCritical')
+      : collapsedIndicator === 'elevated'
+        ? t('cmp.codexContext.collapsedElevated')
+        : null;
+  const collapsedControlTitle = collapsedContextStatus
+    ? t('cmp.termPanel.collapsedWithStatus', {
+        panel: collapsedTitle,
+        status: collapsedContextStatus,
+      })
+    : collapsedTitle;
 
   if (collapsed) {
     // Expand chevron points inward (toward the content), per docked edge.
@@ -368,17 +466,25 @@ export function TerminalSidePanel({
       <button
         type="button"
         onClick={() => persistCollapsed(false)}
-        title={collapsedTitle}
-        aria-label={collapsedTitle}
+        title={collapsedControlTitle}
+        aria-label={collapsedControlTitle}
         // Anchor the icons at the start of the strip — top for a vertical
         // rail, left for a horizontal one — rather than floating in the
         // center. Icons (pin / wiki, plus history for terminal) read cleaner
         // than the old sideways text.
-        className={`flex shrink-0 items-center justify-start gap-2 ${contentBorder} border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] ${
+        className={`flex shrink-0 items-center justify-start gap-2 ${contentBorder} border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)] ${
           vertical ? 'h-full w-8 flex-col py-2' : 'h-8 w-full flex-row px-2'
         }`}
       >
-        <ExpandIcon className="h-4 w-4" />
+        <span className="relative inline-flex">
+          <ExpandIcon className="h-4 w-4" />
+          {collapsedIndicator && (
+            <span
+              aria-hidden="true"
+              className={`absolute -right-1 -top-1 h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-2)] ${COLLAPSED_CONTEXT_DOT_CLASS[collapsedIndicator]}`}
+            />
+          )}
+        </span>
         {hasHistory && <History className="h-4 w-4" />}
         <span className="relative inline-flex">
           <Pin className="h-4 w-4" />
@@ -553,7 +659,28 @@ export function TerminalSidePanel({
         </div>
       </header>
 
-      {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
+      {showCodexContext && (
+        <CodexContextRow
+          sessionId={sessionId}
+          context={codexPanelState.context}
+          onHandoff={onHandoff}
+          onError={(message) => {
+            dispatchCodexPanel({ type: 'action_error', message });
+          }}
+        />
+      )}
+
+      {panelErrors.length > 0 && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="mx-2 mt-2 rounded border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-2.5 py-2 text-xs text-[var(--color-error-ink)]"
+        >
+          {panelErrors.map((message, index) => (
+            <p key={`${index}:${message}`}>{message}</p>
+          ))}
+        </div>
+      )}
 
       {/* History stays mounted (hidden when inactive) so its scroll position and
           sticky-bottom refs survive tab switches; Pins/Wiki mount on demand.

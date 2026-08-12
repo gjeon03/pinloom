@@ -25,7 +25,10 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { getDb } from '../db/connection.js';
 import { isAiRunning } from './runner.js';
-import { readLines } from './claude-pty/transcript.js';
+import {
+  readCheckpoint,
+  type ClaudeTranscriptCheckpoint,
+} from './claude-pty/transcript.js';
 import {
   agentTerminalLock,
   hasAgentTerminal,
@@ -53,6 +56,10 @@ interface SessionRow {
   agent: string | null;
   transport: string | null;
   agent_session_id: string | null;
+}
+
+export interface TransportConvertDependencies {
+  claudeProjectsRoot?: string;
 }
 
 // Walk a sessions tree for rollout-*.jsonl files. codex embeds the session
@@ -115,6 +122,7 @@ const userCodexSessions = () =>
 export function convertSessionTransport(
   sessionId: string,
   to: 'sdk' | 'terminal',
+  dependencies: TransportConvertDependencies = {},
 ): { resumeCarried: boolean } {
   const db = getDb();
   const row = db
@@ -154,25 +162,20 @@ export function convertSessionTransport(
 
   let clearResume = false;
   let cursor: string | null = null;
+  let claudeCheckpoint: ClaudeTranscriptCheckpoint | null = null;
 
   if (agent === 'claude') {
     if (to === 'terminal') {
       // Seed the capture cursor at the transcript tail so the terminal
       // capture only folds post-conversion turns.
       const transcript = row.agent_session_id
-        ? findClaudeTranscript(row.agent_session_id)
+        ? findClaudeTranscript(row.agent_session_id, dependencies.claudeProjectsRoot)
         : null;
       if (transcript) {
-        const lines = readLines(transcript);
-        for (let i = lines.length - 1; i >= 0; i--) {
-          const uuid = (lines[i] as { uuid?: string }).uuid;
-          if (uuid) {
-            cursor = uuid;
-            break;
-          }
-        }
+        claudeCheckpoint = readCheckpoint(transcript);
+        cursor = claudeCheckpoint?.uuid ?? null;
       }
-      if (!transcript) clearResume = true;
+      if (!claudeCheckpoint) clearResume = true;
     }
     // terminal → sdk: nothing to move — the transcript is shared and the SDK
     // resumes from the same session id. The capture cursor is terminal-only
@@ -210,22 +213,51 @@ export function convertSessionTransport(
     }
   }
 
-  db.prepare(
-    `UPDATE sessions SET
-       transport = ?,
-       last_captured_transcript_uuid = ?,
-       agent_session_id = CASE WHEN ? THEN NULL ELSE agent_session_id END,
-       claude_session_id = CASE WHEN ? THEN NULL ELSE claude_session_id END,
-       updated_at = ?
-     WHERE id = ?`,
-  ).run(
-    to,
-    cursor,
-    clearResume ? 1 : 0,
-    clearResume ? 1 : 0,
-    new Date().toISOString(),
-    sessionId,
-  );
+  const updatedAt = new Date().toISOString();
+  db.transaction(() => {
+    if (agent === 'claude') {
+      if (to === 'terminal' && claudeCheckpoint) {
+        db.prepare(
+          `INSERT INTO claude_transcript_state (
+            session_id, transcript_identity, complete_offset,
+            last_transcript_uuid, last_conversation_type, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            transcript_identity = excluded.transcript_identity,
+            complete_offset = excluded.complete_offset,
+            last_transcript_uuid = excluded.last_transcript_uuid,
+            last_conversation_type = excluded.last_conversation_type,
+            updated_at = excluded.updated_at`,
+        ).run(
+          sessionId,
+          claudeCheckpoint.transcriptIdentity,
+          claudeCheckpoint.completeOffset,
+          claudeCheckpoint.uuid,
+          claudeCheckpoint.lastConversationType,
+          updatedAt,
+        );
+      } else {
+        db.prepare('DELETE FROM claude_transcript_state WHERE session_id = ?').run(sessionId);
+      }
+    }
+
+    db.prepare(
+      `UPDATE sessions SET
+         transport = ?,
+         last_captured_transcript_uuid = ?,
+         agent_session_id = CASE WHEN ? THEN NULL ELSE agent_session_id END,
+         claude_session_id = CASE WHEN ? THEN NULL ELSE claude_session_id END,
+         updated_at = ?
+       WHERE id = ?`,
+    ).run(
+      to,
+      cursor,
+      clearResume ? 1 : 0,
+      clearResume ? 1 : 0,
+      updatedAt,
+      sessionId,
+    );
+  })();
 
   // resumeCarried=false means there WAS a prior agent thread we couldn't carry
   // (the rollout was unfindable — most notably a codex orchestrator, whose SDK
@@ -235,8 +267,11 @@ export function convertSessionTransport(
   return { resumeCarried: !clearResume };
 }
 
-function findClaudeTranscript(agentSessionId: string): string | null {
-  const root = path.join(homedir(), '.claude', 'projects');
+function findClaudeTranscript(
+  agentSessionId: string,
+  projectsRoot = path.join(homedir(), '.claude', 'projects'),
+): string | null {
+  const root = projectsRoot;
   let entries: string[];
   try {
     entries = readdirSync(root);

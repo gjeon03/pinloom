@@ -11,10 +11,24 @@
 // the parser (../claude-jsonl) stays pure. Schema is owned by the CLI and can
 // shift across versions — every read is defensive (missing file/dir => empty).
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { parseJsonlLines, type JsonlLine } from '../claude-jsonl/index.js';
+import {
+  parseJsonlLine,
+  parseJsonlLines,
+  SYNTHETIC_MODEL,
+  type JsonlLine,
+} from '../claude-jsonl/index.js';
+
+const CHECKPOINT_CHUNK_SIZE = 1 << 20;
+
+export interface ClaudeTranscriptCheckpoint {
+  uuid: string | null;
+  completeOffset: number;
+  transcriptIdentity: string;
+  lastConversationType: 'user' | 'assistant' | null;
+}
 
 export function projectSlug(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
@@ -94,15 +108,88 @@ export function readLines(file: string): JsonlLine[] {
   }
 }
 
+function isMeaningfulConversationLine(line: JsonlLine): line is JsonlLine & {
+  type: 'user' | 'assistant';
+} {
+  return (
+    (line.type === 'user' || line.type === 'assistant') &&
+    !line.isSidechain &&
+    line.message?.model !== SYNTHETIC_MODEL
+  );
+}
+
 /**
- * The uuid of the last line that has one — the checkpoint to diff the next turn
- * against. null for a missing/empty/fresh transcript.
+ * Find a restart checkpoint without loading the entire transcript. Only
+ * newline-terminated records are considered, leaving a concurrently written
+ * trailing JSON fragment outside the durable cursor.
  */
-export function readCheckpoint(file: string): string | null {
-  const lines = readLines(file);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const u = lines[i].uuid;
-    if (typeof u === 'string' && u.length > 0) return u;
+export function readCheckpoint(file: string): ClaudeTranscriptCheckpoint | null {
+  let fd: number;
+  try {
+    fd = openSync(file, 'r');
+  } catch {
+    return null;
   }
-  return null;
+
+  try {
+    const stat = fstatSync(fd);
+    const transcriptIdentity = `${stat.dev}:${stat.ino}`;
+    const chunk = Buffer.allocUnsafe(CHECKPOINT_CHUNK_SIZE);
+    let position = stat.size;
+    let pending = Buffer.alloc(0);
+    let completeOffset: number | null = null;
+    let uuid: string | null = null;
+    let lastConversationType: 'user' | 'assistant' | null = null;
+
+    while (position > 0 && (uuid === null || lastConversationType === null || completeOffset === null)) {
+      const start = Math.max(0, position - CHECKPOINT_CHUNK_SIZE);
+      const requested = position - start;
+      const count = readSync(fd, chunk, 0, requested, start);
+      if (count !== requested) return null;
+
+      const bytes = Buffer.concat([chunk.subarray(0, count), pending]);
+      const bytesStart = start;
+      let end = bytes.length;
+      if (completeOffset === null) {
+        const trailingNewline = bytes.lastIndexOf(0x0a);
+        if (trailingNewline < 0) {
+          position = start;
+          continue;
+        }
+        completeOffset = bytesStart + trailingNewline + 1;
+        end = trailingNewline + 1;
+      }
+
+      while (end > 0 && (uuid === null || lastConversationType === null)) {
+        const previousNewline = end > 1 ? bytes.lastIndexOf(0x0a, end - 2) : -1;
+        if (previousNewline < 0 && bytesStart !== 0) break;
+        const recordStart = previousNewline + 1;
+        const record = bytes.subarray(recordStart, end - 1);
+        const parsed = parseJsonlLine(record.toString('utf8'));
+        if (parsed) {
+          if (uuid === null && typeof parsed.uuid === 'string' && parsed.uuid.length > 0) {
+            uuid = parsed.uuid;
+          }
+          if (lastConversationType === null && isMeaningfulConversationLine(parsed)) {
+            lastConversationType = parsed.type;
+          }
+        }
+        end = previousNewline + 1;
+      }
+
+      pending = bytes.subarray(0, end);
+      position = start;
+    }
+
+    return {
+      uuid,
+      completeOffset: completeOffset ?? 0,
+      transcriptIdentity,
+      lastConversationType,
+    };
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
 }

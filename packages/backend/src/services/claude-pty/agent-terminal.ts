@@ -40,6 +40,7 @@ import {
 } from './transcript.js';
 import { getDb } from '../../db/connection.js';
 import type { StopHookPayload } from './stop-hook-server.js';
+import { createScrollback, type Scrollback } from '../scrollback.js';
 
 // Read per spawn so tests can point it at a mock binary via env.
 const claudeBin = () => process.env.PINLOOM_CLAUDE_BIN ?? 'claude';
@@ -54,7 +55,7 @@ export type TerminalDriver = 'human' | 'dispatch';
 interface AgentTerminalSession {
   pty: IPty;
   launch: BuiltClaudeLaunch;
-  buffer: string;
+  scrollback: Scrollback;
   onData: ((data: string) => void) | null;
   onExit: ((code: number) => void) | null;
   attachId: number;
@@ -168,7 +169,7 @@ async function spawnAgentTerminal(
   const created: AgentTerminalSession = {
     pty: child,
     launch,
-    buffer: '',
+    scrollback: createScrollback(SCROLLBACK_BYTES),
     onData: null,
     onExit: null,
     attachId: 0,
@@ -180,7 +181,7 @@ async function spawnAgentTerminal(
     discoverAbort: null,
   };
   child.onData((d) => {
-    created.buffer = (created.buffer + d).slice(-SCROLLBACK_BYTES);
+    created.scrollback.push(d);
     created.lastDataAt = Date.now();
     created.onData?.(d);
   });
@@ -323,7 +324,7 @@ export async function attachAgentTerminal(
   }
 
   const bound = session;
-  const snapshot = bound.buffer;
+  const snapshot = bound.scrollback.snapshot();
   bound.onData = onData;
   bound.onExit = onExit;
   const myAttachId = (bound.attachId = ++attachSeq);

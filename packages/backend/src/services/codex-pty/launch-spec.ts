@@ -133,7 +133,12 @@ export function buildCodexLaunch(input: CodexLaunchInput): BuiltCodexLaunch {
 
   // argv: interactive TUI (no `exec`). Global options precede the optional
   // `resume <id>` subcommand and the positional seed prompt.
-  const args: string[] = ['--dangerously-bypass-approvals-and-sandbox', '-C', input.cwd];
+  const args: string[] = [
+    '--dangerously-bypass-approvals-and-sandbox',
+    '-C',
+    input.cwd,
+    '--no-alt-screen',
+  ];
   if (input.model) args.push('--model', input.model);
   // Codex reasoning effort via config override; 'max' is claude-only (skip).
   if (input.reasoningEffort && input.reasoningEffort !== 'max') {

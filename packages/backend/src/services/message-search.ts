@@ -182,6 +182,7 @@ export function searchMessages(
     where.push("m.content LIKE ? ESCAPE '\\'");
     params.push(toLikeParam(tok));
   }
+  where.push('m.source_message_id IS NULL');
   const scope = projectScope(opts, params);
   if (scope) where.push(scope);
 

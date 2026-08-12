@@ -145,6 +145,11 @@ export interface Message {
   createdAt: string;
 }
 
+export interface MessagePage {
+  items: Message[];
+  nextCursor: string | null;
+}
+
 // One hit from GET /api/search (full-text session search, knowledge-system v2
 // Phase 1). `excerpt` is a content window around the first match; `highlights`
 // are [start, end) offsets into `excerpt` to emphasise (may be empty when a
@@ -328,6 +333,18 @@ export type TeamDispatchEvent =
       at: string;
     };
 
+export interface CodexContextState {
+  sessionId: string;
+  available: boolean;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  contextWindowTokens: number | null;
+  observedCompactions: number;
+  postCompactionInputTokens: number | null;
+  rolloutBytes: number | null;
+  updatedAt: string | null;
+}
+
 export type WsEvent =
   | { type: 'message'; sessionId: string; message: Message }
   | { type: 'message_updated'; sessionId: string; message: Message }
@@ -365,6 +382,7 @@ export type WsEvent =
   // orchestrator, so it now needs the pinloom MCP server). The backend killed
   // its claude; AgentTerminal re-attaches, respawning with the new config.
   | { type: 'terminal_relaunch'; sessionId: string }
+  | { type: 'codex_context_updated'; sessionId: string; context: CodexContextState }
   // A session was created out-of-band (e.g. an orchestrator spawned a worker via
   // MCP). Channel: `project:${projectId}`. ProjectPage appends it to the tab strip
   // so it shows up live without a refresh. Carries the full Session so the

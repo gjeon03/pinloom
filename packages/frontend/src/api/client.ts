@@ -1,8 +1,10 @@
 import type {
   AgentKind,
   BotKind,
+  CodexContextState,
   HealthResponse,
   Message,
+  MessagePage,
   MessageSearchResult,
   Plan,
   PlanItem,
@@ -457,6 +459,13 @@ export const api = {
 
   listSessions: (projectId: string) =>
     request<Session[]>(`/api/projects/${projectId}/sessions`),
+  getCodexContext: (sessionId: string) =>
+    request<CodexContextState>(`/api/sessions/${sessionId}/codex-context`),
+  rolloverSession: (sessionId: string) =>
+    request<Session>(`/api/sessions/${sessionId}/rollover`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   createSession: (
     projectId: string,
     body: {
@@ -479,6 +488,16 @@ export const api = {
     ),
   listMessages: (sessionId: string) =>
     request<Message[]>(`/api/sessions/${sessionId}/messages`),
+  listMessagePage: (
+    sessionId: string,
+    options: { before?: string; limit?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (options.before !== undefined) params.set('before', options.before);
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+    return request<MessagePage>(`/api/sessions/${sessionId}/messages/page${query}`);
+  },
   sendMessage: (
     sessionId: string,
     body: {

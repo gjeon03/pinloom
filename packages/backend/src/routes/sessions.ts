@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
-import type { Message, MessageRole, Session } from '@pinloom/shared';
+import type { Message, MessagePage, MessageRole, Session } from '@pinloom/shared';
 import { DEFAULT_CLAUDE_MODEL } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import type { ImageInput, ImageMediaType } from '../services/runner.js';
@@ -38,6 +38,11 @@ import {
   isHandoverGenerating,
   regenerateAndSaveTimeline,
 } from '../services/session-handover.js';
+import { getCodexContextState } from '../services/codex-context.js';
+import {
+  CodexRolloverError,
+  rolloverCodexSession,
+} from '../services/codex-rollover.js';
 
 const ALLOWED_IMAGE_MIME: ReadonlySet<ImageMediaType> = new Set<ImageMediaType>([
   'image/jpeg',
@@ -105,6 +110,49 @@ interface MessageRow {
   source_message_id: string | null;
   model: string | null;
   created_at: string;
+}
+
+interface MessagePageRow extends MessageRow {
+  rowid: number;
+}
+
+interface MessagePageCursor {
+  createdAt: string;
+  rowid: number;
+}
+
+const DEFAULT_MESSAGE_PAGE_LIMIT = 100;
+const MAX_MESSAGE_PAGE_LIMIT = 500;
+
+function encodeMessagePageCursor(cursor: MessagePageCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeMessagePageCursor(raw: string): MessagePageCursor | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(raw)) return null;
+  try {
+    const bytes = Buffer.from(raw, 'base64url');
+    if (bytes.toString('base64url') !== raw) return null;
+    const value = JSON.parse(bytes.toString('utf8')) as unknown;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const entries = Object.entries(value);
+    if (entries.length !== 2 || !('createdAt' in value) || !('rowid' in value)) {
+      return null;
+    }
+    const { createdAt, rowid } = value as Record<string, unknown>;
+    if (typeof createdAt !== 'string' || createdAt.length === 0) return null;
+    if (!Number.isSafeInteger(rowid) || (rowid as number) <= 0) return null;
+    return { createdAt, rowid: rowid as number };
+  } catch {
+    return null;
+  }
+}
+
+function parseMessagePageLimit(raw: string | undefined): number | null {
+  if (raw === undefined) return DEFAULT_MESSAGE_PAGE_LIMIT;
+  if (!/^[1-9]\d*$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value <= MAX_MESSAGE_PAGE_LIMIT ? value : null;
 }
 
 const VALID_EFFORTS: ReadonlySet<string> = new Set([
@@ -178,8 +226,16 @@ export function summarizeForPin(content: string): string {
   return stripped.length > 80 ? `${stripped.slice(0, 77)}…` : stripped;
 }
 
-export async function sessionRoutes(app: FastifyInstance) {
+export interface SessionRouteOptions {
+  rolloverSession?: (sessionId: string) => Promise<Session>;
+}
+
+export async function sessionRoutes(
+  app: FastifyInstance,
+  options: SessionRouteOptions = {},
+) {
   const db = getDb();
+  const rolloverSession = options.rolloverSession ?? rolloverCodexSession;
 
   app.get<{ Params: { projectId: string } }>(
     '/api/projects/:projectId/sessions',
@@ -341,6 +397,20 @@ export async function sessionRoutes(app: FastifyInstance) {
   );
 
   app.get<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/codex-context',
+    async (req, reply) => {
+      const exists = db
+        .prepare('SELECT 1 AS present FROM sessions WHERE id = ?')
+        .get(req.params.sessionId);
+      if (!exists) {
+        reply.code(404);
+        return { error: 'session not found' };
+      }
+      return getCodexContextState(req.params.sessionId);
+    },
+  );
+
+  app.get<{ Params: { sessionId: string } }>(
     '/api/sessions/:sessionId/messages',
     async (req) => {
       const rows = db
@@ -351,6 +421,62 @@ export async function sessionRoutes(app: FastifyInstance) {
         )
         .all(req.params.sessionId) as MessageRow[];
       return rows.map(toMessage);
+    },
+  );
+
+  app.get<{
+    Params: { sessionId: string };
+    Querystring: { before?: string; limit?: string };
+  }>(
+    '/api/sessions/:sessionId/messages/page',
+    async (req, reply): Promise<MessagePage | { error: string }> => {
+      const limit = parseMessagePageLimit(req.query.limit);
+      if (limit === null) {
+        reply.code(400);
+        return { error: 'limit must be an integer from 1 to 500' };
+      }
+      const cursor = req.query.before === undefined
+        ? null
+        : decodeMessagePageCursor(req.query.before);
+      if (req.query.before !== undefined && cursor === null) {
+        reply.code(400);
+        return { error: 'invalid before cursor' };
+      }
+
+      const rows = cursor
+        ? db
+            .prepare(
+              `SELECT rowid, * FROM messages
+               WHERE session_id = ?
+                 AND source_message_id IS NULL
+                 AND (created_at < ? OR (created_at = ? AND rowid < ?))
+               ORDER BY created_at DESC, rowid DESC
+               LIMIT ?`,
+            )
+            .all(
+              req.params.sessionId,
+              cursor.createdAt,
+              cursor.createdAt,
+              cursor.rowid,
+              limit + 1,
+            ) as MessagePageRow[]
+        : db
+            .prepare(
+              `SELECT rowid, * FROM messages
+               WHERE session_id = ? AND source_message_id IS NULL
+               ORDER BY created_at DESC, rowid DESC
+               LIMIT ?`,
+            )
+            .all(req.params.sessionId, limit + 1) as MessagePageRow[];
+      const hasOlder = rows.length > limit;
+      const selected = rows.slice(0, limit);
+      const oldest = selected[selected.length - 1];
+      return {
+        items: selected.reverse().map(toMessage),
+        nextCursor: hasOlder && oldest
+          ? encodeMessagePageCursor({ createdAt: oldest.created_at, rowid: oldest.rowid })
+          : null,
+      };
     },
   );
 
@@ -586,6 +712,22 @@ export async function sessionRoutes(app: FastifyInstance) {
         return newSession;
       } catch (err) {
         reply.code(400);
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
+
+  app.post<{ Params: { sessionId: string } }>(
+    '/api/sessions/:sessionId/rollover',
+    async (req, reply) => {
+      try {
+        return await rolloverSession(req.params.sessionId);
+      } catch (err) {
+        if (err instanceof CodexRolloverError) {
+          reply.code(err.status);
+          return { error: err.message };
+        }
+        reply.code(500);
         return { error: err instanceof Error ? err.message : String(err) };
       }
     },
