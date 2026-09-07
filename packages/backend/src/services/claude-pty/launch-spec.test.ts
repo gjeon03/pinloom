@@ -1,6 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
-import { buildClaudeLaunch, buildStopHookCommand } from './launch-spec.js';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import nodePath from 'node:path';
+import { buildClaudeLaunch, buildStopHookCommand, claudePtyDirFor } from './launch-spec.js';
 
 const URL = 'http://127.0.0.1:5555/stop/tok';
 
@@ -103,5 +106,70 @@ describe('buildClaudeLaunch', () => {
     const on = buildClaudeLaunch({ systemPrompt: 'sys', strictMcp: true }, URL);
     expect(on.args).toContain('--strict-mcp-config');
     on.cleanup();
+  });
+});
+
+describe('stable launch dir (terminal mode)', () => {
+  const originalHome = process.env.HOME;
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(nodePath.join(tmpdir(), 'pinloom-claude-stable-'));
+    process.env.HOME = home;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('keeps the dir under ~/.pinloom, out of the $TMPDIR macOS reaps', () => {
+    const b = buildClaudeLaunch({ systemPrompt: '' }, URL, {
+      pinloomSessionId: 'sess-1',
+      stableDir: true,
+    });
+    expect(b.tmpDir).toBe(claudePtyDirFor('sess-1'));
+    expect(b.tmpDir).toContain(nodePath.join('.pinloom', 'claude-pty'));
+    // (HOME is redirected into a tmpdir here, so asserting "not under $TMPDIR"
+    // would be meaningless — the path shape above is what matters.)
+    expect(existsSync(nodePath.join(b.tmpDir, 'stop-forward.mjs'))).toBe(true);
+    expect(existsSync(nodePath.join(b.tmpDir, 'settings.json'))).toBe(true);
+  });
+
+  it('reuses the same dir across spawns of one session', () => {
+    const first = buildClaudeLaunch({ systemPrompt: 'a' }, URL, {
+      pinloomSessionId: 'sess-1',
+      stableDir: true,
+    });
+    const second = buildClaudeLaunch({ systemPrompt: 'b' }, URL, {
+      pinloomSessionId: 'sess-1',
+      stableDir: true,
+    });
+    expect(second.tmpDir).toBe(first.tmpDir);
+  });
+
+  it('drops a previous spawn\'s mcp.json when the new one has no servers', () => {
+    const withMcp = buildClaudeLaunch(
+      { systemPrompt: '', mcpServers: { pinloom: { command: 'node', args: ['s.js'] } } },
+      URL,
+      { pinloomSessionId: 'sess-1', stableDir: true },
+    );
+    const mcpFile = nodePath.join(withMcp.tmpDir, 'mcp.json');
+    expect(existsSync(mcpFile)).toBe(true);
+
+    buildClaudeLaunch({ systemPrompt: '' }, URL, {
+      pinloomSessionId: 'sess-1',
+      stableDir: true,
+    });
+    expect(existsSync(mcpFile)).toBe(false);
+  });
+
+  it('still uses a temp dir without the opt-in (per-run node-session spawns)', () => {
+    const b = buildClaudeLaunch({ systemPrompt: '' }, URL, { pinloomSessionId: 'sess-1' });
+    expect(b.tmpDir).not.toBe(claudePtyDirFor('sess-1'));
+    expect(nodePath.basename(b.tmpDir)).toMatch(/^pinloom-claude-pty-/);
+    b.cleanup();
+    expect(existsSync(b.tmpDir)).toBe(false);
   });
 });

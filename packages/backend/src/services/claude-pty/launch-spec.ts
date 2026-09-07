@@ -8,7 +8,9 @@
 // loads the user's own config alongside it.
 
 import {
+  chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -99,10 +101,42 @@ export interface ClaudeLaunchInput {
 export interface BuiltClaudeLaunch {
   /** argv to pass to pty.spawn(bin, args, …). */
   args: string[];
-  /** The per-session temp dir (also holds materialized images, etc.). */
+  /** The launch dir (settings + forwarder; also materialized images, etc.). */
   tmpDir: string;
-  /** Remove the temp dir. Idempotent, best-effort. */
+  /** Remove the launch dir. Idempotent, best-effort. */
   cleanup(): void;
+}
+
+/**
+ * Stable per-session launch dir, mirroring codex's ~/.pinloom/codex-homes/<id>.
+ *
+ * Terminal-mode sessions outlive any notion of "temporary": the claude TUI stays
+ * up for days. macOS purges $TMPDIR (/var/folders/.../T) entries that have not
+ * been ACCESSED in ~3 days, so a session idle over a weekend lost the very files
+ * it was launched with — most damagingly the Stop-hook forwarder:
+ *
+ *   Stop hook error: Cannot find module '.../T/pinloom-claude-pty-XXwHjk/stop-forward.mjs'
+ *
+ * and that failure is silent to the user: the Stop hook is how pinloom learns a
+ * turn finished, so the conversation quietly stops being written to SQLite —
+ * which design rule 1 says owns the history. Under ~/.pinloom nothing reaps it.
+ */
+export function claudePtyDirFor(sessionId: string): string {
+  return path.join(homedir(), '.pinloom', 'claude-pty', sessionId);
+}
+
+/**
+ * Drop a session's stable launch dir — call on session deletion. Normal teardown
+ * already removes it via cleanup(); this covers the case where no terminal was
+ * running at delete time (e.g. the idle reaper took it earlier), so the dirs
+ * stay bounded by live sessions. Mirrors removeCodexHome.
+ */
+export function removeClaudePtyDir(sessionId: string): void {
+  try {
+    rmSync(claudePtyDirFor(sessionId), { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
 }
 
 /**
@@ -140,9 +174,29 @@ export function buildStopHookCommand(
 export function buildClaudeLaunch(
   input: ClaudeLaunchInput,
   stopHookUrl: string,
-  opts: { pinloomSessionId?: string } = {},
+  opts: {
+    pinloomSessionId?: string;
+    /**
+     * Put the launch dir under ~/.pinloom instead of $TMPDIR — required for
+     * long-lived terminal sessions (see claudePtyDirFor). Short per-run spawns
+     * (node-session) keep the mkdtemp, which is reaped when the run ends.
+     */
+    stableDir?: boolean;
+  } = {},
 ): BuiltClaudeLaunch {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'pinloom-claude-pty-'));
+  const stable = opts.stableDir && opts.pinloomSessionId
+    ? claudePtyDirFor(opts.pinloomSessionId)
+    : null;
+  const tmp = stable ?? mkdtempSync(path.join(tmpdir(), 'pinloom-claude-pty-'));
+  if (stable) {
+    // 0700 to match the mkdtemp we replace: mcp.json can carry a team token.
+    mkdirSync(stable, { recursive: true, mode: 0o700 });
+    try {
+      chmodSync(stable, 0o700); // recursive mkdir skips mode on an existing dir
+    } catch {
+      // best-effort
+    }
+  }
 
   const forwarderPath = path.join(tmp, 'stop-forward.mjs');
   writeFileSync(forwarderPath, FORWARDER_SRC, 'utf8');
@@ -169,9 +223,18 @@ export function buildClaudeLaunch(
   );
 
   let mcpPath: string | null = null;
+  const mcpFile = path.join(tmp, 'mcp.json');
   if (input.mcpServers && Object.keys(input.mcpServers).length > 0) {
-    mcpPath = path.join(tmp, 'mcp.json');
+    mcpPath = mcpFile;
     writeFileSync(mcpPath, JSON.stringify({ mcpServers: input.mcpServers }, null, 2), 'utf8');
+  } else if (stable && existsSync(mcpFile)) {
+    // A reused stable dir must not keep a previous spawn's server list around
+    // (it is never passed on argv, but leaving a stale token file is sloppy).
+    try {
+      rmSync(mcpFile, { force: true });
+    } catch {
+      // best-effort
+    }
   }
 
   const args: string[] = [

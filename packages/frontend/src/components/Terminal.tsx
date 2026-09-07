@@ -105,6 +105,29 @@ export function Terminal({
       }
     };
 
+    // Reattaching replays a CAPPED scrollback snapshot, so for a long-lived
+    // terminal it cannot reproduce the exact screen a running TUI (nvim, less,
+    // an agent CLI) last drew — and those redraw only the cells they believe
+    // changed, leaving fragments of the old frame behind. Step the pty one
+    // column narrower and straight back to make them repaint everything.
+    // Measured against the real CLIs: a bare SIGWINCH with no size change
+    // redraws nothing, and two resizes with no gap coalesce into a no-op;
+    // >=16ms works, 80ms leaves margin. (Mirrors AgentTerminal.)
+    let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+    const forceTuiRepaint = () => {
+      if (ws.readyState !== WebSocket.OPEN || term.cols <= 2) return;
+      const { cols, rows } = term;
+      ws.send(JSON.stringify({ t: 'r', c: cols - 1, r: rows }));
+      if (repaintTimer) clearTimeout(repaintTimer);
+      repaintTimer = setTimeout(() => {
+        repaintTimer = null;
+        if (ws.readyState !== WebSocket.OPEN) return;
+        sentCols = cols;
+        sentRows = rows;
+        ws.send(JSON.stringify({ t: 'r', c: cols, r: rows }));
+      }, 80);
+    };
+
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const debouncedResize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
@@ -132,7 +155,12 @@ export function Terminal({
           replaying = true;
           if (replayTimer) clearTimeout(replayTimer);
           replayTimer = setTimeout(endReplay, 1500);
-          term.write(msg.d, endReplay);
+          const replayed = msg.d;
+          term.write(replayed, () => {
+            endReplay();
+            // Only after a non-empty replay — a fresh shell has no stale frame.
+            if (replayed) forceTuiRepaint();
+          });
         } else {
           term.write(msg.d);
         }
@@ -175,6 +203,7 @@ export function Terminal({
       cancelAnimationFrame(rafId);
       if (resizeTimer) clearTimeout(resizeTimer);
       if (replayTimer) clearTimeout(replayTimer);
+      if (repaintTimer) clearTimeout(repaintTimer);
       clearTimeout(lateFitTimer);
       ro.disconnect();
       disposeCopy();

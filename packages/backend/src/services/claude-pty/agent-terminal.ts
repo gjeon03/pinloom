@@ -151,7 +151,10 @@ async function spawnAgentTerminal(
       initialText: seedText,
     },
     server.url(),
-    { pinloomSessionId: sessionId },
+    // stableDir: this TUI can stay up for days, and $TMPDIR gets reaped after
+    // ~3 idle days — taking the Stop-hook forwarder with it, which silently
+    // ends transcript capture. See claudePtyDirFor.
+    { pinloomSessionId: sessionId, stableDir: true },
   );
 
   // Snapshot existing transcripts BEFORE spawn so the #188 defense can spot the
