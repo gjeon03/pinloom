@@ -27,7 +27,7 @@ import {
 // into the TUI so streaming + native slash commands (/model, /effort, …) come
 // for free. The backend keeps the pty alive across disconnects, so reconnecting
 // reattaches + replays scrollback. Protocol mirrors /ws/terminal:
-//   client→server: {t:'i',d} input · {t:'r',c,r} resize · {t:'k'} repaint
+//   client→server: {t:'i',d} input · {t:'r',c,r} resize
 //   server→client: {t:'o',d} output · {t:'x',code} agent exited
 
 type Status = 'open' | 'exited' | 'disconnected';
@@ -251,6 +251,34 @@ export function AgentTerminal({
       }
       return true;
     };
+    // The replayed scrollback is capped (SCROLLBACK_BYTES), so on a long session
+    // it cannot reproduce the exact screen the TUI last drew — and both TUIs
+    // (claude/Ink, codex/ratatui) then rewrite only the cells they believe
+    // changed, leaving stale fragments of the old status + input box behind.
+    // Dragging the window "fixed" it because a size change makes them drop that
+    // diff and repaint everything.
+    //
+    // So step the pty one column narrower and straight back. Measured against
+    // both real CLIs: a bare SIGWINCH with no size change redraws NOTHING (they
+    // re-read the size, see no change, and skip), and back-to-back resizes with
+    // no gap coalesce into a single no-op. A gap of >=16ms redraws reliably;
+    // 80ms leaves margin. xterm keeps its own grid throughout, so only the pty
+    // is briefly a column narrower.
+    let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+    const forceTuiRepaint = () => {
+      if (disposed || ws.readyState !== WebSocket.OPEN || term.cols <= 2) return;
+      const { cols, rows } = term;
+      ws.send(JSON.stringify({ t: 'r', c: cols - 1, r: rows }));
+      if (repaintTimer) clearTimeout(repaintTimer);
+      repaintTimer = setTimeout(() => {
+        repaintTimer = null;
+        if (disposed || ws.readyState !== WebSocket.OPEN) return;
+        sentCols = cols;
+        sentRows = rows;
+        ws.send(JSON.stringify({ t: 'r', c: cols, r: rows }));
+      }, 80);
+    };
+
     fitAndResizeRef.current = sendResize;
     const initialFitRafId = requestAnimationFrame(sendResize);
 
@@ -306,16 +334,8 @@ export function AgentTerminal({
             // attaching and before its input/resize listener existed. Replay
             // marks that boundary complete, so resend the authoritative grid.
             if (!sendResize()) recomputeViewport();
-            // The replay is a capped scrollback snapshot, so on a long session
-            // it cannot reproduce the exact screen the TUI last drew. The TUI
-            // then rewrites only the cells it thinks changed and leaves stale
-            // fragments of the old status/input box behind. Ask it to repaint
-            // the whole frame now that our grid is final. (Resizing the window
-            // "fixed" this for the same reason.) Only after a non-empty replay
-            // — a fresh spawn has no stale frame to clear.
-            if (msg.d && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ t: 'k' }));
-            }
+            // Only after a non-empty replay — a fresh spawn has no stale frame.
+            if (msg.d) forceTuiRepaint();
           });
         } else {
           term.write(msg.d, recomputeViewport);
@@ -377,6 +397,7 @@ export function AgentTerminal({
       if (openFitRafId !== null) cancelAnimationFrame(openFitRafId);
       if (resizeTimer) clearTimeout(resizeTimer);
       if (replayTimer) clearTimeout(replayTimer);
+      if (repaintTimer) clearTimeout(repaintTimer);
       clearTimeout(lateFitTimer);
       ro.disconnect();
       disposeCopy();

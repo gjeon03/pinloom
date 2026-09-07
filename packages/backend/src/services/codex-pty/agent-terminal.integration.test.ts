@@ -18,7 +18,6 @@ class FakePty {
   readonly pid = 4321;
   readonly writes: string[] = [];
   readonly resizes: Array<[number, number]> = [];
-  readonly signals: string[] = [];
   private dataListener: ((data: string) => void) | null = null;
   private exitListener: ((event: { exitCode: number; signal?: number }) => void) | null = null;
 
@@ -40,13 +39,7 @@ class FakePty {
     this.resizes.push([cols, rows]);
   }
 
-  kill(signal?: string): void {
-    if (signal) {
-      // A real pty.kill(signal) is process.kill(pid, signal) — SIGWINCH just
-      // signals, it never terminates. Record it instead of exiting.
-      this.signals.push(signal);
-      return;
-    }
+  kill(): void {
     this.exitListener?.({ exitCode: 0 });
   }
 
@@ -149,21 +142,6 @@ beforeEach(() => {
 afterEach(() => {
   for (const sessionId of sessionIds) killCodexTerminal(sessionId);
   sessionIds.clear();
-});
-
-describe('repaint after reattach', () => {
-  it('signals SIGWINCH without resizing or killing the pty', async () => {
-    const { handle, pty } = await createTerminal();
-    pty.resizes.length = 0;
-
-    handle.repaint();
-
-    // The replayed scrollback is capped, so it cannot reproduce the TUI's exact
-    // last frame; SIGWINCH makes the TUI drop its diff and redraw everything.
-    expect(pty.signals).toEqual(['SIGWINCH']);
-    // Deliberately NOT a resize — the grid is already correct.
-    expect(pty.resizes).toEqual([]);
-  });
 });
 
 describe('reattach grid', () => {

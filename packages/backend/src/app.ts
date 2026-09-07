@@ -288,8 +288,7 @@ export async function createApp() {
     });
 
     // Per-session agent terminal — runs the real `claude` TUI for one session
-    // (terminal-chat mode). Keyed by session. Wire protocol is /ws/terminal's
-    // plus {t:'k'} — "replay rendered, repaint the TUI" (see handle.repaint).
+    // (terminal-chat mode). Same wire protocol as /ws/terminal; keyed by session.
     fastify.get('/ws/agent-terminal', { websocket: true }, async (socket, request) => {
       socket.on('error', (err) => fastify.log.warn({ err: String(err) }, 'ws socket error (ignored)'));
       if (!isAllowedWsOrigin(request.headers.origin)) {
@@ -373,10 +372,6 @@ export async function createApp() {
           handle.write(msg.d);
         } else if (msg.t === 'r' && typeof msg.c === 'number' && typeof msg.r === 'number') {
           handle.resize(msg.c, msg.r);
-        } else if (msg.t === 'k') {
-          // Client finished rendering the replay — ask the TUI to repaint the
-          // whole frame so nothing of the old one shows through.
-          handle.repaint();
         }
       });
     });
