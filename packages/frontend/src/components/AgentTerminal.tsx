@@ -233,9 +233,20 @@ export function AgentTerminal({
     });
     // Drop xterm→pty data while replaying scrollback (xterm auto-replies to
     // DA/DSR queries embedded in the replay; forwarding those to the TUI echoes junk).
+    // Mount fires several fits (rAF, onopen, fonts.ready, a late timer, the
+    // ResizeObserver) and most land on the same grid. Every {t:'r'} the backend
+    // forwards is a pty resize, and a pty resize to a DIFFERENT size SIGWINCHes
+    // the TUI into a repaint — so only send when the grid actually moved, or the
+    // TUI repaints several times per tab switch and leaves its input box
+    // half-erased. Seeded with the grid the WS query already carried.
+    let sentCols = initialFitSucceeded ? term.cols : 0;
+    let sentRows = initialFitSucceeded ? term.rows : 0;
     const sendResize = () => {
       if (disposed || !fitPreservingBottom()) return false;
+      if (term.cols === sentCols && term.rows === sentRows) return true;
       if (ws.readyState === WebSocket.OPEN) {
+        sentCols = term.cols;
+        sentRows = term.rows;
         ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows }));
       }
       return true;

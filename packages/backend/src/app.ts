@@ -44,7 +44,7 @@ import {
 } from './services/codex-pty/agent-terminal.js';
 import {
   createReplayFirstOutput,
-  parseAgentTerminalGrid,
+  parseClientGrid,
 } from './services/agent-terminal-protocol.js';
 import { loadUserEnvIntoProcess } from './services/user-env.js';
 import { drainStrandedQueuesOnBoot } from './services/runner.js';
@@ -305,7 +305,9 @@ export async function createApp() {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
       };
       const output = createReplayFirstOutput(send);
-      const grid = parseAgentTerminalGrid(q);
+      // null when the client's fit failed (pane not laid out yet) — attach then
+      // leaves a live pty's size alone instead of SIGWINCHing it to a placeholder.
+      const grid = parseClientGrid(q);
       let detach: (() => void) | null = null;
       let socketClosed = false;
       socket.on('close', () => {
@@ -323,8 +325,8 @@ export async function createApp() {
       try {
         result = await attach(
           sessionId,
-          grid.cols,
-          grid.rows,
+          grid?.cols ?? null,
+          grid?.rows ?? null,
           output.onData,
           (code) => send({ t: 'x', code }),
         );

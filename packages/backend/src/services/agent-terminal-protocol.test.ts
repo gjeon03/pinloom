@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createReplayFirstOutput,
   parseAgentTerminalGrid,
+  parseClientGrid,
 } from './agent-terminal-protocol.js';
 
 describe('parseAgentTerminalGrid', () => {
@@ -29,6 +30,22 @@ describe('parseAgentTerminalGrid', () => {
   ])('falls back atomically for invalid query %#', (query) => {
     expect(parseAgentTerminalGrid(query)).toEqual({ cols: 120, rows: 40 });
   });
+});
+
+describe('parseClientGrid', () => {
+  it('reports a real measurement', () => {
+    expect(parseClientGrid({ cols: '173', rows: '61' })).toEqual({ cols: 173, rows: 61 });
+  });
+
+  it.each([{}, { cols: '80' }, { rows: '24' }, { cols: '0', rows: '24' }])(
+    'reports null rather than a placeholder for %#',
+    (query) => {
+      // Distinct from parseAgentTerminalGrid's fallback: a live pty must not be
+      // resized to a default the client never measured.
+      expect(parseClientGrid(query)).toBeNull();
+      expect(parseAgentTerminalGrid(query)).toEqual({ cols: 120, rows: 40 });
+    },
+  );
 });
 
 describe('createReplayFirstOutput', () => {

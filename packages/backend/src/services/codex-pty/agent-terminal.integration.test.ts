@@ -17,6 +17,7 @@ const fakes = vi.hoisted(() => {
 class FakePty {
   readonly pid = 4321;
   readonly writes: string[] = [];
+  readonly resizes: Array<[number, number]> = [];
   private dataListener: ((data: string) => void) | null = null;
   private exitListener: ((event: { exitCode: number; signal?: number }) => void) | null = null;
 
@@ -34,7 +35,9 @@ class FakePty {
     this.writes.push(data);
   }
 
-  resize(): void {}
+  resize(cols: number, rows: number): void {
+    this.resizes.push([cols, rows]);
+  }
 
   kill(): void {
     this.exitListener?.({ exitCode: 0 });
@@ -139,6 +142,24 @@ beforeEach(() => {
 afterEach(() => {
   for (const sessionId of sessionIds) killCodexTerminal(sessionId);
   sessionIds.clear();
+});
+
+describe('reattach grid', () => {
+  it('resizes a live pty only once the client has measured its own grid', async () => {
+    const { sessionId, pty } = await createTerminal();
+    pty.resizes.length = 0;
+
+    // The client omits cols/rows when its fit failed (pane not laid out yet).
+    // Resizing to a placeholder here repaints the TUI at the wrong width, and
+    // the real grid landing a beat later leaves its input box half-erased.
+    const unmeasured = await attachCodexTerminal(sessionId, null, null, vi.fn(), vi.fn());
+    expect(unmeasured.ok).toBe(true);
+    expect(pty.resizes).toEqual([]);
+
+    const measured = await attachCodexTerminal(sessionId, 100, 30, vi.fn(), vi.fn());
+    expect(measured.ok).toBe(true);
+    expect(pty.resizes).toEqual([[100, 30]]);
+  });
 });
 
 describe('exclusive Codex checkpoint dispatch', () => {

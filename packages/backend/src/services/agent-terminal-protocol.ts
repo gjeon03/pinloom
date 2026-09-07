@@ -1,5 +1,5 @@
-const DEFAULT_COLS = 120;
-const DEFAULT_ROWS = 40;
+export const DEFAULT_COLS = 120;
+export const DEFAULT_ROWS = 40;
 
 export interface AgentTerminalGrid {
   cols: number;
@@ -25,16 +25,31 @@ function parseBoundedDecimal(
   return parsed;
 }
 
+/**
+ * The grid the CLIENT measured, or null when it sent none/an invalid pair.
+ *
+ * Null is meaningful, not just "use the default": the client omits cols/rows
+ * when its fit failed (the pane had no usable size yet at mount). Resizing a
+ * LIVE pty to a placeholder in that case SIGWINCHes the TUI at the wrong size,
+ * and the corrected size a beat later leaves its input box half-redrawn — so
+ * callers must be able to tell "no measurement yet" from a real one.
+ */
+export function parseClientGrid(query: {
+  cols?: unknown;
+  rows?: unknown;
+}): AgentTerminalGrid | null {
+  const cols = parseBoundedDecimal(query.cols, 20, 1000);
+  const rows = parseBoundedDecimal(query.rows, 5, 500);
+  if (cols === null || rows === null) return null;
+  return { cols, rows };
+}
+
+/** The client's grid, falling back atomically to the spawn default. */
 export function parseAgentTerminalGrid(query: {
   cols?: unknown;
   rows?: unknown;
 }): AgentTerminalGrid {
-  const cols = parseBoundedDecimal(query.cols, 20, 1000);
-  const rows = parseBoundedDecimal(query.rows, 5, 500);
-  if (cols === null || rows === null) {
-    return { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
-  }
-  return { cols, rows };
+  return parseClientGrid(query) ?? { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
 }
 
 export function createReplayFirstOutput(
