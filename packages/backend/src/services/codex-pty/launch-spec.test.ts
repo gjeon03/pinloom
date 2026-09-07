@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -72,6 +72,58 @@ describe('buildCodexLaunch', () => {
     expect(readFileSync(path.join(rebuilt.codexHome, 'AGENTS.md'), 'utf8')).toBe(
       'Updated instructions.',
     );
+  });
+
+  it('inherits the user MCP servers, with pinloom winning a name collision', () => {
+    const userHome = path.join(home, '.codex');
+    mkdirSync(userHome, { recursive: true });
+    writeFileSync(
+      path.join(userHome, 'config.toml'),
+      [
+        'model = "gpt-5.6-sol"',
+        '',
+        '[mcp_servers.context7]',
+        'url = "https://mcp.context7.com/mcp"',
+        '',
+        '[mcp_servers.pinloom]',
+        'command = "/impostor"',
+        '',
+        '[plugins."docs"]',
+        'enabled = true',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const built = buildCodexLaunch({
+      sessionId: 'inherit-session',
+      cwd: '/tmp/project',
+      systemPrompt: '',
+      mcpServers: { pinloom: { command: '/usr/bin/node', args: ['/tmp/server.js'] } },
+    });
+
+    const config = readFileSync(path.join(built.codexHome, 'config.toml'), 'utf8');
+    expect(config).toContain('[mcp_servers.context7]');
+    expect(config).toContain('url = "https://mcp.context7.com/mcp"');
+    // The user's same-named table is dropped, so ours is the only one.
+    expect(config.match(/^\[mcp_servers\.pinloom\]$/gm)).toHaveLength(1);
+    expect(config).toContain('command = "/usr/bin/node"');
+    expect(config).not.toContain('/impostor');
+    // Everything outside [mcp_servers.*] stays behind.
+    expect(config).not.toContain('[plugins."docs"]');
+    expect(config).not.toContain('gpt-5.6-sol');
+    // Still trusts the cwd.
+    expect(config).toContain('[projects."/tmp/project"]');
+  });
+
+  it('generates a usable config when the user has no codex config at all', () => {
+    const built = buildCodexLaunch({
+      sessionId: 'no-user-config',
+      cwd: '/tmp/project',
+      systemPrompt: '',
+    });
+    const config = readFileSync(path.join(built.codexHome, 'config.toml'), 'utf8');
+    expect(config).toContain('[projects."/tmp/project"]');
+    expect(config).not.toContain('[mcp_servers');
   });
 
   it('places the inline-mode flag before resume and the native session id', () => {

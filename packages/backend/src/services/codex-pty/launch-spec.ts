@@ -13,13 +13,16 @@
 //     mkdtemp that's cleaned on teardown, so `codex resume <id>` can find the
 //     rollout across reconnects/restarts.
 //
-// NEVER touches the user's real ~/.codex — we point CODEX_HOME at our own dir and
-// only copy auth.json over so the spawned codex stays logged in.
+// NEVER writes to the user's real ~/.codex — we point CODEX_HOME at our own dir.
+// It is only READ from: auth.json is copied over so the spawned codex stays
+// logged in, and its `[mcp_servers.*]` tables are inherited into the generated
+// config.toml (see codex-user-config.ts) so a session isn't left with no MCP.
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { McpStdioServerConfig } from '../agents/types.js';
+import { inheritedMcpServerToml } from '../codex-user-config.js';
 
 // TOML string escaping — mirrors codex-adapter.ts's helper (duplicated, not
 // imported, to keep the adapter byte-identical; both are tiny pure functions).
@@ -121,6 +124,17 @@ export function buildCodexLaunch(input: CodexLaunchInput): BuiltCodexLaunch {
       }
       lines.push('');
     }
+  }
+  // Inherit the user's own MCP servers from their real config. Ours are emitted
+  // first and same-named user tables are dropped, so a name collision can never
+  // shadow pinloom's team tooling. Without this a codex terminal session starts
+  // with NO MCP servers at all, since this file is regenerated on every spawn.
+  const inheritedMcp = inheritedMcpServerToml(
+    sourceHome,
+    Object.keys(input.mcpServers ?? {}),
+  );
+  if (inheritedMcp.length > 0) {
+    lines.push(inheritedMcp, '');
   }
   writeFileSync(path.join(codexHome, 'config.toml'), lines.join('\n'), 'utf8');
 
