@@ -61,5 +61,25 @@ try {
 quiet('xattr -dr com.apple.quarantine /Applications/pinloom.app');
 
 console.log('▶ relaunching…');
-run('open /Applications/pinloom.app');
+// macOS `open` hands the caller's environment to the app. Deploying from inside
+// a Claude Code session therefore leaked that session's runtime markers into the
+// app — and from there into every agent pty pinloom spawns, where an inherited
+// CLAUDE_CODE_CHILD_SESSION turns the spawned claude's transcript saving OFF and
+// silently stops history capture. cleanChildEnv now strips these too, but scrub
+// them here as well so the app process itself never carries them.
+const CLAUDE_MARKERS = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_PID',
+  'CLAUDE_PLUGIN_DATA',
+  'CLAUDE_PLUGIN_ROOT',
+  'CLAUDE_EFFORT',
+];
+run(`env ${CLAUDE_MARKERS.map((k) => `-u ${k}`).join(' ')} open /Applications/pinloom.app`);
 console.log('✓ deploy complete — running app is the freshly built bundle.');

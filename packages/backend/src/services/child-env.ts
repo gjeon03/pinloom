@@ -7,12 +7,39 @@
 // `next dev` / `vite` / CRA — all of which honor $PORT — bound that port
 // instead of their own default (Next's 3000). Stripping these makes a terminal
 // spawned by pinloom behave like a plain terminal.
+//
+// The second class is Claude Code's OWN per-process runtime markers. If pinloom's
+// backend is itself started from inside a Claude Code session — `pnpm dev` typed
+// into one, or the desktop app relaunched by a script running in one (macOS
+// `open` propagates the caller's environment) — then every agent pty we spawn
+// inherits them, and the `claude` we launch believes it is a NESTED child of
+// that session. The visible damage:
+//
+//   ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker
+//
+// With no transcript there is nothing for the capture to ingest, so the
+// conversation silently stops being written to pinloom's SQLite — the exact
+// failure mode design rule 1 exists to prevent. These are per-process identity,
+// never user configuration, so a spawned agent must never see them.
 const STRIP = new Set([
   'PORT', // dev servers honor it → wrong port; the reported bug
   'PINLOOM_DB_PATH',
   'PINLOOM_SERVE_STATIC',
   'PINLOOM_STATIC_DIR',
   'PINLOOM_TEST_MODE',
+  // Claude Code runtime markers (see above).
+  'CLAUDECODE',
+  'CLAUDE_CODE_CHILD_SESSION', // the one that disables transcript saving
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_PID',
+  'CLAUDE_PLUGIN_DATA',
+  'CLAUDE_PLUGIN_ROOT',
+  'CLAUDE_EFFORT', // a parent session's /effort must not override our --effort
 ]);
 
 // A GUI-launched process inherits NO locale: the desktop app is started from
