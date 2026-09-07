@@ -26,6 +26,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { inheritedMcpServerToml } from '../codex-user-config.js';
 import { UserPromptStream } from './message-stream.js';
 import type {
   AgentAdapter,
@@ -138,10 +139,10 @@ function buildCodexHome(
   }
 
   const lines: string[] = [];
-  // Inherit user's default model preference if set in their real config —
-  // we intentionally don't copy the whole config.toml because the user's
-  // own [mcp_servers.*] entries would shadow ours by name. Pinloom-side
-  // model selection still works via --model flag downstream.
+  // Ours first; the user's own [mcp_servers.*] are appended below with any
+  // same-named table dropped, so they can never shadow pinloom's by name.
+  // The rest of the real config.toml stays out on purpose — pinloom-side model
+  // selection already flows through the --model flag downstream.
   for (const [name, server] of Object.entries(mcpServers)) {
     lines.push(`[mcp_servers.${name}]`);
     lines.push(`command = ${tomlString(server.command)}`);
@@ -155,6 +156,14 @@ function buildCodexHome(
       }
     }
     lines.push('');
+  }
+
+  // A non-orchestrator SDK run keeps the real CODEX_HOME and so already sees the
+  // user's servers; without this an orchestrator would silently lose them just
+  // by gaining the team MCP wiring.
+  const inheritedMcp = inheritedMcpServerToml(sourceHome, Object.keys(mcpServers));
+  if (inheritedMcp.length > 0) {
+    lines.push(inheritedMcp, '');
   }
 
   writeFileSync(path.join(dir, 'config.toml'), lines.join('\n'), 'utf8');
