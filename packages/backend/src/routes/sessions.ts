@@ -24,6 +24,7 @@ import { cancelExecRun, execShellCommand, isExecRunning } from '../services/exec
 import { claudeTransport } from '../services/agents/index.js';
 import { getUiConfig } from '../services/ui-config.js';
 import { killAgentTerminal } from '../services/claude-pty/agent-terminal.js';
+import { removeClaudePtyDir } from '../services/claude-pty/launch-spec.js';
 import { killCodexTerminal, removeCodexHome } from '../services/codex-pty/agent-terminal.js';
 import { sweepDispatchesForDeletedWorker } from '../services/dispatches.js';
 import { handoffFromSession, injectPinIntoSession } from '../services/handoff.js';
@@ -782,6 +783,7 @@ export async function sessionRoutes(
       killAgentTerminal(sessionId);
       killCodexTerminal(sessionId);
       removeCodexHome(sessionId);
+      removeClaudePtyDir(sessionId);
       // Fail over any dispatch in flight to this worker — its completion
       // signal vanishes with the session, so a team_wait would otherwise
       // hang. Dispatches have no FK to sessions (they're audit/handle rows
