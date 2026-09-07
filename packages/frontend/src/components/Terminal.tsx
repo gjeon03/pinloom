@@ -84,13 +84,23 @@ export function Terminal({
       }
     };
 
+    // Mount fires several fits (onopen, fonts.ready, a late timer, the
+    // ResizeObserver) that mostly land on the same grid, and every {t:'r'} the
+    // backend forwards is a pty resize — a size CHANGE SIGWINCHes whatever is
+    // running into a repaint. Only send when the grid actually moved.
+    // (Mirrors AgentTerminal.)
+    let sentCols = 0;
+    let sentRows = 0;
     const sendResize = () => {
       try {
         fit.fit();
       } catch {
         return;
       }
+      if (term.cols === sentCols && term.rows === sentRows) return;
       if (ws.readyState === WebSocket.OPEN) {
+        sentCols = term.cols;
+        sentRows = term.rows;
         ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows }));
       }
     };

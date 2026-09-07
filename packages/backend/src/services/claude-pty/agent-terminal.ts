@@ -40,6 +40,7 @@ import {
 } from './transcript.js';
 import { getDb } from '../../db/connection.js';
 import type { StopHookPayload } from './stop-hook-server.js';
+import { DEFAULT_COLS, DEFAULT_ROWS } from '../agent-terminal-protocol.js';
 import { createScrollback, type Scrollback } from '../scrollback.js';
 
 // Read per spawn so tests can point it at a mock binary via env.
@@ -293,8 +294,9 @@ function beginTurn(session: AgentTerminalSession, sessionId: string): void {
 
 export async function attachAgentTerminal(
   sessionId: string,
-  cols: number,
-  rows: number,
+  /** Client-measured grid, or null when it hasn't measured its pane yet. */
+  cols: number | null,
+  rows: number | null,
   onData: (data: string) => void,
   onExit: (code: number) => void,
 ): Promise<AttachAgentResult> {
@@ -308,14 +310,18 @@ export async function attachAgentTerminal(
       if (sessions.size + spawning.size >= MAX_AGENT_TERMINALS) {
         return { ok: false, reason: 'capped' };
       }
-      inflight = spawnAgentTerminal(sessionId, cols, rows);
+      inflight = spawnAgentTerminal(sessionId, cols ?? DEFAULT_COLS, rows ?? DEFAULT_ROWS);
       spawning.set(sessionId, inflight);
       inflight.finally(() => spawning.delete(sessionId));
     }
     const result = await inflight;
     if ('reason' in result) return { ok: false, reason: result.reason };
     session = result;
-  } else {
+  } else if (cols !== null && rows !== null) {
+    // Only when the client actually measured. Resizing a live TUI to a
+    // placeholder makes it repaint at the wrong width, and the real size
+    // arriving moments later leaves the input box half-erased — the client
+    // sends its grid as soon as it has one, so waiting costs nothing.
     try {
       session.pty.resize(cols, rows);
     } catch {

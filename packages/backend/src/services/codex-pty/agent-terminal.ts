@@ -26,6 +26,7 @@ function beginCodexTurn(session: { turnInFlight: boolean }, sessionId: string): 
 import { submitToTui } from '../claude-pty/tui-input.js';
 import { buildCodexLaunch, codexHomeFor, type BuiltCodexLaunch } from './launch-spec.js';
 import { startCodexCapture, stopCodexCapture, awaitCodexTurn } from './transcript-capture.js';
+import { DEFAULT_COLS, DEFAULT_ROWS } from '../agent-terminal-protocol.js';
 
 const codexBin = () => process.env.PINLOOM_CODEX_BIN ?? 'codex';
 const SCROLLBACK_BYTES = 200 * 1024;
@@ -140,8 +141,9 @@ function teardownCodexSession(sessionId: string): void {
 
 export async function attachCodexTerminal(
   sessionId: string,
-  cols: number,
-  rows: number,
+  /** Client-measured grid, or null when it hasn't measured its pane yet. */
+  cols: number | null,
+  rows: number | null,
   onData: (data: string) => void,
   onExit: (code: number) => void,
 ): Promise<CodexAttachResult | CodexAttachFail> {
@@ -153,14 +155,16 @@ export async function attachCodexTerminal(
       if (sessions.size + spawning.size >= MAX_CODEX_TERMINALS) {
         return { ok: false, reason: 'capped' };
       }
-      inflight = spawnCodexTerminal(sessionId, cols, rows);
+      inflight = spawnCodexTerminal(sessionId, cols ?? DEFAULT_COLS, rows ?? DEFAULT_ROWS);
       spawning.set(sessionId, inflight);
       inflight.finally(() => spawning.delete(sessionId));
     }
     const result = await inflight;
     if ('reason' in result) return { ok: false, reason: result.reason };
     session = result;
-  } else {
+  } else if (cols !== null && rows !== null) {
+    // See attachAgentTerminal: a placeholder resize on a live TUI leaves its
+    // input box half-redrawn once the real grid lands.
     try {
       session.pty.resize(cols, rows);
     } catch {
