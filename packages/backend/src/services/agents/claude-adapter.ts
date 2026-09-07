@@ -7,6 +7,7 @@
 
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
 import type { ImageInput, ImageMediaType } from '../runner-types.js';
+import { ensureResumeTranscriptAvailable } from '../claude-pty/transcript.js';
 import { UserPromptStream } from './message-stream.js';
 import type {
   AgentAdapter,
@@ -183,6 +184,9 @@ class ClaudeAdapterImpl implements AgentAdapter {
       includePartialMessages: true,
       thinking: thinkingOption,
     };
+    // Same move-then-cold-start mismatch as the terminal path: the transcript
+    // may still be filed under the session's previous project cwd.
+    ensureResumeTranscriptAvailable(args.cwd, args.resume);
     if (args.resume) options.resume = args.resume;
     // Fork on resume to switch the model mid-conversation (a plain `--resume`
     // pins the thread to its original model and ignores `--model`). `--fork-session`
