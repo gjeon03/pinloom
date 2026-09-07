@@ -27,7 +27,7 @@ import {
 // into the TUI so streaming + native slash commands (/model, /effort, …) come
 // for free. The backend keeps the pty alive across disconnects, so reconnecting
 // reattaches + replays scrollback. Protocol mirrors /ws/terminal:
-//   client→server: {t:'i',d} input · {t:'r',c,r} resize
+//   client→server: {t:'i',d} input · {t:'r',c,r} resize · {t:'k'} repaint
 //   server→client: {t:'o',d} output · {t:'x',code} agent exited
 
 type Status = 'open' | 'exited' | 'disconnected';
@@ -306,6 +306,16 @@ export function AgentTerminal({
             // attaching and before its input/resize listener existed. Replay
             // marks that boundary complete, so resend the authoritative grid.
             if (!sendResize()) recomputeViewport();
+            // The replay is a capped scrollback snapshot, so on a long session
+            // it cannot reproduce the exact screen the TUI last drew. The TUI
+            // then rewrites only the cells it thinks changed and leaves stale
+            // fragments of the old status/input box behind. Ask it to repaint
+            // the whole frame now that our grid is final. (Resizing the window
+            // "fixed" this for the same reason.) Only after a non-empty replay
+            // — a fresh spawn has no stale frame to clear.
+            if (msg.d && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ t: 'k' }));
+            }
           });
         } else {
           term.write(msg.d, recomputeViewport);

@@ -58,6 +58,8 @@ export interface CodexTerminalHandle {
   buffer: string;
   write(data: string): void;
   resize(cols: number, rows: number): void;
+  /** Full TUI redraw after a reattach — see AgentTerminalHandle.repaint. */
+  repaint(): void;
   detach(): void;
 }
 
@@ -195,6 +197,13 @@ export async function attachCodexTerminal(
     resize(c: number, r: number) {
       try {
         bound.pty.resize(c, r);
+      } catch {
+        // best-effort
+      }
+    },
+    repaint() {
+      try {
+        bound.pty.kill('SIGWINCH');
       } catch {
         // best-effort
       }

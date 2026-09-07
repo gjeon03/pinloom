@@ -109,6 +109,16 @@ export interface AgentTerminalHandle {
   buffer: string;
   write(data: string): void;
   resize(cols: number, rows: number): void;
+  /**
+   * Make the TUI redraw its entire frame, by signalling a window change without
+   * changing the window. The replayed scrollback is capped at SCROLLBACK_BYTES,
+   * so on a long session it CANNOT reconstruct the exact screen the TUI last
+   * drew — and the TUI (Ink) only rewrites the cells it believes changed, so
+   * stale fragments of the old status/input box survive underneath. SIGWINCH
+   * makes it drop that diff and repaint everything. Same trick tmux/screen use
+   * on reattach; it is also why dragging the window "fixes" the display.
+   */
+  repaint(): void;
   /** Client socket closed — keep the pty alive. */
   detach(): void;
 }
@@ -355,6 +365,15 @@ export async function attachAgentTerminal(
     resize(c: number, r: number) {
       try {
         bound.pty.resize(c, r);
+      } catch {
+        // best-effort
+      }
+    },
+    repaint() {
+      try {
+        // Signal only — node-pty's kill() is process.kill(pid, signal), and
+        // SIGWINCH never terminates. The pty size is deliberately unchanged.
+        bound.pty.kill('SIGWINCH');
       } catch {
         // best-effort
       }
