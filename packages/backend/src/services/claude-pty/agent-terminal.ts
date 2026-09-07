@@ -34,6 +34,7 @@ import {
   isRescanPending,
 } from './transcript-capture.js';
 import {
+  ensureResumeTranscriptAvailable,
   listSessionFiles,
   discoverNewSessionFile,
   sessionIdOf,
@@ -138,6 +139,11 @@ async function spawnAgentTerminal(
   // human to click through it) doesn't hang, and fresh-project sessions start
   // clean. No-op once the cwd is already trusted.
   preTrustClaudeCwd(launchInput.cwd);
+
+  // A session moved to another project derives a NEW cwd, but its transcript is
+  // still filed under the old one — `--resume` would fail with "No conversation
+  // found" and exit 1. No-op unless that mismatch is real.
+  ensureResumeTranscriptAvailable(launchInput.cwd, launchInput.resume);
 
   const server = await getStopHookServer();
   const launch = buildClaudeLaunch(

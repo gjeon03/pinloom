@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -9,6 +17,7 @@ import {
   sessionIdOf,
   listSessionFiles,
   discoverNewSessionFile,
+  ensureResumeTranscriptAvailable,
   readLines,
   readCheckpoint,
 } from './transcript.js';
@@ -127,5 +136,72 @@ describe('transcript fs helpers', () => {
     await expect(
       discoverNewSessionFile(cwd, before, { home, timeoutMs: 120, pollMs: 30 }),
     ).rejects.toThrow(/did not appear/);
+  });
+});
+
+describe('ensureResumeTranscriptAvailable', () => {
+  const OLD = '/tmp/proj-old';
+  const NEW = '/tmp/proj-new';
+  const SID = '5b9be3af-dc50-4788-b076-064c6ace5098';
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(path.join(tmpdir(), 'pinloom-resume-guard-'));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  function seedOldProject(withSidecar = false) {
+    const dir = projectDir(OLD, home);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${SID}.jsonl`), '{"type":"user"}\n', 'utf8');
+    if (withSidecar) {
+      mkdirSync(path.join(dir, SID), { recursive: true });
+      writeFileSync(path.join(dir, SID, 'note.txt'), 'sidecar', 'utf8');
+    }
+  }
+
+  it('copies a moved session\'s transcript under the new cwd slug', () => {
+    seedOldProject();
+    ensureResumeTranscriptAvailable(NEW, SID, home);
+
+    // `claude --resume` only ever looks under the CURRENT cwd's slug.
+    expect(readFileSync(sessionFilePath(NEW, SID, home), 'utf8')).toBe('{"type":"user"}\n');
+    // Copy, not move — the original stays as a backup.
+    expect(existsSync(sessionFilePath(OLD, SID, home))).toBe(true);
+  });
+
+  it('brings the same-named sidecar directory along', () => {
+    seedOldProject(true);
+    ensureResumeTranscriptAvailable(NEW, SID, home);
+    expect(
+      readFileSync(path.join(projectDir(NEW, home), SID, 'note.txt'), 'utf8'),
+    ).toBe('sidecar');
+  });
+
+  it('leaves an existing transcript untouched', () => {
+    seedOldProject();
+    const dir = projectDir(NEW, home);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${SID}.jsonl`), 'already-here', 'utf8');
+
+    ensureResumeTranscriptAvailable(NEW, SID, home);
+    expect(readFileSync(sessionFilePath(NEW, SID, home), 'utf8')).toBe('already-here');
+  });
+
+  it('is a no-op for a fresh session and when the transcript exists nowhere', () => {
+    seedOldProject();
+    ensureResumeTranscriptAvailable(NEW, null, home);
+    expect(existsSync(sessionFilePath(NEW, SID, home))).toBe(false);
+
+    // Unknown id: degrade quietly and let claude report it as it does today.
+    ensureResumeTranscriptAvailable(NEW, 'no-such-session', home);
+    expect(existsSync(sessionFilePath(NEW, 'no-such-session', home))).toBe(false);
+  });
+
+  it('does not throw when ~/.claude/projects does not exist yet', () => {
+    expect(() => ensureResumeTranscriptAvailable(NEW, SID, home)).not.toThrow();
   });
 });

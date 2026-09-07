@@ -11,7 +11,18 @@
 // the parser (../claude-jsonl) stays pure. Schema is owned by the CLI and can
 // shift across versions — every read is defensive (missing file/dir => empty).
 
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
+import {
+  closeSync,
+  cpSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  statSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import {
@@ -58,6 +69,68 @@ export function listSessionFiles(cwd: string, home = homedir()): Set<string> {
     );
   } catch {
     return new Set();
+  }
+}
+
+/**
+ * Make a resumed session's transcript reachable from `cwd` before launching.
+ *
+ * `claude --resume <id>` looks for the transcript ONLY under the slug of its
+ * CURRENT cwd. pinloom's "move session to another project" is metadata-only —
+ * it rewrites `project_id`, and cwd is derived from that project on every launch
+ * — so the next COLD start of a moved session resolves a new slug while the
+ * transcript still sits under the old one. claude then reports
+ *
+ *   No conversation found with session ID: <id>
+ *
+ * and exits 1, which the UI surfaces as "Agent exited abnormally" next to a
+ * "Close tab (delete session)" button — one click from losing the conversation
+ * for good. A cwd rename hits the same wall.
+ *
+ * So: if the transcript is missing under `cwd`, look for it under every other
+ * project slug and COPY it (plus the same-named sidecar dir claude keeps beside
+ * it) into place. Copy, not move, so the original stays as a backup — and the
+ * copy makes the next launch hit the fast path. Silent no-op when there is
+ * nothing to resume, when the file is already there, or when it exists nowhere:
+ * this only ever restores a launch that would otherwise have failed.
+ */
+export function ensureResumeTranscriptAvailable(
+  cwd: string,
+  resumeSessionId: string | null | undefined,
+  home = homedir(),
+): void {
+  if (!resumeSessionId) return; // fresh session — nothing to resume
+  const target = sessionFilePath(cwd, resumeSessionId, home);
+  if (existsSync(target)) return; // already where claude will look
+
+  const projectsRoot = path.join(home, '.claude', 'projects');
+  const targetDir = projectDir(cwd, home);
+  let source: string | null = null;
+  try {
+    for (const slug of readdirSync(projectsRoot)) {
+      const dir = path.join(projectsRoot, slug);
+      if (dir === targetDir) continue;
+      const candidate = path.join(dir, `${resumeSessionId}.jsonl`);
+      if (existsSync(candidate)) {
+        source = candidate;
+        break;
+      }
+    }
+  } catch {
+    return; // no projects dir yet — nothing to recover
+  }
+  if (!source) return; // genuinely gone; let claude report it as it would today
+
+  try {
+    mkdirSync(targetDir, { recursive: true });
+    cpSync(source, target);
+    // claude keeps a same-named directory beside the .jsonl for some sessions.
+    const sidecar = source.slice(0, -'.jsonl'.length);
+    if (existsSync(sidecar) && statSync(sidecar).isDirectory()) {
+      cpSync(sidecar, path.join(targetDir, resumeSessionId), { recursive: true });
+    }
+  } catch {
+    // best-effort: a failed copy leaves the pre-existing failure mode intact
   }
 }
 
