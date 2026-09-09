@@ -11,13 +11,13 @@ export interface ModelOption {
 
 export const CLAUDE_MODELS: ModelOption[] = [
   {
-    id: 'claude-opus-4-8',
-    label: 'Opus 4.8',
+    id: 'claude-opus-5',
+    label: 'Opus 5',
     description: 'Latest Opus — best for complex work (pinloom default)',
   },
   {
-    id: 'claude-opus-4-8[1m]',
-    label: 'Opus 4.8 (1M)',
+    id: 'claude-opus-5[1m]',
+    label: 'Opus 5 (1M)',
     description: 'Most capable — 1M context, billed as extra usage',
   },
   {
@@ -26,19 +26,19 @@ export const CLAUDE_MODELS: ModelOption[] = [
     description: 'Use whatever your local Claude Code CLI is configured for',
   },
   {
-    id: 'claude-opus-4-7[1m]',
-    label: 'Opus 4.7 (1M)',
-    description: 'Previous-generation Opus — CLI hides it, still usable by id',
+    id: 'claude-sonnet-5',
+    label: 'Sonnet 5',
+    description: 'Best for everyday tasks — cheaper than Sonnet 4.6 ($2/$10 per Mtok)',
+  },
+  {
+    id: 'claude-opus-4-8[1m]',
+    label: 'Opus 4.8 (1M)',
+    description: 'Previous-generation Opus — still usable by id',
   },
   {
     id: 'claude-sonnet-4-6',
     label: 'Sonnet 4.6',
-    description: 'Best for everyday tasks',
-  },
-  {
-    id: 'claude-sonnet-4-6[1m]',
-    label: 'Sonnet 4.6 (1M)',
-    description: '1M context — billed as extra usage ($3/$15 per Mtok)',
+    description: 'Previous-generation Sonnet',
   },
   {
     id: 'claude-haiku-4-5-20251001',
