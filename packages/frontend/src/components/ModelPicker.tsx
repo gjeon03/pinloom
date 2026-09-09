@@ -11,19 +11,20 @@ export interface ModelOption {
 
 export const CLAUDE_MODELS: ModelOption[] = [
   {
+    id: null,
+    label: 'CLI default',
+    description:
+      'Follow your local Claude Code CLI (what new sessions use). Picking anything else pins this session to it.',
+  },
+  {
     id: 'claude-opus-5',
     label: 'Opus 5',
-    description: 'Latest Opus — best for complex work (pinloom default)',
+    description: 'Latest Opus — best for complex work',
   },
   {
     id: 'claude-opus-5[1m]',
     label: 'Opus 5 (1M)',
     description: 'Most capable — 1M context, billed as extra usage',
-  },
-  {
-    id: null,
-    label: 'CLI default',
-    description: 'Use whatever your local Claude Code CLI is configured for',
   },
   {
     id: 'claude-sonnet-5',

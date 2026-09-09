@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import type { Message, MessagePage, MessageRole, Session } from '@pinloom/shared';
-import { DEFAULT_CLAUDE_MODEL } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import type { ImageInput, ImageMediaType } from '../services/runner.js';
 import {
@@ -284,20 +283,18 @@ export async function sessionRoutes(
       )
       .get(req.params.projectId) as { max: number };
     const nextOrder = maxRow.max + 1;
-    // Default new claude sessions to the latest Opus explicitly (matches the
-    // user's interactive terminal) rather than null — the PATH-resolved claude
-    // binary's built-in default lags (resolved to 4.7). Codex keeps its own
-    // CLI default (null). The user can still change the model per session.
-    // A fixed model in the UI config wins (picker hidden → use the configured
-    // model). Otherwise the pinned default. Codex keeps its CLI default (null).
+    // New sessions store NULL and follow the local CLI's own default, for both
+    // agents. pinloom used to pin an explicit Opus id here because the CLI's
+    // built-in default lagged a generation; that stopped being true, and the
+    // stale pin then held every new session behind whatever the user had
+    // actually configured. Following the CLI is self-maintaining — no bump per
+    // release — and a user who wants a specific model picks it per session,
+    // which stores that id and freezes the session on it.
+    // Exception: an admin-pinned picker (hidden → one configured model) wins.
     const uiPickers = getUiConfig().pickers;
     const fixedModel = uiPickers.model;
     const defaultModel =
-      agent === 'claude'
-        ? fixedModel.mode === 'fixed'
-          ? fixedModel.fixed
-          : DEFAULT_CLAUDE_MODEL
-        : null;
+      agent === 'claude' && fixedModel.mode === 'fixed' ? fixedModel.fixed : null;
     // A fixed effort (picker hidden) is applied at creation; 'default' / shown
     // leaves it NULL (adapter default), settable later from the picker.
     const fixedEffort = uiPickers.effort;
