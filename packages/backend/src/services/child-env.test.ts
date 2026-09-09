@@ -70,6 +70,7 @@ describe('cleanChildEnv', () => {
       CLAUDE_CODE_SESSION_ID: 'parent-session',
       CLAUDE_CODE_BRIDGE_SESSION_ID: 'bridge',
       CLAUDE_CODE_ENTRYPOINT: 'cli',
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_EXECPATH: '/somewhere/claude',
       CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/cc.sock',
       CLAUDE_CODE_MESSAGING_TOKEN: 'tok',
