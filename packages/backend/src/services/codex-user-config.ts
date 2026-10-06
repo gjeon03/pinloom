@@ -15,10 +15,10 @@
 // a verbatim copy carries all of them, including keys we don't know about.
 //
 // Deliberately NOT inherited: `[plugins.*]` / `[marketplaces.*]` (they resolve
-// against the real home's caches, so re-homing them invites startup failures)
-// and top-level model keys (pinloom passes `--model` / `-c` on argv, which win
-// over config anyway). The source is re-read on every spawn, so edits to
-// ~/.codex/config.toml land in the next session launch.
+// against the real home's caches, so re-homing them invites startup failures).
+// Model defaults are inherited separately, before any TOML tables. Explicit
+// session selections still win through `--model` / `-c`. The source is re-read
+// on every spawn, so edits to ~/.codex/config.toml land in the next launch.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -78,13 +78,28 @@ const TABLE_HEADER = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/;
 /** Toggle multi-line-string state for a line, so a `[` inside one isn't read as a header. */
 function trackMultiline(line: string, open: string | null): string | null {
   let state = open;
+  let quote: string | null = null;
   for (let i = 0; i < line.length; i++) {
+    if ((state === '"""' || quote === '"') && line[i] === '\\') {
+      i++;
+      continue;
+    }
     const three = line.slice(i, i + 3);
-    if (three !== '"""' && three !== "'''") continue;
-    if (state === null) state = three;
-    else if (state === three) state = null;
-    else continue;
-    i += 2;
+    if (state) {
+      if (three === state) {
+        state = null;
+        i += 2;
+      }
+    } else if (quote) {
+      if (line[i] === quote) quote = null;
+    } else if (line[i] === '#') {
+      break;
+    } else if (three === '"""' || three === "'''") {
+      state = three;
+      i += 2;
+    } else if (line[i] === '"' || line[i] === "'") {
+      quote = line[i];
+    }
   }
   return state;
 }
@@ -95,6 +110,15 @@ function trackMultiline(line: string, open: string | null): string | null {
  * never be shadowed by a same-named user server.
  */
 export function extractMcpServerTables(text: string, exclude: Set<string>): string[] {
+  return extractTables(text, (segments) =>
+    segments.length >= 2 &&
+    segments[0] === 'mcp_servers' &&
+    segments[1].length > 0 &&
+    !exclude.has(segments[1]),
+  );
+}
+
+function extractTables(text: string, include: (segments: string[]) => boolean): string[] {
   const blocks: string[] = [];
   let block: string[] = [];
   let keep = false;
@@ -115,11 +139,7 @@ export function extractMcpServerTables(text: string, exclude: Set<string>): stri
       if (header) {
         flush();
         const segments = splitDottedKey(header[1]);
-        keep =
-          segments.length >= 2 &&
-          segments[0] === 'mcp_servers' &&
-          segments[1].length > 0 &&
-          !exclude.has(segments[1]);
+        keep = include(segments);
         if (keep) block.push(line);
         continue;
       }
@@ -129,6 +149,45 @@ export function extractMcpServerTables(text: string, exclude: Set<string>): stri
   }
   flush();
   return blocks;
+}
+
+const MODEL_KEYS = new Set([
+  'model',
+  'model_provider',
+  'model_reasoning_effort',
+  'model_reasoning_summary',
+  'model_verbosity',
+  'model_context_window',
+  'model_auto_compact_token_limit',
+  'service_tier',
+]);
+
+/** Model defaults for an isolated home. Emit before any generated TOML tables. */
+export function inheritedModelToml(sourceHome: string): string {
+  let text: string;
+  try {
+    text = readFileSync(path.join(sourceHome, 'config.toml'), 'utf8');
+  } catch {
+    return '';
+  }
+
+  const lines: string[] = [];
+  let multiline: string | null = null;
+  let keep = false;
+  for (const line of text.split('\n')) {
+    if (multiline === null) {
+      if (TABLE_HEADER.test(line)) break;
+      const assignment = /^\s*([^=]+?)\s*=/.exec(line);
+      const segments = assignment ? splitDottedKey(assignment[1]) : [];
+      keep = (segments.length === 1 && MODEL_KEYS.has(segments[0])) ||
+        segments[0] === 'model_providers';
+    }
+    if (keep) lines.push(line);
+    multiline = trackMultiline(line, multiline);
+  }
+  // A custom provider must accompany model_provider or Codex cannot resolve it.
+  lines.push(...extractTables(text, (segments) => segments[0] === 'model_providers'));
+  return lines.join('\n');
 }
 
 /**

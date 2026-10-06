@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   extractMcpServerTables,
   inheritedMcpServerToml,
+  inheritedModelToml,
   splitDottedKey,
 } from './codex-user-config.js';
 
@@ -130,10 +131,64 @@ describe('inheritedMcpServerToml', () => {
 
   it('is empty when the user has no config file', () => {
     expect(inheritedMcpServerToml(home)).toBe('');
+    expect(inheritedModelToml(home)).toBe('');
+  });
+
+  it('inherits model defaults and providers without unrelated settings or nested model keys', () => {
+    writeFileSync(path.join(home, 'config.toml'), [
+      '# An example delimiter: """',
+      'instructions = """',
+      'model = "not-a-setting"',
+      '[not-a-table]',
+      '"""',
+      '"model" = "configured-model"',
+      "'model_reasoning_effort' = 'high'",
+      'model_provider = "custom"',
+      'model_context_window = 200000',
+      'model_auto_compact_token_limit = 180000',
+      'service_tier = "fast"',
+      'approval_policy = "on-request"',
+      '[model_providers.custom]',
+      'name = "Custom provider"',
+      'base_url = "https://example.com/v1"',
+      '[plugins.docs]',
+      'enabled = true',
+      '[projects."/tmp/project"]',
+      'model = "nested-model"',
+    ].join('\n'));
+
+    const inherited = inheritedModelToml(home);
+    expect(inherited).toContain('"model" = "configured-model"');
+    expect(inherited).toContain("'model_reasoning_effort' = 'high'");
+    expect(inherited).toContain('model_context_window = 200000');
+    expect(inherited).toContain('model_auto_compact_token_limit = 180000');
+    expect(inherited).toContain('service_tier = "fast"');
+    expect(inherited).toContain('[model_providers.custom]');
+    expect(inherited).toContain('base_url = "https://example.com/v1"');
+    expect(inherited).not.toContain('not-a-setting');
+    expect(inherited).not.toContain('nested-model');
+    expect(inherited).not.toContain('approval_policy');
+    expect(inherited).not.toContain('[plugins');
   });
 
   it('is empty when the user config declares no servers', () => {
     writeFileSync(path.join(home, 'config.toml'), 'model = "gpt-5.6-sol"\n', 'utf8');
     expect(inheritedMcpServerToml(home)).toBe('');
+  });
+
+  it.each([
+    'model_providers = { custom = { name = "Custom", base_url = "https://example.com/v1" } }',
+    'model_providers.custom.name = "Custom"\nmodel_providers.custom.base_url = "https://example.com/v1"',
+  ])('retains root-level provider definitions (%s)', (provider) => {
+    writeFileSync(path.join(home, 'config.toml'), [
+      'model_provider = "custom"',
+      provider,
+      '[features]',
+      'multi_agent = true',
+    ].join('\n'));
+    const inherited = inheritedModelToml(home);
+    expect(inherited).toContain('model_provider = "custom"');
+    expect(inherited).toContain(provider);
+    expect(inherited).not.toContain('[features]');
   });
 });

@@ -1,7 +1,26 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanChildEnv } from './child-env.js';
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe('cleanChildEnv', () => {
+  it('restores terminal color when launched by a non-interactive parent', () => {
+    vi.stubEnv('TERM', 'dumb');
+    vi.stubEnv('COLORTERM', '');
+    vi.stubEnv('NO_COLOR', '1');
+    vi.stubEnv('FORCE_COLOR', '0');
+    vi.stubEnv('CLICOLOR', '0');
+    vi.stubEnv('CLICOLOR_FORCE', '0');
+
+    const env = cleanChildEnv();
+    expect(env.TERM).toBe('xterm-256color');
+    expect(env.COLORTERM).toBe('truecolor');
+    for (const key of ['NO_COLOR', 'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE']) {
+      expect(env).not.toHaveProperty(key);
+    }
+    expect(process.env.NO_COLOR).toBe('1');
+  });
+
   it('strips PORT so spawned dev servers (next/vite) use their own default', () => {
     const prev = process.env.PORT;
     process.env.PORT = '4788';

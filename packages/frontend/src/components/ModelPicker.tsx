@@ -16,36 +16,6 @@ export const CLAUDE_MODELS: ModelOption[] = [
     description:
       'Follow your local Claude Code CLI (what new sessions use). Picking anything else pins this session to it.',
   },
-  {
-    id: 'claude-opus-5',
-    label: 'Opus 5',
-    description: 'Latest Opus — best for complex work',
-  },
-  {
-    id: 'claude-opus-5[1m]',
-    label: 'Opus 5 (1M)',
-    description: 'Most capable — 1M context, billed as extra usage',
-  },
-  {
-    id: 'claude-sonnet-5',
-    label: 'Sonnet 5',
-    description: 'Best for everyday tasks — cheaper than Sonnet 4.6 ($2/$10 per Mtok)',
-  },
-  {
-    id: 'claude-opus-4-8[1m]',
-    label: 'Opus 4.8 (1M)',
-    description: 'Previous-generation Opus — still usable by id',
-  },
-  {
-    id: 'claude-sonnet-4-6',
-    label: 'Sonnet 4.6',
-    description: 'Previous-generation Sonnet',
-  },
-  {
-    id: 'claude-haiku-4-5-20251001',
-    label: 'Haiku 4.5',
-    description: 'Fastest for quick answers',
-  },
 ];
 
 export const CODEX_MODELS: ModelOption[] = [
@@ -53,21 +23,6 @@ export const CODEX_MODELS: ModelOption[] = [
     id: null,
     label: 'CLI default',
     description: "Use whatever your local Codex CLI is configured for (~/.codex/config.toml)",
-  },
-  {
-    id: 'gpt-5.5',
-    label: 'GPT-5.5',
-    description: 'Frontier model for complex coding, research, and real-world work',
-  },
-  {
-    id: 'gpt-5.4',
-    label: 'GPT-5.4',
-    description: 'Strong model for everyday coding',
-  },
-  {
-    id: 'gpt-5.4-mini',
-    label: 'GPT-5.4 mini',
-    description: 'Small, fast, cost-efficient model for simpler coding tasks',
   },
 ];
 
@@ -270,7 +225,7 @@ export function ModelPicker({
                     setOpen(false);
                   }
                 }}
-                placeholder={agent === 'codex' ? 'e.g. gpt-5.3-codex' : 'e.g. claude-opus-5'}
+                placeholder="Exact model ID (optional override)"
                 spellCheck={false}
                 autoComplete="off"
                 className="flex-1 min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[11px] text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-accent)]"

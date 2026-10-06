@@ -139,21 +139,26 @@ export function FeatureSettings() {
             <span>{t('settings.model')}</span>
             <select
               className={selectClass}
-              value={pickers.model.mode === 'shown' ? '__shown__' : pickers.model.fixed}
+              value={pickers.model.mode === 'shown' ? '__shown__' : (pickers.model.fixed ?? '')}
               onChange={(e) => {
                 const v = e.target.value;
                 void setPicker('model', {
                   mode: v === '__shown__' ? 'shown' : 'fixed',
-                  fixed: v === '__shown__' ? pickers.model.fixed : v,
+                  fixed: v === '__shown__' ? pickers.model.fixed : (v || null),
                 });
               }}
             >
               <option value="__shown__">{t('settings.showPicker')}</option>
-              {CLAUDE_MODELS.filter((m) => m.id).map((m) => (
-                <option key={m.id} value={m.id as string}>
+              {CLAUDE_MODELS.map((m) => (
+                <option key={m.id ?? 'default'} value={m.id ?? ''}>
                   {t('settings.fixed', { value: m.label })}
                 </option>
               ))}
+              {pickers.model.fixed && !CLAUDE_MODELS.some((m) => m.id === pickers.model.fixed) && (
+                <option value={pickers.model.fixed}>
+                  {t('settings.fixed', { value: pickers.model.fixed })}
+                </option>
+              )}
             </select>
           </div>
           {/* Effort */}

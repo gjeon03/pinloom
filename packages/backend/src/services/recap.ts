@@ -15,7 +15,7 @@
 // wiki edits). Degrade-safe: empty corpus → graceful, never throws into a request.
 
 import type { Database } from 'better-sqlite3';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-sdk.js';
 import { searchMessagesHybrid } from './message-search.js';
 import type { EmbeddingProvider } from './embeddings/types.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';
@@ -25,7 +25,6 @@ import { WIKI_VECTORS, readWikiPage, wikiTitle } from './wiki-indexer.js';
 import { getVectorMeta, knn } from './vector-store.js';
 import { isVectorAvailable } from '../db/connection.js';
 
-const DEFAULT_RECAP_MODEL = 'claude-sonnet-4-6';
 const RECAP_TIMEOUT_MS = 5 * 60_000;
 const ANSWER_HITS = 12;
 const TIMELINE_HITS = 8;
@@ -54,7 +53,7 @@ function splitTimelineDocId(docId: string): { projectId: string; date: string } 
 }
 
 // prompt + system → text. Injectable for tests.
-export type RunRecap = (prompt: string, system: string, model: string) => Promise<string>;
+export type RunRecap = (prompt: string, system: string, model?: string) => Promise<string>;
 
 const defaultRunRecap: RunRecap = async (prompt, system, model) => {
   const abortController = new AbortController();
@@ -63,7 +62,8 @@ const defaultRunRecap: RunRecap = async (prompt, system, model) => {
     prompt,
     options: {
       systemPrompt: system,
-      model,
+      settingSources: ['user', 'project', 'local'],
+      ...(model ? { model } : {}),
       maxTurns: 1,
       permissionMode: 'bypassPermissions',
       allowedTools: [],
@@ -284,7 +284,7 @@ export async function answerOverCorpus(
   const answer = await (opts.runRecap ?? defaultRunRecap)(
     prompt,
     answerSystem(opts.language ?? 'ko'),
-    opts.model ?? DEFAULT_RECAP_MODEL,
+    opts.model,
   );
   return { answer: answer.trim(), sources };
 }
@@ -379,7 +379,7 @@ export async function generateRecap(
   const markdown = await (opts.runRecap ?? defaultRunRecap)(
     prompt,
     recapSystem(opts.kind, opts.language ?? 'ko'),
-    opts.model ?? DEFAULT_RECAP_MODEL,
+    opts.model,
   );
   return { markdown: markdown.trim(), empty: false };
 }

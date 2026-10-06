@@ -22,7 +22,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from 'n
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { McpStdioServerConfig } from '../agents/types.js';
-import { inheritedMcpServerToml } from '../codex-user-config.js';
+import { inheritedMcpServerToml, inheritedModelToml } from '../codex-user-config.js';
 
 // TOML string escaping — mirrors codex-adapter.ts's helper (duplicated, not
 // imported, to keep the adapter byte-identical; both are tiny pure functions).
@@ -105,7 +105,7 @@ export function buildCodexLaunch(input: CodexLaunchInput): BuiltCodexLaunch {
 
   // config.toml: pre-trust the cwd (so the headless TUI skips the trust dialog and
   // can load our config), enable hooks off, and declare our MCP server(s).
-  const lines: string[] = [];
+  const lines: string[] = [inheritedModelToml(sourceHome), ''];
   lines.push(`[projects.${tomlString(input.cwd)}]`);
   lines.push('trust_level = "trusted"');
   lines.push('');

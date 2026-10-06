@@ -7,11 +7,10 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from '../claude-sdk.js';
 
 const execFileP = promisify(execFile);
 
-const DEFAULT_DISTILL_MODEL = 'claude-sonnet-4-6';
 const DISTILL_TIMEOUT_MS = 5 * 60_000;
 // Bound how much transcript we feed the model.
 const SNAPSHOT_CHAR_BUDGET = 100_000;
@@ -80,7 +79,7 @@ export interface DistillInput {
 }
 
 // prompt -> markdown entry. Injectable for tests.
-export type RunDistill = (prompt: string, model: string) => Promise<string>;
+export type RunDistill = (prompt: string, model?: string) => Promise<string>;
 
 export const DISTILL_SYSTEM_PROMPT = `You maintain a developer's personal WORK JOURNAL. Given one day's AI coding-session transcripts and that project's git commits, write a concise dated entry capturing WHAT was done and—crucially—WHY (the reasoning, decisions, and discarded options visible in the conversation). The git commits are the WHAT; the conversation is the WHY. Join them.
 
@@ -143,7 +142,8 @@ const defaultRunDistill: RunDistill = async (prompt, model) => {
     prompt,
     options: {
       systemPrompt: DISTILL_SYSTEM_PROMPT,
-      model,
+      settingSources: ['user', 'project', 'local'],
+      ...(model ? { model } : {}),
       // 2, not 1: a single-turn cap fails with "reached maximum number of turns
       // (1)" whenever the model spends its only turn on a thinking block or a
       // (denied) tool attempt before emitting the summary text. allowedTools is
@@ -184,6 +184,6 @@ export async function distillDay(
   opts: { runDistill?: RunDistill; model?: string } = {},
 ): Promise<string> {
   const run = opts.runDistill ?? defaultRunDistill;
-  const md = (await run(buildPrompt(input), opts.model ?? DEFAULT_DISTILL_MODEL)).trim();
+  const md = (await run(buildPrompt(input), opts.model)).trim();
   return md ? `${md}\n` : '';
 }

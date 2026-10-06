@@ -12,7 +12,7 @@ import {
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-sdk.js';
 import { getDb } from '../db/connection.js';
 
 const WIKI_ROOT = path.join(os.homedir(), '.pinloom', 'wiki');
@@ -20,8 +20,6 @@ const PAGES_DIR = path.join(WIKI_ROOT, 'pages');
 const SCHEMA_FILE = path.join(WIKI_ROOT, '_schema.md');
 const INDEX_FILE = path.join(WIKI_ROOT, 'index.md');
 const LEGACY_PROJECTS_DIR = path.join(WIKI_ROOT, 'projects');
-
-const DEFAULT_SYNC_MODEL = 'claude-sonnet-4-6';
 
 const AUTO_SECTION_OPEN = '<!-- pinloom:auto-section -->';
 const AUTO_SECTION_CLOSE = '<!-- /pinloom:auto-section -->';
@@ -674,7 +672,7 @@ export async function runWikiSync(args: {
   sessionId: string;
   model?: string;
 }): Promise<SyncResult> {
-  const { sessionId, model = DEFAULT_SYNC_MODEL } = args;
+  const { sessionId, model } = args;
 
   const existing = pendingBySession.get(sessionId);
   if (existing) return existing;
@@ -713,7 +711,7 @@ export async function runWikiSync(args: {
 
 async function runWikiSyncInner(args: {
   sessionId: string;
-  model: string;
+  model?: string;
 }): Promise<SyncResult> {
   const { sessionId, model } = args;
 
@@ -771,7 +769,8 @@ async function runWikiSyncInner(args: {
     options: {
       cwd: WIKI_ROOT,
       systemPrompt: buildSyncSystemPrompt(scopes),
-      model,
+      settingSources: ['user', 'project', 'local'],
+      ...(model ? { model } : {}),
       maxTurns: 30,
       permissionMode: 'bypassPermissions',
       allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep'],
@@ -995,7 +994,7 @@ export async function runSandboxedSync(args: {
   syncedThroughMessageId: string | null;
   messageCount: number;
 }> {
-  const { sessionId, model = DEFAULT_SYNC_MODEL } = args;
+  const { sessionId, model } = args;
 
   const ctx = loadSessionContext(sessionId);
   const allProjects = loadAllProjects();
@@ -1069,7 +1068,8 @@ export async function runSandboxedSync(args: {
         options: {
           cwd: tmpRoot,
           systemPrompt: buildSyncSystemPrompt(scopes) + sandboxAddendum,
-          model,
+          settingSources: ['user', 'project', 'local'],
+          ...(model ? { model } : {}),
           maxTurns: 30,
           permissionMode: 'bypassPermissions',
           allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep'],

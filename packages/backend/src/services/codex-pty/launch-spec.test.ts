@@ -108,9 +108,11 @@ describe('buildCodexLaunch', () => {
     expect(config.match(/^\[mcp_servers\.pinloom\]$/gm)).toHaveLength(1);
     expect(config).toContain('command = "/usr/bin/node"');
     expect(config).not.toContain('/impostor');
-    // Everything outside [mcp_servers.*] stays behind.
+    // Model defaults survive isolation; unrelated plugin settings stay behind.
     expect(config).not.toContain('[plugins."docs"]');
-    expect(config).not.toContain('gpt-5.6-sol');
+    expect(config).toContain('model = "gpt-5.6-sol"');
+    expect(config.indexOf('model =')).toBeLessThan(config.indexOf('[projects.'));
+    expect(built.args).not.toContain('--model');
     // Still trusts the cwd.
     expect(config).toContain('[projects."/tmp/project"]');
   });
@@ -124,6 +126,26 @@ describe('buildCodexLaunch', () => {
     const config = readFileSync(path.join(built.codexHome, 'config.toml'), 'utf8');
     expect(config).toContain('[projects."/tmp/project"]');
     expect(config).not.toContain('[mcp_servers');
+  });
+
+  it('refreshes user defaults on relaunch while explicit selections stay on argv', () => {
+    const userHome = path.join(home, '.codex');
+    mkdirSync(userHome, { recursive: true });
+    const configPath = path.join(userHome, 'config.toml');
+    writeFileSync(configPath, 'model = "user-default"\nmodel_reasoning_effort = "high"\n');
+    const input = { sessionId: 'refresh', cwd: '/tmp/project', systemPrompt: '' };
+    const built = buildCodexLaunch({ ...input, model: 'session-model', reasoningEffort: 'low' });
+    expect(built.args).toContain('session-model');
+    expect(built.args).toContain('model_reasoning_effort=low');
+    expect(readFileSync(path.join(built.codexHome, 'config.toml'), 'utf8')).toContain('user-default');
+
+    writeFileSync(configPath, 'model = "updated-default"\n');
+    const relaunched = buildCodexLaunch(input);
+    const config = readFileSync(path.join(relaunched.codexHome, 'config.toml'), 'utf8');
+    expect(config).toContain('updated-default');
+    expect(config).not.toContain('user-default');
+    expect(config).not.toContain('model_reasoning_effort');
+    expect(relaunched.args).not.toContain('--model');
   });
 
   it('places the inline-mode flag before resume and the native session id', () => {

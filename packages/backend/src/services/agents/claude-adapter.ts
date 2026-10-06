@@ -5,7 +5,8 @@
 // surfaced to the SDK's prompt AsyncIterable so it picks them up at the
 // next turn boundary instead of restarting.
 
-import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
+import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
+import { query } from '../claude-sdk.js';
 import type { ImageInput, ImageMediaType } from '../runner-types.js';
 import { ensureResumeTranscriptAvailable } from '../claude-pty/transcript.js';
 import { UserPromptStream } from './message-stream.js';
@@ -179,7 +180,7 @@ class ClaudeAdapterImpl implements AgentAdapter {
       // `.claude/` + CLAUDE.md. The SDK defaults to `[]` ("isolation mode")
       // which is why pinloom workers couldn't see any of that even though
       // the files were present on disk.
-      settingSources: ['user', 'project'],
+      settingSources: ['user', 'project', 'local'],
       abortController: args.abortController,
       includePartialMessages: true,
       thinking: thinkingOption,

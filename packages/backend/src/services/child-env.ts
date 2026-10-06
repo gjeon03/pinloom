@@ -27,6 +27,12 @@ const STRIP = new Set([
   'PINLOOM_SERVE_STATIC',
   'PINLOOM_STATIC_DIR',
   'PINLOOM_TEST_MODE',
+  // Non-interactive launchers can disable color in their own output. Our
+  // children run in xterm.js PTYs and must detect that terminal independently.
+  'NO_COLOR',
+  'FORCE_COLOR',
+  'CLICOLOR',
+  'CLICOLOR_FORCE',
   // Claude Code runtime markers (see above).
   'CLAUDECODE',
   'CLAUDE_CODE_CHILD_SESSION', // the one that disables transcript saving
@@ -69,5 +75,7 @@ export function cleanChildEnv(): { [key: string]: string } {
     if (typeof v === 'string' && !STRIP.has(k)) env[k] = v;
   }
   applyUtf8LocaleDefault(env);
+  env.TERM = 'xterm-256color';
+  env.COLORTERM = 'truecolor';
   return env;
 }

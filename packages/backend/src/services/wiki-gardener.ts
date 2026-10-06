@@ -12,7 +12,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Database } from 'better-sqlite3';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-sdk.js';
 import type { WikiProposal, WikiProposalKind } from '@pinloom/shared';
 import { getWikiRoot } from './wiki-reader.js';
 import { createProposal } from './wiki-proposals.js';
@@ -71,7 +71,6 @@ export class GardenerError extends Error {
   }
 }
 
-const DEFAULT_GARDENER_MODEL = 'claude-sonnet-4-6';
 // Bound how much wiki text we feed the model so a huge wiki can't blow the
 // context (and the per-turn cost). Pages beyond this are skipped this run.
 const SNAPSHOT_CHAR_BUDGET = 120_000;
@@ -80,7 +79,7 @@ const SNAPSHOT_CHAR_BUDGET = 120_000;
 const GARDENER_TIMEOUT_MS = 5 * 60_000;
 const KINDS = new Set<WikiProposalKind>(['edit_section', 'archive_page']);
 
-export type RunAgent = (prompt: string, model: string) => Promise<string>;
+export type RunAgent = (prompt: string, model?: string) => Promise<string>;
 
 // Real SDK call: read-only (no Edit/Write tools), collect the final text.
 const defaultRunAgent: RunAgent = async (prompt, model) => {
@@ -91,7 +90,8 @@ const defaultRunAgent: RunAgent = async (prompt, model) => {
     options: {
       cwd: getWikiRoot(),
       systemPrompt: GARDENER_SYSTEM_PROMPT,
-      model,
+      settingSources: ['user', 'project', 'local'],
+      ...(model ? { model } : {}),
       maxTurns: 20,
       permissionMode: 'bypassPermissions',
       allowedTools: ['Read', 'Glob', 'Grep'],
@@ -305,7 +305,7 @@ export async function runGardener(
   const prompt = renderDuplicateHints(hints) + snapshot;
   const text = await (opts.runAgent ?? defaultRunAgent)(
     prompt,
-    opts.model ?? DEFAULT_GARDENER_MODEL,
+    opts.model,
   );
   const raw = parseProposals(text);
 

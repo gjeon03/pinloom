@@ -4,7 +4,7 @@
 // mode (agent-terminal.ts), and any future caller spawn claude identically.
 //
 // NEVER touches the user's global ~/.claude/settings.json — the Stop hook lives
-// only in the temp `--settings` file; `--setting-sources user,project` still
+// only in the temp `--settings` file; `--setting-sources user,project,local` still
 // loads the user's own config alongside it.
 
 import {
@@ -242,14 +242,16 @@ export function buildClaudeLaunch(
     '--settings',
     settingsPath,
     '--setting-sources',
-    'user,project',
+    'user,project,local',
     // Non-interactive automation: no permission prompts.
     '--dangerously-skip-permissions',
   ];
   if (input.systemPrompt.length > 0) {
     args.push('--append-system-prompt', input.systemPrompt);
   }
-  if (input.model) args.push('--model', input.model);
+  // Omitting --model restores a resumed transcript's old model. The CLI's
+  // special "default" value clears that override without pinning a version.
+  args.push('--model', input.model || 'default');
   // claude's --effort accepts the same low/medium/high/xhigh/max tokens.
   if (input.reasoningEffort) args.push('--effort', input.reasoningEffort);
   if (mcpPath) args.push('--mcp-config', mcpPath);

@@ -1,5 +1,4 @@
 import type { ReasoningEffort } from './types.js';
-import { PINNED_CLAUDE_MODEL } from './constants.js';
 
 // Per-install UI configuration: which features are visible, how the model/
 // effort/transport pickers behave, and the UI language. Stored as a single
@@ -40,7 +39,7 @@ export interface PickerSetting<T> {
 }
 
 export interface PickerSettings {
-  model: PickerSetting<string>;
+  model: PickerSetting<string | null>;
   effort: PickerSetting<ReasoningEffort | 'default'>;
   transport: PickerSetting<'sdk' | 'terminal'>;
 }
@@ -79,7 +78,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   preset: 'full',
   features: { ...ALL_FEATURES_ON },
   pickers: {
-    model: { mode: 'shown', fixed: PINNED_CLAUDE_MODEL },
+    model: { mode: 'shown', fixed: null },
     effort: { mode: 'shown', fixed: 'default' },
     transport: { mode: 'shown', fixed: 'terminal' },
   },
@@ -110,7 +109,7 @@ export const PRESET_FEATURES: Record<'simple' | 'full', FeatureFlags> = {
 
 /** Pickers fixed to a single value under the `simple` preset (one less choice). */
 const SIMPLE_PICKERS: PickerSettings = {
-  model: { mode: 'fixed', fixed: PINNED_CLAUDE_MODEL },
+  model: { mode: 'fixed', fixed: null },
   effort: { mode: 'fixed', fixed: 'default' },
   transport: { mode: 'fixed', fixed: 'terminal' },
 };

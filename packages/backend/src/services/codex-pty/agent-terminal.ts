@@ -94,7 +94,7 @@ export async function spawnCodexTerminal(
   });
 
   const child = pty.spawn(codexBin(), launch.args, {
-    name: 'xterm-color',
+    name: 'xterm-256color',
     cols,
     rows,
     cwd: launchInput.cwd,

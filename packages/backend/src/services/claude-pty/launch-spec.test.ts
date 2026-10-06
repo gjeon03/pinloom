@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import nodePath from 'node:path';
 import { buildClaudeLaunch, buildStopHookCommand, claudePtyDirFor } from './launch-spec.js';
 
 const URL = 'http://127.0.0.1:5555/stop/tok';
 
-// Issue #188: the Stop-hook command must use an ABSOLUTE node path (not a bare
+// The Stop-hook command must use an ABSOLUTE node path (not a bare
 // `node` that resolves against claude's possibly-broken PATH in the app), and
 // when running under Electron must carry ELECTRON_RUN_AS_NODE=1 (or each hook
 // boots a GUI Electron).
@@ -47,9 +46,19 @@ describe('buildClaudeLaunch', () => {
     const b = buildClaudeLaunch({ systemPrompt: '' }, URL);
     expect(b.args).toContain('--settings');
     expect(b.args).toContain('--setting-sources');
-    expect(b.args[b.args.indexOf('--setting-sources') + 1]).toBe('user,project');
+    expect(b.args[b.args.indexOf('--setting-sources') + 1]).toBe('user,project,local');
     expect(b.args).toContain('--dangerously-skip-permissions');
     b.cleanup();
+  });
+
+  it.each([undefined, 'existing-session'])('uses the CLI default instead of a saved transcript model (resume: %s)', (resume) => {
+    const b = buildClaudeLaunch({ systemPrompt: '', resume }, URL);
+    try {
+      expect(b.args[b.args.indexOf('--model') + 1]).toBe('default');
+      if (resume) expect(b.args[b.args.indexOf('--resume') + 1]).toBe(resume);
+    } finally {
+      b.cleanup();
+    }
   });
 
   it('writes a temp Stop-hook settings file whose command points at the url', () => {

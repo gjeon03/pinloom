@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,6 +43,15 @@ describe('gitCommitsForDay', () => {
 });
 
 describe('distillDay', () => {
+  it.each([undefined, 'custom-model'])('passes through the requested model (%s)', async (model) => {
+    const runDistill = vi.fn(async () => '# Entry');
+    await distillDay(
+      { projectName: 'D', date: '2026-06-24', sessions: [], commits: [], existingEntry: null },
+      { runDistill, model },
+    );
+    expect(runDistill).toHaveBeenCalledWith(expect.any(String), model);
+  });
+
   it('feeds commits/sessions/existing entry to the model and returns its markdown', async () => {
     let seenPrompt = '';
     const fake: RunDistill = async (prompt) => {
