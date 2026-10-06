@@ -30,6 +30,7 @@ describe('ui-config', () => {
     expect(c.features.history).toBe(true); // chat core stays
     expect(c.features.pins).toBe(true);
     expect(c.pickers.model.mode).toBe('fixed');
+    expect(c.pickers.model.fixed).toBeNull();
     expect(c.pickers.transport.mode).toBe('fixed');
   });
 

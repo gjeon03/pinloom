@@ -24,7 +24,6 @@ export interface AnalyzeResult {
   charCount: number;
 }
 
-const DEFAULT_ANALYZE_MODEL = 'claude-sonnet-4-6';
 const ANALYZE_TIMEOUT_MS = 8 * 60_000; // abort a hung analyze after 8 min
 
 function buildConventionsSystemPrompt(args: {
@@ -355,7 +354,8 @@ export async function runConventionsAnalysis(
       options: {
         cwd: analyzeCwd,
         systemPrompt,
-        model: options?.model ?? DEFAULT_ANALYZE_MODEL,
+        settingSources: ['user', 'project', 'local'],
+        ...(options?.model ? { model: options.model } : {}),
         maxTurns: 30,
         permissionMode: 'bypassPermissions',
         // Read-only toolset — no Write/Edit, so the agent cannot modify

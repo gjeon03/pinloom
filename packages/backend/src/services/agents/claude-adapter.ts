@@ -179,7 +179,7 @@ class ClaudeAdapterImpl implements AgentAdapter {
       // `.claude/` + CLAUDE.md. The SDK defaults to `[]` ("isolation mode")
       // which is why pinloom workers couldn't see any of that even though
       // the files were present on disk.
-      settingSources: ['user', 'project'],
+      settingSources: ['user', 'project', 'local'],
       abortController: args.abortController,
       includePartialMessages: true,
       thinking: thinkingOption,

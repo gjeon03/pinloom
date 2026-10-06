@@ -13,7 +13,6 @@ import { localDateOf } from './timeline/capture.js';
 import { getUiConfig } from './ui-config.js';
 import type { UiLocale } from '@pinloom/shared';
 
-const MODEL = 'claude-sonnet-4-6';
 const TIMEOUT_MS = 5 * 60_000;
 // SMALL per-request transcript window. Each distill call gets at most this many
 // chars so the model reliably finishes in-budget — stuffing a whole busy day
@@ -43,7 +42,7 @@ async function run(system: string, prompt: string): Promise<string> {
     prompt,
     options: {
       systemPrompt: system,
-      model: MODEL,
+      settingSources: ['user', 'project', 'local'],
       // Headroom: a single text distill is normally 1 turn, but a stray
       // thinking/format step shouldn't trip "max turns (1)" → 500.
       maxTurns: 6,

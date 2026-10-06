@@ -26,7 +26,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { inheritedMcpServerToml } from '../codex-user-config.js';
+import { inheritedMcpServerToml, inheritedModelToml } from '../codex-user-config.js';
 import { UserPromptStream } from './message-stream.js';
 import type {
   AgentAdapter,
@@ -138,11 +138,11 @@ function buildCodexHome(
     }
   }
 
-  const lines: string[] = [];
+  const lines: string[] = [inheritedModelToml(sourceHome), ''];
   // Ours first; the user's own [mcp_servers.*] are appended below with any
   // same-named table dropped, so they can never shadow pinloom's by name.
-  // The rest of the real config.toml stays out on purpose — pinloom-side model
-  // selection already flows through the --model flag downstream.
+  // Model defaults are inherited above; explicit session selections override
+  // them through CLI arguments.
   for (const [name, server] of Object.entries(mcpServers)) {
     lines.push(`[mcp_servers.${name}]`);
     lines.push(`command = ${tomlString(server.command)}`);
