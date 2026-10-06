@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-sdk.js';
 import { getDb } from '../db/connection.js';
 import { getProjectWikiSlugByProjectId, runOnWikiChain } from './wiki-sync.js';
 import { getPagesDir } from './wiki-reader.js';

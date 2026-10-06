@@ -212,7 +212,7 @@ export function createNodeClaudeSessionFactory(
       if (home) childEnv.HOME = home;
 
       const child = pty.spawn(bin, launch.args, {
-        name: 'xterm-color',
+        name: 'xterm-256color',
         cols: 120,
         rows: 40,
         cwd: spec.cwd,

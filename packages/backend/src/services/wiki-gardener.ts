@@ -12,7 +12,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Database } from 'better-sqlite3';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-sdk.js';
 import type { WikiProposal, WikiProposalKind } from '@pinloom/shared';
 import { getWikiRoot } from './wiki-reader.js';
 import { createProposal } from './wiki-proposals.js';

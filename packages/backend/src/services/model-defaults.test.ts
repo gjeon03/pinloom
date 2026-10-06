@@ -13,6 +13,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { spawn } from 'node:child_process';
 import { codexAdapter } from './agents/codex-adapter.js';
+import { claudeAdapter } from './agents/claude-adapter.js';
 import { distillDay } from './timeline/distill.js';
 
 afterEach(() => {
@@ -21,6 +22,27 @@ afterEach(() => {
 });
 
 describe('SDK model defaults', () => {
+  it.each([
+    { resume: undefined, model: undefined },
+    { resume: 'prior-session', model: undefined },
+    { resume: 'prior-session', model: 'explicit-model' },
+  ])('clears restored Claude models unless explicitly selected (%j)', ({ resume, model }) => {
+    vi.mocked(query).mockImplementation(() => (async function* () {})() as ReturnType<typeof query>);
+    const run = claudeAdapter.run({
+      cwd: tmpdir(), systemPrompt: '', initialPrompt: { text: 'Hello', images: [] },
+      abortController: new AbortController(), resume, model,
+    });
+    try {
+      const options = vi.mocked(query).mock.calls[0][0].options;
+      expect(options?.model).toBe(model ?? 'default');
+      expect(options?.pathToClaudeCodeExecutable).toBe('claude');
+      expect(options?.resume).toBe(resume);
+      expect(options?.settingSources).toEqual(['user', 'project', 'local']);
+    } finally {
+      run.close();
+    }
+  });
+
   it.each([undefined, 'explicit-model'])('loads Claude settings and honors an override (%s)', async (model) => {
     vi.mocked(query).mockImplementation(() => (async function* () {
       yield { type: 'result', subtype: 'success', result: '# Entry' };
@@ -33,8 +55,17 @@ describe('SDK model defaults', () => {
 
     const options = vi.mocked(query).mock.calls[0][0].options;
     expect(options?.settingSources).toEqual(['user', 'project', 'local']);
-    if (model) expect(options?.model).toBe(model);
-    else expect(options).not.toHaveProperty('model');
+    expect(options?.model).toBe(model ?? 'default');
+    expect(options?.pathToClaudeCodeExecutable).toBe('claude');
+  });
+
+  it('uses the configured Claude executable for background jobs too', async () => {
+    vi.stubEnv('PINLOOM_CLAUDE_BIN', '/custom/claude');
+    vi.mocked(query).mockImplementation(() => (async function* () {
+      yield { type: 'result', subtype: 'success', result: '# Entry' };
+    })() as ReturnType<typeof query>);
+    await distillDay({ projectName: 'Demo', date: '2026-10-06', sessions: [], commits: [], existingEntry: null });
+    expect(vi.mocked(query).mock.calls[0][0].options?.pathToClaudeCodeExecutable).toBe('/custom/claude');
   });
 
   it.each([undefined, 'explicit-model'])('inherits Codex defaults for orchestrators (%s)', async (model) => {

@@ -12,7 +12,7 @@ import {
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-sdk.js';
 import { getDb } from '../db/connection.js';
 
 const WIKI_ROOT = path.join(os.homedir(), '.pinloom', 'wiki');

@@ -169,7 +169,7 @@ async function spawnAgentTerminal(
   const beforeFiles = isFresh ? listSessionFiles(launchInput.cwd) : new Set<string>();
 
   const child = pty.spawn(claudeBin(), launch.args, {
-    name: 'xterm-color',
+    name: 'xterm-256color',
     cols,
     rows,
     cwd: launchInput.cwd,

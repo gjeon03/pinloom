@@ -15,7 +15,7 @@
 // wiki edits). Degrade-safe: empty corpus → graceful, never throws into a request.
 
 import type { Database } from 'better-sqlite3';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-sdk.js';
 import { searchMessagesHybrid } from './message-search.js';
 import type { EmbeddingProvider } from './embeddings/types.js';
 import { getProjectWikiSlugByProjectId } from './wiki-sync.js';

@@ -7,7 +7,7 @@
 // NOTE: distinct from handoff.ts, which FORKS a session into a fresh one. This
 // produces a read-only document for a person, not a new session.
 import { createHash } from 'node:crypto';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-sdk.js';
 import { getDb } from '../db/connection.js';
 import { localDateOf } from './timeline/capture.js';
 import { getUiConfig } from './ui-config.js';
