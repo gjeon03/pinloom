@@ -10,6 +10,7 @@ import {
 } from '../services/wiki-reader.js';
 import {
   getAnalysisStatus,
+  cancelAllAnalyses,
   runConventionsAnalysis,
 } from '../services/wiki-analyzer.js';
 import {
@@ -19,6 +20,7 @@ import {
 } from '../services/wiki-archive.js';
 import { writeWikiPage, WikiWriteError } from '../services/wiki-writer.js';
 import { buildWikiGraph } from '../services/wiki-graph.js';
+import { getSessionSyncStatus } from '../services/wiki-session-sync-auto.js';
 
 interface SessionRow {
   id: string;
@@ -238,14 +240,32 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
       });
       return result;
     } catch (err) {
+      // Concurrency cap hit → 429 so the UI can say "busy" instead of a 500.
+      if ((err as { code?: string }).code === 'ANALYSIS_BUSY') {
+        reply.code(429);
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
       reply.code(500);
       return { error: err instanceof Error ? err.message : String(err) };
     }
   });
 
+  // Abort every in-flight analysis — a stampede escape hatch surfaced in the UI.
+  app.post('/api/wiki/analyses/cancel-all', async () => ({
+    cancelled: cancelAllAnalyses(),
+  }));
+
   // Status of wiki analyses — used by the frontend to rehydrate notifications
   // after a page reload, and to poll until in-flight analyses finish.
   app.get('/api/wiki/analyses/status', async () => getAnalysisStatus());
+
+  // Combined "what's the wiki flywheel doing right now" — conventions analyses
+  // (code) + session distills (conversations). Polled by the analyze picker so
+  // the background work is visible instead of a mystery.
+  app.get('/api/wiki/activity', async () => ({
+    analyzing: getAnalysisStatus(),
+    syncing: getSessionSyncStatus(),
+  }));
 
   // Stream the entire wiki tree as a zip download.
   app.get('/api/wiki/export', async (_req, reply) => {

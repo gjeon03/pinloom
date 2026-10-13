@@ -187,6 +187,9 @@ function extractSummary(body: string, fallback: string): string {
 }
 
 const activeAnalyses = new Map<string, AbortController>();
+// At most this many conventions analyses run at once (manual + auto combined).
+// Each is heavy (LLM agent + codebase scan + worktree); more would choke the server.
+const MAX_CONCURRENT_ANALYSES = 2;
 
 export function isAnalyzing(projectId: string): boolean {
   return activeAnalyses.has(projectId);
@@ -296,6 +299,16 @@ export async function runConventionsAnalysis(
 ): Promise<AnalyzeResult> {
   if (activeAnalyses.has(projectId)) {
     throw new Error('analysis already in progress for this project');
+  }
+  // Global concurrency cap: each analysis is a full LLM agent scanning the
+  // codebase (+ a git worktree), so a burst of manual clicks across projects
+  // could otherwise run N heavy agents at once and choke the server.
+  if (activeAnalyses.size >= MAX_CONCURRENT_ANALYSES) {
+    const err = new Error(
+      `too many analyses running (max ${MAX_CONCURRENT_ANALYSES}) — wait for one to finish`,
+    );
+    (err as { code?: string }).code = 'ANALYSIS_BUSY';
+    throw err;
   }
 
   const db = getDb();
@@ -485,4 +498,15 @@ export function cancelAnalysis(projectId: string): boolean {
   controller.abort();
   activeAnalyses.delete(projectId);
   return true;
+}
+
+/** Abort every in-flight analysis (a stampede escape hatch). Returns the count. */
+export function cancelAllAnalyses(): number {
+  let n = 0;
+  for (const [projectId, controller] of activeAnalyses) {
+    controller.abort();
+    activeAnalyses.delete(projectId);
+    n += 1;
+  }
+  return n;
 }
