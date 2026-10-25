@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createDesktopLaunchEnv } from './launch-env.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, '..');
@@ -67,19 +68,5 @@ console.log('▶ relaunching…');
 // CLAUDE_CODE_CHILD_SESSION turns the spawned claude's transcript saving OFF and
 // silently stops history capture. cleanChildEnv now strips these too, but scrub
 // them here as well so the app process itself never carries them.
-const CLAUDE_MARKERS = [
-  'CLAUDECODE',
-  'CLAUDE_CODE_CHILD_SESSION',
-  'CLAUDE_CODE_SESSION_ID',
-  'CLAUDE_CODE_BRIDGE_SESSION_ID',
-  'CLAUDE_CODE_ENTRYPOINT',
-  'CLAUDE_CODE_EXECPATH',
-  'CLAUDE_CODE_MESSAGING_SOCKET',
-  'CLAUDE_CODE_MESSAGING_TOKEN',
-  'CLAUDE_PID',
-  'CLAUDE_PLUGIN_DATA',
-  'CLAUDE_PLUGIN_ROOT',
-  'CLAUDE_EFFORT',
-];
-run(`env ${CLAUDE_MARKERS.map((k) => `-u ${k}`).join(' ')} open /Applications/pinloom.app`);
+run('open /Applications/pinloom.app', { env: createDesktopLaunchEnv() });
 console.log('✓ deploy complete — running app is the freshly built bundle.');
