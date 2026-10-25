@@ -61,6 +61,13 @@ export const STRINGS: Record<string, { en: string; ko: string; zh: string }> = {
 
   // ── Components (cmp.*) ──
   "cmp.appShell.newGroup": { "en": "New group", "ko": "새 그룹", "zh": "新建分组" },
+  "cmp.appShell.projectFilter": { "en": "Project filter", "ko": "프로젝트 필터", "zh": "项目筛选" },
+  "cmp.appShell.allProjects": { "en": "All", "ko": "전체", "zh": "全部" },
+  "cmp.appShell.favorites": { "en": "Favorites", "ko": "즐겨찾기", "zh": "收藏" },
+  "cmp.appShell.addFavorite": { "en": "Add {name} to favorites", "ko": "{name} 즐겨찾기 추가", "zh": "收藏 {name}" },
+  "cmp.appShell.removeFavorite": { "en": "Remove {name} from favorites", "ko": "{name} 즐겨찾기 해제", "zh": "取消收藏 {name}" },
+  "cmp.appShell.emptyFavorites": { "en": "No favorites yet", "ko": "즐겨찾기한 프로젝트가 없어요", "zh": "还没有收藏的项目" },
+  "cmp.appShell.emptyFavoritesHint": { "en": "Select a project's star in All to keep it here.", "ko": "전체 탭에서 프로젝트 옆 별을 눌러 추가하세요.", "zh": "在全部标签中点击项目旁的星号即可添加。" },
   "cmp.appShell.newGroupPrompt": { "en": "New group name", "ko": "새 그룹 이름", "zh": "新分组名称" },
   "cmp.appShell.newGroupCreate": { "en": "Create", "ko": "만들기", "zh": "创建" },
   "cmp.appShell.newGroupCancel": { "en": "Cancel", "ko": "취소", "zh": "取消" },

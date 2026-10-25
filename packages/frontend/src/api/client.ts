@@ -396,6 +396,11 @@ export const api = {
     }>('/api/timeline/capture-all/status'),
 
   listProjects: () => request<Project[]>('/api/projects'),
+  setProjectFavorite: (id: string, favorite: boolean) =>
+    request<Project>(`/api/projects/${id}/favorite`, {
+      method: 'PUT',
+      body: JSON.stringify({ favorite }),
+    }),
   createProject: (body: { name: string; cwd: string; groupId?: string | null }) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
   deleteProject: (id: string) =>

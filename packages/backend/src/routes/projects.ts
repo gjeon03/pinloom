@@ -8,6 +8,7 @@ interface ProjectRow {
   name: string;
   cwd: string;
   group_id: string | null;
+  favorite: number;
   order_index: number;
   timeline_auto: number | null;
   wiki_auto: number | null;
@@ -21,6 +22,7 @@ function toProject(row: ProjectRow): Project {
     name: row.name,
     cwd: row.cwd,
     groupId: row.group_id,
+    favorite: row.favorite === 1,
     // Default true for legacy rows (timeline_auto: migration 33, wiki_auto: 36).
     timelineAuto: row.timeline_auto !== 0,
     wikiAuto: row.wiki_auto !== 0,
@@ -163,6 +165,23 @@ export async function projectRoutes(app: FastifyInstance) {
       .get(req.params.id) as ProjectRow;
     return toProject(row);
   });
+
+  app.put<{ Params: { id: string }; Body: { favorite?: unknown } }>(
+    '/api/projects/:id/favorite',
+    async (req, reply) => {
+      const favorite = req.body?.favorite;
+      if (typeof favorite !== 'boolean') {
+        return reply.code(400).send({ error: 'favorite must be a boolean' });
+      }
+      const result = db.prepare(
+        'UPDATE projects SET favorite = ?, updated_at = ? WHERE id = ? AND hidden = 0',
+      ).run(favorite ? 1 : 0, new Date().toISOString(), req.params.id);
+      if (result.changes === 0) {
+        return reply.code(404).send({ error: 'project not found' });
+      }
+      return toProject(db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id) as ProjectRow);
+    },
+  );
 
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req) => {
     db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);

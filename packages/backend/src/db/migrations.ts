@@ -1,6 +1,12 @@
 import type Database from 'better-sqlite3';
 
-export const MIGRATIONS: { id: number; sql: string }[] = [
+interface Migration {
+  id: number;
+  sql: string;
+  isApplied?: (db: Database.Database) => boolean;
+}
+
+export const MIGRATIONS: Migration[] = [
   {
     id: 1,
     sql: `
@@ -732,6 +738,15 @@ export const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    // The parked pinAgent and Studio branches used migration slots 43–50.
+    id: 51,
+    sql: `
+      ALTER TABLE projects ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1));
+    `,
+    isApplied: (db) => (db.pragma('table_info(projects)') as Array<{ name: string }>)
+      .some((column) => column.name === 'favorite'),
+  },
 ];
 
 export function runMigrations(db: Database.Database) {
@@ -754,8 +769,8 @@ export function runMigrations(db: Database.Database) {
   // (e.g. 29's vtable + triggers + data backfill) that dies mid-exec must roll
   // back entirely rather than leave a half-applied, unrecorded migration that
   // re-runs (and double-applies its non-idempotent backfill) on next boot.
-  const applyOne = db.transaction((migration: { id: number; sql: string }) => {
-    db.exec(migration.sql);
+  const applyOne = db.transaction((migration: Migration) => {
+    if (!migration.isApplied?.(db)) db.exec(migration.sql);
     insertMigration.run(migration.id, new Date().toISOString());
   });
 

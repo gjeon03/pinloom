@@ -3,6 +3,7 @@ export interface Project {
   name: string;
   cwd: string;
   groupId: string | null;
+  favorite: boolean;
   /** Per-project automatic Work Timeline capture (default true). */
   timelineAuto: boolean;
   /** Per-project automatic wiki conventions analysis → staged proposal (default true). */

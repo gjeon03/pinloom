@@ -13,6 +13,7 @@ interface ProjectRow {
   name: string;
   cwd: string;
   group_id: string | null;
+  favorite: number;
   created_at: string;
   updated_at: string;
 }
@@ -50,6 +51,7 @@ export interface DbExportProject {
   name: string;
   cwd: string;
   groupId: string | null;
+  favorite?: boolean;
   createdAt: string;
   updatedAt: string;
   sessions: DbExportSession[];
@@ -152,6 +154,7 @@ export function buildDbExport(): DbExportFile {
       name: p.name,
       cwd: p.cwd,
       groupId: p.group_id,
+      favorite: p.favorite === 1,
       createdAt: p.created_at,
       updatedAt: p.updated_at,
       sessions,

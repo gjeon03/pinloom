@@ -14,6 +14,7 @@ import {
   Plus,
   Settings,
   Sparkles,
+  Star,
   Wand2,
   Sun,
   Users,
@@ -29,6 +30,16 @@ import { useTheme } from '../hooks/useTheme.js';
 import { useT } from '../i18n/t.js';
 
 const COLLAPSED_STORAGE_KEY = 'pinloom.groupCollapsed';
+const PROJECT_FILTER_STORAGE_KEY = 'pinloom.projectFilter';
+type ProjectFilter = 'all' | 'favorites';
+
+function loadProjectFilter(): ProjectFilter {
+  try {
+    return localStorage.getItem(PROJECT_FILTER_STORAGE_KEY) === 'favorites' ? 'favorites' : 'all';
+  } catch {
+    return 'all';
+  }
+}
 
 interface ShellHelpers {
   onProjectRenamed: (project: Project) => void;
@@ -126,6 +137,9 @@ export function AppShell({ children }: Props) {
     localStorage.setItem('pinloom:sidebarHidden', sidebarHidden ? '1' : '0');
   }, [sidebarHidden]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>(loadProjectFilter);
+  const [savingFavorites, setSavingFavorites] = useState<Set<string>>(new Set());
+  const favoriteRequests = useRef(new Set<string>());
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
   const [pickerTarget, setPickerTarget] = useState<{ groupId: string | null } | null>(null);
@@ -181,12 +195,50 @@ export function AppShell({ children }: Props) {
 
   const activeProject = projects.find((p) => p.id === projectId) ?? null;
 
+  const visibleProjects = useMemo(
+    () => projectFilter === 'favorites' ? projects.filter((p) => p.favorite) : projects,
+    [projects, projectFilter],
+  );
+  const visibleGroups = useMemo(() => {
+    if (projectFilter === 'all') return groups;
+    const groupIds = new Set(visibleProjects.map((p) => p.groupId));
+    return groups.filter((g) => groupIds.has(g.id));
+  }, [groups, visibleProjects, projectFilter]);
+
   const ungroupedProjects = useMemo(
-    () => projects.filter((p) => p.groupId === null),
-    [projects],
+    () => visibleProjects.filter((p) => p.groupId === null),
+    [visibleProjects],
   );
 
-  const showUngroupedSection = groups.length > 0;
+  const showUngroupedSection = groups.length > 0 && (projectFilter === 'all' || ungroupedProjects.length > 0);
+
+  function selectProjectFilter(next: ProjectFilter) {
+    setProjectFilter(next);
+    setOpenProjectMenuId(null);
+    setOpenMenuGroupId(null);
+    resetDrag();
+    try {
+      localStorage.setItem(PROJECT_FILTER_STORAGE_KEY, next);
+    } catch {
+      // Filtering still works when browser storage is unavailable.
+    }
+  }
+
+  async function handleFavorite(id: string, favorite: boolean) {
+    if (favoriteRequests.current.has(id)) return;
+    favoriteRequests.current.add(id);
+    setSavingFavorites(new Set(favoriteRequests.current));
+    setError(null);
+    try {
+      const updated = await api.setProjectFavorite(id, favorite);
+      setProjects((prev) => prev.map((p) => p.id === id ? { ...p, favorite: updated.favorite } : p));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      favoriteRequests.current.delete(id);
+      setSavingFavorites(new Set(favoriteRequests.current));
+    }
+  }
 
   async function handleDirectoryChosen(cwd: string) {
     if (!pickerTarget) return;
@@ -196,6 +248,7 @@ export function AppShell({ children }: Props) {
       const name = basenameOfPath(cwd);
       const created = await api.createProject({ name, cwd, groupId: targetGroupId });
       setProjects((prev) => [created, ...prev]);
+      selectProjectFilter('all');
       if (targetGroupId && collapsedGroups.has(targetGroupId)) {
         setCollapsedGroups((prev) => {
           const next = new Set(prev);
@@ -399,6 +452,8 @@ export function AppShell({ children }: Props) {
         onMenuOpen={(id) => setOpenProjectMenuId(id)}
         onMenuClose={() => setOpenProjectMenuId(null)}
         onDelete={handleDeleteProject}
+        onFavorite={handleFavorite}
+        savingFavorites={savingFavorites}
       />
     );
   }
@@ -418,7 +473,7 @@ export function AppShell({ children }: Props) {
           </button>
         </div>
       ) : (
-        <aside className="w-52 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
+        <aside className="w-52 min-w-0 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-2)] flex flex-col">
         <div className="titlebar-drag px-3 py-3 flex items-center justify-end gap-1">
           <div className="flex items-center gap-0.5">
             <Tooltip label={t('cmp.appShell.newGroup')} side="bottom">
@@ -458,14 +513,43 @@ export function AppShell({ children }: Props) {
           </div>
         </div>
 
+        <div role="tablist" aria-label={t('cmp.appShell.projectFilter')} className="mx-2 mb-1 flex shrink-0 gap-1 rounded-lg bg-[var(--color-surface-3)]/50 p-1">
+          {(['all', 'favorites'] as const).map((filter) => (
+            <button
+              key={filter}
+              id={`project-filter-${filter}`}
+              type="button"
+              role="tab"
+              aria-selected={projectFilter === filter}
+              aria-controls="sidebar-projects"
+              tabIndex={projectFilter === filter ? 0 : -1}
+              onClick={() => selectProjectFilter(filter)}
+              onKeyDown={(e) => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+                e.preventDefault();
+                const next = e.key === 'Home' ? 'all' : e.key === 'End' ? 'favorites' : filter === 'all' ? 'favorites' : 'all';
+                selectProjectFilter(next);
+                document.getElementById(`project-filter-${next}`)?.focus();
+              }}
+              className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] ${projectFilter === filter ? 'bg-[var(--color-surface-2)] text-[var(--color-ink)] shadow-sm' : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'}`}
+            >
+              {filter === 'favorites' && <Star size={12} aria-hidden="true" />}
+              {t(filter === 'all' ? 'cmp.appShell.allProjects' : 'cmp.appShell.favorites')}
+            </button>
+          ))}
+        </div>
+
         {error && (
-          <p className="px-3 pb-2 text-[11px] text-red-400 border-b border-[var(--color-border)]">
+          <p role="alert" className="break-words px-3 pb-2 text-[11px] text-red-400 border-b border-[var(--color-border)]">
             {error}
           </p>
         )}
 
         <div
-          className="flex-1 overflow-auto py-2 flex flex-col"
+          id="sidebar-projects"
+          role="tabpanel"
+          aria-labelledby={`project-filter-${projectFilter}`}
+          className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-x-none py-2 flex flex-col"
           onDragOver={(e) => {
             if (!drag) return;
             e.preventDefault();
@@ -480,8 +564,8 @@ export function AppShell({ children }: Props) {
             setDropTarget(null);
           }}
         >
-          {groups.map((g) => {
-            const items = projects.filter((p) => p.groupId === g.id);
+          {visibleGroups.map((g) => {
+            const items = visibleProjects.filter((p) => p.groupId === g.id);
             const collapsed = collapsedGroups.has(g.id);
             const showHeaderBefore =
               dropTarget?.kind === 'group-header' &&
@@ -554,7 +638,7 @@ export function AppShell({ children }: Props) {
 
           {/* Drop indicator before the (virtual) end-of-groups slot */}
           {(() => {
-            const lastGroup = groups[groups.length - 1];
+            const lastGroup = visibleGroups[visibleGroups.length - 1];
             const showAfterLast =
               !!lastGroup &&
               dropTarget?.kind === 'group-header' &&
@@ -624,7 +708,14 @@ export function AppShell({ children }: Props) {
             </div>
           ) : null}
 
-          {projects.length === 0 && groups.length === 0 && (
+          {projectFilter === 'favorites' && visibleProjects.length === 0 && (
+            <div className="px-4 py-6 text-center text-xs text-[var(--color-ink-muted)]" role="status">
+              <Star size={22} aria-hidden="true" className="mx-auto mb-3 opacity-50" />
+              <p className="font-medium text-[var(--color-ink)]">{t('cmp.appShell.emptyFavorites')}</p>
+              <p className="mt-2 leading-relaxed">{t('cmp.appShell.emptyFavoritesHint')}</p>
+            </div>
+          )}
+          {projectFilter === 'all' && projects.length === 0 && groups.length === 0 && (
             <p className="px-3 text-xs text-[var(--color-ink-muted)]">
               {t('cmp.appShell.emptyHint')}
             </p>
@@ -817,7 +908,7 @@ function GroupHeader({
         <button
           type="button"
           onClick={onToggleCollapsed}
-          className="flex-1 text-left truncate font-semibold"
+          className="min-w-0 flex-1 text-left truncate font-semibold"
         >
           {group.name}
         </button>
@@ -886,7 +977,7 @@ function RenameInput({ initial, onCommit, onCancel }: RenameInputProps) {
         }
       }}
       onClick={(e) => e.stopPropagation()}
-      className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-1 py-0 text-[11px] uppercase tracking-wider outline-none focus:border-[var(--color-accent)]"
+      className="min-w-0 w-full flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-1 py-0 text-[11px] uppercase tracking-wider outline-none focus:border-[var(--color-accent)]"
     />
   );
 }
@@ -999,6 +1090,8 @@ interface ProjectsListProps {
   onMenuOpen: (id: string) => void;
   onMenuClose: () => void;
   onDelete: (id: string) => void;
+  onFavorite: (id: string, favorite: boolean) => void;
+  savingFavorites: Set<string>;
 }
 
 function ProjectsList({
@@ -1015,6 +1108,8 @@ function ProjectsList({
   onMenuOpen,
   onMenuClose,
   onDelete,
+  onFavorite,
+  savingFavorites,
 }: ProjectsListProps) {
   const t = useT();
   return (
@@ -1084,16 +1179,27 @@ function ProjectsList({
                 }}
                 onDragEnd={onDragEnd}
                 onClick={() => onNavigate(p.id)}
-                className={`w-full rounded px-2 py-1.5 pr-7 text-left text-sm flex flex-col gap-0.5 transition-colors ${
+                className={`w-full min-w-0 rounded px-2 py-1.5 pr-14 text-left text-sm flex flex-col gap-0.5 transition-colors ${
                   active
                     ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
                     : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)]/60'
                 } ${isDragging ? 'opacity-40' : ''}`}
               >
-                <span className="truncate font-medium">{p.name}</span>
-                <span className="truncate text-[10px] opacity-70 font-mono">{p.cwd}</span>
+                <span className="w-full truncate font-medium">{p.name}</span>
+                <span className="w-full truncate text-[10px] opacity-70 font-mono">{p.cwd}</span>
               </button>
-              <div className="absolute right-1 top-1/2 -translate-y-1/2">
+              <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+                <button
+                  type="button"
+                  aria-label={t(p.favorite ? 'cmp.appShell.removeFavorite' : 'cmp.appShell.addFavorite', { name: p.name })}
+                  title={t(p.favorite ? 'cmp.appShell.removeFavorite' : 'cmp.appShell.addFavorite', { name: p.name })}
+                  aria-pressed={Boolean(p.favorite)}
+                  disabled={savingFavorites.has(p.id)}
+                  onClick={() => onFavorite(p.id, !p.favorite)}
+                  className={`rounded p-1.5 transition-colors hover:bg-[var(--color-surface-3)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] disabled:opacity-40 ${p.favorite ? 'text-[var(--color-accent)]' : 'text-[var(--color-ink-muted)] opacity-40 hover:opacity-100 focus-visible:opacity-100'}`}
+                >
+                  <Star size={12} fill={p.favorite ? 'currentColor' : 'none'} aria-hidden="true" />
+                </button>
                 <button
                   type="button"
                   onClick={(e) => {
@@ -1102,7 +1208,7 @@ function ProjectsList({
                     else onMenuOpen(p.id);
                   }}
                   className={`p-0.5 rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)] transition-opacity ${
-                    menuOpen ? 'opacity-100' : 'opacity-0 group-hover/proj:opacity-100'
+                    menuOpen ? 'opacity-100' : 'opacity-0 group-hover/proj:opacity-100 focus-visible:opacity-100'
                   }`}
                   title={t('cmp.appShell.projectOptions')}
                 >
