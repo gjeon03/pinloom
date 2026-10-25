@@ -4,6 +4,8 @@ import type { Project, ProjectGroup } from '@pinloom/shared';
 import { getDb } from '../db/connection.js';
 import { projectGroupRoutes } from './project-groups.js';
 import { projectRoutes } from './projects.js';
+import { buildDbExport } from '../services/db-export.js';
+import { importDbFile } from '../services/db-import.js';
 
 let app: FastifyInstance;
 
@@ -88,6 +90,49 @@ describe('GET /api/projects', () => {
     const b = list.find((p) => p.name === 'B');
     expect(a?.groupId).toBe(g.id);
     expect(b?.groupId).toBeNull();
+  });
+});
+
+describe('project favorites', () => {
+  it('persists favorites independently of rename, grouping and order', async () => {
+    const group = await createGroup('Work');
+    const project = await createProject('First', '/first', group.id);
+    const other = await createProject('Other', '/other', group.id);
+    expect(project.favorite).toBe(false);
+    const set = (favorite: boolean) => app.inject({ method: 'PUT', url: `/api/projects/${project.id}/favorite`, payload: { favorite } });
+    expect((await set(true)).json().favorite).toBe(true);
+    expect((await set(true)).json().favorite).toBe(true);
+    await app.inject({ method: 'PATCH', url: `/api/projects/${project.id}`, payload: { name: 'Renamed' } });
+    await app.inject({ method: 'POST', url: '/api/projects/reorder', payload: { items: [{ id: other.id, groupId: group.id }, { id: project.id, groupId: null }] } });
+    const projects = (await app.inject({ method: 'GET', url: '/api/projects' })).json() as Project[];
+    expect(projects.find((p) => p.id === project.id)).toMatchObject({ name: 'Renamed', groupId: null, favorite: true });
+    expect(projects.find((p) => p.id === other.id)?.favorite).toBe(false);
+    expect((await set(false)).json().favorite).toBe(false);
+  });
+
+  it('rejects invalid values and missing or hidden projects', async () => {
+    const project = await createProject('First', '/first');
+    for (const payload of [{}, { favorite: 'true' }, { favorite: 1 }, { favorite: null }]) {
+      expect((await app.inject({ method: 'PUT', url: `/api/projects/${project.id}/favorite`, payload })).statusCode).toBe(400);
+    }
+    expect((await app.inject({ method: 'PUT', url: '/api/projects/missing/favorite', payload: { favorite: true } })).statusCode).toBe(404);
+    getDb().prepare('UPDATE projects SET hidden = 1 WHERE id = ?').run(project.id);
+    expect((await app.inject({ method: 'PUT', url: `/api/projects/${project.id}/favorite`, payload: { favorite: true } })).statusCode).toBe(404);
+    expect(getDb().prepare('SELECT favorite FROM projects WHERE id = ?').get(project.id)).toEqual({ favorite: 0 });
+  });
+
+  it('retains favorites through backup and accepts older exports without the field', async () => {
+    const project = await createProject('Saved', '/saved');
+    await app.inject({ method: 'PUT', url: `/api/projects/${project.id}/favorite`, payload: { favorite: true } });
+    const backup = buildDbExport();
+    expect(backup.projects[0].favorite).toBe(true);
+    getDb().prepare('DELETE FROM projects WHERE id = ?').run(project.id);
+    importDbFile(JSON.stringify(backup));
+    expect(getDb().prepare('SELECT favorite FROM projects WHERE id = ?').get(project.id)).toEqual({ favorite: 1 });
+    getDb().prepare('DELETE FROM projects WHERE id = ?').run(project.id);
+    delete backup.projects[0].favorite;
+    importDbFile(JSON.stringify(backup));
+    expect(getDb().prepare('SELECT favorite FROM projects WHERE id = ?').get(project.id)).toEqual({ favorite: 0 });
   });
 });
 

@@ -47,6 +47,46 @@ function indexNames(db: Database.Database): string[] {
 }
 
 describe('runMigrations', () => {
+  it('adds favorites when an experimental branch already used the next migration number', () => {
+    const db = freshDb();
+    applyUpTo(db, 42);
+    db.exec("CREATE TABLE pinagent_preserved (value TEXT); INSERT INTO pinagent_preserved VALUES ('keep');");
+    db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(43, '2026-10-18');
+    runMigrations(db);
+    expect(tableInfo(db, 'projects')).toContain('favorite');
+    expect(db.prepare('SELECT value FROM pinagent_preserved').get()).toEqual({ value: 'keep' });
+    expect(db.prepare('SELECT applied_at FROM schema_migrations WHERE id = 43').get()).toEqual({ applied_at: '2026-10-18' });
+    db.close();
+  });
+
+  it('keeps favorites previously applied under the old migration number', () => {
+    const db = freshDb();
+    applyUpTo(db, 42);
+    db.exec('ALTER TABLE projects ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1));');
+    db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(43, '2026-10-25');
+    db.prepare('INSERT INTO projects (id, name, cwd, favorite, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('saved', 'Saved', '/saved', 1, '2026-10-25', '2026-10-25');
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(db.prepare('SELECT favorite FROM projects WHERE id = ?').get('saved')).toEqual({ favorite: 1 });
+    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations WHERE id = 51').get()).toEqual({ n: 1 });
+    db.close();
+  });
+
+  it('adds favorites to existing projects without changing their group or order', () => {
+    const db = freshDb();
+    applyUpTo(db, 42);
+    db.prepare('INSERT INTO projects (id, name, cwd, order_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('existing', 'Existing', '/existing', 7, '2026-10-25', '2026-10-25');
+    runMigrations(db);
+    expect(db.prepare('SELECT favorite, group_id, order_index FROM projects WHERE id = ?').get('existing'))
+      .toEqual({ favorite: 0, group_id: null, order_index: 7 });
+    db.prepare('UPDATE projects SET favorite = 1 WHERE id = ?').run('existing');
+    runMigrations(db);
+    expect(db.prepare('SELECT favorite FROM projects WHERE id = ?').get('existing')).toEqual({ favorite: 1 });
+    db.close();
+  });
+
   it('applies every migration on a fresh database', () => {
     const db = freshDb();
     runMigrations(db);

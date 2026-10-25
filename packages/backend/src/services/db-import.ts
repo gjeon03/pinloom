@@ -58,8 +58,8 @@ export function importDbFile(rawJson: string): DbImportSummary {
 
   const existingProject = db.prepare('SELECT 1 FROM projects WHERE id = ?');
   const insertProject = db.prepare(
-    `INSERT INTO projects (id, name, cwd, group_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO projects (id, name, cwd, group_id, favorite, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
   const existingSession = db.prepare('SELECT 1 FROM sessions WHERE id = ?');
   const insertSession = db.prepare(
@@ -88,6 +88,7 @@ export function importDbFile(rawJson: string): DbImportSummary {
           p.name,
           p.cwd,
           p.groupId,
+          p.favorite === true ? 1 : 0,
           p.createdAt,
           p.updatedAt,
         );
